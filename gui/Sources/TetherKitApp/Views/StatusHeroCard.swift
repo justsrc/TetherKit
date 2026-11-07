@@ -15,8 +15,9 @@ struct StatusHeroCard: View {
             HStack(alignment: .top, spacing: Design.Spacing.large) {
                 StatusRing(status: model.status, accent: accent)
 
-                // 不能用 Spacer 隔开地址行：整页布局靠「多余高度归两栏」工作，
-                // 卡片里一根 Spacer 就会把横幅无限撑高。
+                // No Spacer between the address lines: the page hands out
+                // its spare height itself, and a Spacer inside the hero
+                // card would stretch it without bound.
                 VStack(alignment: .leading, spacing: Design.Spacing.small) {
                     headline
                     subline

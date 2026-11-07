@@ -13,8 +13,9 @@ enum Design {
     enum Spacing {
         static let tight: CGFloat = 6
         static let small: CGFloat = 10
-        /// 卡片之间、两栏之间的沟槽。整页要在一屏内放下，卡片间距是第一个
-        /// 该省的地方 —— 它出现的次数最多，而信息密度为零。
+        /// Gutter between cards. The whole page must fit on one screen,
+        /// so card spacing is the first place to economize: it appears
+        /// most often and carries zero information.
         static let gutter: CGFloat = 12
         static let medium: CGFloat = 16
         static let large: CGFloat = 24

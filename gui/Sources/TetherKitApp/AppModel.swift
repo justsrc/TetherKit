@@ -552,7 +552,8 @@ final class AppModel {
                              failureNotice: L(.installScriptRanButUnreachable))
     }
 
-    /// 卸载特权组件（仪表盘底部的「卸载…」，确认框在 UI 层）。
+    /// Uninstall the privileged helper (the "Uninstall…" action on the
+    /// Manage page; the confirmation alert lives in the UI layer).
     ///
     /// bootout 给 helper 发 SIGTERM —— 正在跑的会话被优雅停掉、虚拟网卡销毁，
     /// 这一点必须在确认框里向用户说明。卸载完成后界面自然回到安装引导页。

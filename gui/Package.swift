@@ -125,8 +125,9 @@ let package = Package(
         // from outside it (see TetherKitUIModelTests).
         .target(name: "TetherKitUIModel", dependencies: ["TetherKitIPC"]),
 
-        // TetherKitIPC：纯逻辑、不碰硬件也不需要 root 的层。
-        // 会话与网卡配置的测试在 C++ 侧（tests/test_capi.cc），不在这里重复。
+        // TetherKitIPC: pure logic layer, no hardware access, no root.
+        // Session and interface config tests live on the C++ side
+        // (tests/test_capi.cc), not duplicated here.
         .testTarget(name: "TetherKitIPCTests", dependencies: ["TetherKitIPC"]),
 
         // Pure logic of the page model (TetherKitUIModel): tint

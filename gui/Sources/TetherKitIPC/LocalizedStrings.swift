@@ -139,7 +139,7 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case scriptOutput
     case scriptNoOutput
 
-    // MARK: - 主界面（ContentView.swift）
+    // MARK: - Menu items (TetherKitApp.swift)
 
     case closeWindow
     case menuCheckForUpdates

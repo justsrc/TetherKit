@@ -103,9 +103,9 @@ private struct AppMenuItems: View {
         Button(L(.menuCheckForUpdates)) {
             Task { await model.checkForUpdates() }
         }
-        // 语言放在 App 菜单而不是主界面上：切语言是「设置一次就再也不碰」的
-        // 动作，而主界面的高度预算早就见底了（见 ContentView 里管理行那段说明），
-        // 不该为它再挤出一行。
+        // Language lives in the App menu instead of the main window:
+        // switching is a set-it-once action, and the main window has no
+        // spare vertical space for another row.
         LanguageMenu(model: model)
     }
 }
@@ -133,7 +133,7 @@ private struct LanguageMenu: View {
 
 /// File ▸ Close Window (⌘W).
 ///
-/// Same reason as AppMenuItems below: a flat Button in a CommandGroup
+/// Same reason as AppMenuItems above: a flat Button in a CommandGroup
 /// picks its label from the global string table, which depends on no
 /// @Observable, so a language switch never re-evaluates it (AGENTS.md
 /// pitfall 18). Reading languageRevision here re-labels the item.
