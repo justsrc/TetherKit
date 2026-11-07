@@ -120,6 +120,7 @@ TetherKit/
 ├── gui/                   SwiftUI 图形界面（SwiftPM 工程，见 docs/GUI-ARCHITECTURE.md）
 │   ├── Sources/CTetherKit/     C ABI 的模块映射（头文件是符号链接）
 │   ├── Sources/TetherKitIPC/   App 与 helper 共享：XPC 协议、模型、授权
+│   ├── Sources/TetherKitUIModel/  侧栏页面模型（独立 target，测试可 @testable import）
 │   ├── Sources/TetherKitCore/  C ABI 的 Swift 封装
 │   ├── Sources/TetherKitHelper/  特权 helper（root，由 launchd 拉起）
 │   ├── Sources/TetherKitApp/   SwiftUI 界面
@@ -246,11 +247,13 @@ Swift 的 C++ 互操作吞不下，所以 C ABI 这一层不可省。
 | 31 | `chore(release): v0.1.4 —— 中英双语` | ✅ | README 英文版转正为默认（HoRNDIS 搜索意图 SEO）；**升级后用户必须在 App 内更新一次特权组件**（协议号变了） |
 | 32 | `feat(gui): 特权组件与 App 版本不一致时给出更新入口` | ✅ | 比的是**库**版本而不是 Info.plist（`swift run` 没有 bundle）；只取版本号，构建配置不同不算不一致；协议号没变的版本以前完全没有提示 |
 | 33 | `chore(release): v0.1.5 —— 组件版本对不上时可一键更新` | ✅ | 协议号仍是 3，旧组件照常能用；升级后管理行会提示更新，不更新也不会坏 |
+| 34 | `feat(gui): 侧栏五页布局与 AppKit 主窗口（本分支）` | ✅ | 21 个提交：两栏仪表盘改为五页侧栏；主窗口改 AppKit 自管（第 7 节坑 19、20）；sdk 26 门控 chrome（第 7 节坑 19）；页面切换零动画（第 7 节坑 22、23，docs/GUI-ARCHITECTURE.md 4.11） |
 
 ### 当前状态
 
 - **测试**：23 个 ctest 用例全部通过（新增 common.i18n 核对两种语言的占位符）；
-  GUI 侧 `swift test` 17 个用例通过（含 LocalizationTests、HelperConstantsTests）
+  GUI 侧 `swift test` 24 个用例通过（17 个 TetherKitIPC + 7 个
+  TetherKitUIModel，含 LocalizationTests、HelperConstantsTests）
 - **构建**：`-Werror` 零告警；命令行、共享库、GUI 三套产物均可构建
 - **可运行**：`--version` / `--help` / `--list` 均正常；非 root 启动给出清晰提示
   并返回退出码 1；`TetherKit.app` 与 `tetherkit-helper` 打包后均可启动；
@@ -630,6 +633,9 @@ TX 就从 4.8 回到了 87 Mbps。
    所以 delegate 的 `windowDidBecomeMain` / `windowDidResize` 里幂等重新钉；
    幂等写法同时防自递归。窗口 `styleMask` 从不含 `.resizable`，min/max
    只用于防程序化改动。
+    ⚠️ 反方向「纠偏 frame」不可行：用 `setFrame` 把 frame 从 592 纠回设计
+    尺寸 560，settle 会立刻把它再长回 592 并重置 min/max，往复循环直至
+    SIGTRAP 崩溃。min/max 幂等重钉就是终态，frame 不要碰。
 
 ---
 

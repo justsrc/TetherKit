@@ -360,7 +360,8 @@ helper 缺失或版本不匹配时，界面给一个「安装 / 更新特权组�
    （对 configuration 调 `trigger()` 不是 `action()`）。
 2. **`SidebarShell.select`：状态写入跳出激活拍** —— `DispatchQueue.main.async`
    到下一拍写入，写处再挂 instant 事务（`animation = nil` +
-   `disablesAnimations = true`）兜底。
+   `disablesAnimations = true`）兜底；content/pageBody 同挂
+   `.transition(.identity)`，进出场永不插值。
 3. **`MainWindowManager`：掐断 resize 事件源** —— macOS 26 把「内容尺寸变化」
    与「窗口 frame 动画」同步（WWDC25-256、release notes 61158194）；
    `NSHostingView` 默认 `sizingOptions` 会把每页固有尺寸推进窗口（页高不同 →
@@ -454,7 +455,7 @@ open dist/TetherKit.app
 ```bash
 export TETHERKIT_LIB_DIR="$PWD/build/lib"
 swift build --package-path gui
-swift test  --package-path gui     # TetherKitIPC 的单元测试
+swift test  --package-path gui     # TetherKitIPC + TetherKitUIModel 的单元测试
 ```
 
 卸载：仪表盘底部的「卸载特权组件…」按钮（见 4.9 节），或：
