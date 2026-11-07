@@ -213,6 +213,16 @@ codesign --force --sign - --timestamp=none --deep "${APP_DIR}" >/dev/null
 log "自检"
 codesign --verify --deep --strict "${APP_DIR}" || die ".app 签名校验失败"
 
+
+# LC_BUILD_VERSION 的 sdk 戳必须 ≥ 26，否则 Tahoe 上整台机器都是 legacy
+# 三灯（AGENTS.md 第 7 节第 19 条）。这里把那条「每次发版都核对」的要求
+# 变成脚本强制执行，而不是靠人记。
+sdk_stamp="$(otool -l "${APP_DIR}/Contents/MacOS/TetherKit" | awk '/LC_BUILD_VERSION/{s=1} s && / sdk /{v=$NF} END{print v}')"
+if [[ "$(printf '%s' "${sdk_stamp}" | cut -d. -f1)" -lt 26 ]]; then
+  die "产物 sdk 戳是 ${sdk_stamp:-未检测到}，Tahoe 上会是 legacy chrome（需要 ≥ 26，见 Package.swift 的 -platform_version）"
+fi
+echo "  ✓ LC_BUILD_VERSION sdk = ${sdk_stamp}"
+
 if otool -L "${APP_DIR}/Contents/Frameworks"/libtetherkit.*.*.*.dylib | grep -q '/opt/homebrew'; then
   echo "  ⚠️  产物仍依赖 /opt/homebrew，拷到别的机器上会跑不起来"
 else
