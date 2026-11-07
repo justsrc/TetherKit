@@ -153,7 +153,7 @@ The app lets you choose how the virtual interface gets its address:
 | Automatic (DHCP) | Handled by the system's IPConfiguration — lease, DNS and routes are all set up for you. Most phones ship a DHCP server, so this is the recommended choice |
 | Static IP | Enter address, netmask, gateway and DNS yourself. Validated as you type, including netmask contiguity |
 
-There is also a "route all traffic through this interface" switch. With it off,
+There is also a "Route all traffic through this interface" switch. With it off,
 only traffic explicitly bound to the interface uses it. You usually do not need
 it — when no other network is available, macOS picks this interface as the
 primary service on its own.

@@ -247,7 +247,7 @@ Swift 的 C++ 互操作吞不下，所以 C ABI 这一层不可省。
 | 31 | `chore(release): v0.1.4 —— 中英双语` | ✅ | README 英文版转正为默认（HoRNDIS 搜索意图 SEO）；**升级后用户必须在 App 内更新一次特权组件**（协议号变了） |
 | 32 | `feat(gui): 特权组件与 App 版本不一致时给出更新入口` | ✅ | 比的是**库**版本而不是 Info.plist（`swift run` 没有 bundle）；只取版本号，构建配置不同不算不一致；协议号没变的版本以前完全没有提示 |
 | 33 | `chore(release): v0.1.5 —— 组件版本对不上时可一键更新` | ✅ | 协议号仍是 3，旧组件照常能用；升级后管理行会提示更新，不更新也不会坏 |
-| 34 | `feat(gui): 侧栏五页布局与 AppKit 主窗口（本分支）` | ✅ | 30 个提交：两栏仪表盘改为五页侧栏；主窗口改 AppKit 自管（第 7 节坑 19、20）；sdk 26 门控 chrome（第 7 节坑 19）；页面切换零动画（第 7 节坑 22、23，docs/GUI-ARCHITECTURE.md 4.11） |
+| 34 | `feat(gui): 侧栏五页布局与 AppKit 主窗口（本分支）` | ✅ | 33 个提交：两栏仪表盘改为五页侧栏；主窗口改 AppKit 自管（第 7 节坑 19、20）；sdk 26 门控 chrome（第 7 节坑 19）；页面切换零动画（第 7 节坑 22、23，docs/GUI-ARCHITECTURE.md 4.11） |
 
 ### 当前状态
 
@@ -596,7 +596,8 @@ TX 就从 4.8 回到了 87 Mbps。
    `otool -l <binary> | rg -A4 LC_BUILD_VERSION` —— `sdk` 必须 ≥ 26。
    主窗口另改为 AppKit 自管 `NSWindow`（MainWindowManager）：启动即确定性呈现，
    不再依赖 SwiftUI 场景的实例化时机。三灯样式与窗口归属无关，由上面的
-   `sdk` 决定。
+   `sdk` 决定。`build-gui.sh` 自检现强制执行此核对（LC_BUILD_VERSION sdk 戳
+   ≥ 26），跑一次打包即验证。
 20. **`.prohibited` / dev 裸跑的窗口展示**：主窗口不再由 SwiftUI `Window`
    场景出，而是由 `@NSApplicationDelegateAdaptor` 的 delegate 在
    `applicationDidFinishLaunching` 里创建并 `makeKeyAndOrderFront` ——
