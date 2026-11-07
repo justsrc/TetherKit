@@ -143,7 +143,7 @@ exactly equivalent:
 sudo ./gui/Scripts/install-helper.sh
 ```
 
-Uninstall: the Manage page of the app has an "Uninstall privileged component…"
+Uninstall: the Manage page of the app has an "Uninstall the helper…"
 button (terminal equivalent: `sudo ./gui/Scripts/uninstall-helper.sh`).
 
 The app lets you choose how the virtual interface gets its address:

@@ -323,7 +323,7 @@ helper 缺失或版本不匹配时，界面给一个「安装 / 更新特权组�
   （剥掉 ANSI 色码）放进弹窗。
 - **弹框之前先自检**：载荷不在（`swift run` 的裸可执行文件）或 AEWP 不在，
   都要在要密码**之前**报出来，并引导回终端脚本。
-- **卸载走同一条链**：仪表盘底部的「卸载特权组件…」（低调的 caption 行 ——
+- **卸载走同一条链**：「管理」页的「卸载特权组件…」（低调的 caption 行 ——
   极低频动作不抢注意力，但必须存在于主界面）→ 确认框 → `--uninstall` →
   `uninstall-helper.sh`。成败判定方向相反：等的是「连不上」。卸载后界面
   自然回到安装引导页，随时可重装。
@@ -415,7 +415,7 @@ min/max —— 实测 macOS 26 窗口展示后不久会把 min/max **重置为�
 | App 内一键安装 / 更新 / 卸载特权组件 | `gui/Sources/TetherKitApp/HelperInstaller.swift` |
 | 检查更新（只查不换，每日自动 + 手动菜单） | `gui/Sources/TetherKitApp/UpdateChecker.swift` |
 | Finder 别名自动维护（首次启动建立，聚焦可搜可启动；brew postinstall 有沙箱建不了） | `gui/Sources/TetherKitApp/FinderAlias.swift` |
-| SwiftUI 界面（侧边栏五页：连接 / 网络 / 吞吐 / 日志 / 管理，`SidebarShell` 分页；日志页列表随窗口长高） | `gui/Sources/TetherKitApp/Views/SidebarShell.swift` |
+| SwiftUI 界面（侧边栏五页：连接 / 网络 / 吞吐 / 日志 / 管理，`SidebarShell` 分页；日志页列表填满页高） | `gui/Sources/TetherKitApp/Views/SidebarShell.swift` |
 | 菜单栏实时速率 + 后台运行（仅菜单栏模式） | `gui/Sources/TetherKitApp/Views/MenuBarPanel.swift` |
 | dev 自截工具（App 窗口自捕成 PNG，无屏幕权限迭代循环） | `gui/Sources/TetherKitApp/Views/UiSelfCapture.swift` |
 | 中英双语（运行期可切，界面 / 库日志 / helper 提示三处同步） | `gui/Sources/TetherKitIPC/Localization.swift`、`tk_set_language` |
@@ -458,7 +458,7 @@ swift build --package-path gui
 swift test  --package-path gui     # TetherKitIPC + TetherKitUIModel 的单元测试
 ```
 
-卸载：仪表盘底部的「卸载特权组件…」按钮（见 4.9 节），或：
+卸载：「管理」页的「卸载特权组件…」按钮（见 4.9 节），或：
 
 ```bash
 sudo ./gui/Scripts/uninstall-helper.sh
