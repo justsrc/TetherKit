@@ -178,8 +178,8 @@ struct SidebarShell: View {
     @ViewBuilder
     private var content: some View {
         if selection == .log {
-            // The log page takes no page-level scroll: its list must
-            // grow with the window (see LogPage). Height semantics,
+            // The log page takes no page-level scroll: its list fills
+            // the page height (see LogPage). Height semantics,
             // including this page's padding, belong to the page.
             LogPage(model: model)
                 .transition(.identity)

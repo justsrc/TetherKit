@@ -4,12 +4,11 @@ import TetherKitIPC
 /// The "Log" page.
 ///
 /// One structural difference from every other page: no page-level
-/// ScrollView. A core value of the log is "a bigger window sees more
-/// entries". The list should grow with the window, not get measured at
-/// a fixed ideal size by an outer scroll container and leave blank
-/// space under the page. SidebarShell handles scrolling for the other
-/// pages; this page owns its height semantics (see LogCard) and
-/// branches separately in the shell.
+/// ScrollView. The list fills this page's height instead of being
+/// measured at a fixed ideal size by an outer scroll container that
+/// would leave blank space under the page. SidebarShell handles
+/// scrolling for the other pages; this page owns its height semantics
+/// (see LogCard) and branches separately in the shell.
 struct LogPage: View {
     var model: AppModel
 

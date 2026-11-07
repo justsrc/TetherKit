@@ -7,7 +7,7 @@ import TetherKitIPC
 /// three things: filter by level, auto-scroll to the newest line,
 /// copy everything in one tap (users paste it straight into an issue).
 ///
-/// Height: no outer scroll, so the list grows with the window, and
+/// Height: no outer scroll, so the list fills the page height, and
 /// `minHeight` is only a floor.
 ///
 /// The card carries no title row: the page header already says
@@ -20,8 +20,8 @@ struct LogCard: View {
         Card {
             VStack(alignment: .leading, spacing: Design.Spacing.small) {
                 toolbar
-                // 288 is only the floor for tight windows; the page
-                // supplies the growth room above it.
+                // 288 is only the floor; the page fills the height
+                // above it.
                 logList.frame(minHeight: 288, maxHeight: .infinity)
                 if model.droppedLogCount > 0 {
                     Label(L(.logDroppedNotice, Int(model.droppedLogCount)),
