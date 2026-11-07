@@ -143,8 +143,8 @@ exactly equivalent:
 sudo ./gui/Scripts/install-helper.sh
 ```
 
-Uninstall: the dashboard has an "Uninstall privileged component…" button at the
-bottom (terminal equivalent: `sudo ./gui/Scripts/uninstall-helper.sh`).
+Uninstall: the Manage page of the app has an "Uninstall privileged component…"
+button (terminal equivalent: `sudo ./gui/Scripts/uninstall-helper.sh`).
 
 The app lets you choose how the virtual interface gets its address:
 
@@ -165,8 +165,8 @@ itself lives in the privileged helper, so quitting the UI never drops it.
 
 **Update check**: "TetherKit → Check for Updates…" checks on demand; the app also
 checks once a day on its own (it only hits GitHub's public Releases API and
-reports nothing), lighting up a notice at the bottom of the dashboard when a new
-version is out. The update itself still goes through `brew upgrade` or a source
+reports nothing), lighting up a notice on the Manage page when a new version is
+out. The update itself still goes through `brew upgrade` or a source
 rebuild — with certificate-free distribution, auto-replacing the .app would be
 blocked by Gatekeeper, so the app deliberately only checks, never swaps. To
 disable the automatic check:
