@@ -33,6 +33,13 @@ final class MainWindowManager: NSObject {
         if window == nil {
             window = makeWindow(model)
         }
+        // Whether makeKeyAndOrderFront restores a miniaturized window
+        // is version-dependent (observed once on 26.5, folklore says
+        // no on older releases), so ask for the restore directly:
+        // deminiaturize is a no-op when not mini.
+        if window?.isMiniaturized == true {
+            window?.deminiaturize(nil)
+        }
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         model.windowDidAppear()
