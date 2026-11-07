@@ -25,19 +25,31 @@ final class MainWindowManager: NSObject {
     /// Creates the window on first use, then brings it to the front.
     func present(_ model: AppModel) {
         self.model = model
+        // Restore .regular BEFORE ordering front. Coming back from
+        // menu-bar mode, the app still carries the accessory policy;
+        // ordering front first can leave the window behind other apps
+        // even though activate(ignoringOtherApps:) follows.
+        NSApp.setActivationPolicy(.regular)
         if window == nil {
             window = makeWindow(model)
         }
         window?.makeKeyAndOrderFront(nil)
-        NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         model.windowDidAppear()
     }
 
+    /// Whether the main window itself is on screen. The menu-bar panel
+    /// is also a window, so `NSApp.hasVisibleWindows` cannot answer
+    /// this: with the main window hidden but the panel open, Dock
+    /// reopen must still present the main window.
+    var mainWindowIsVisible: Bool { window?.isVisible == true }
+
     /// Hides the main window (File ▸ Close / ⌘W and the red close
-    /// button land on the same path), even when the menu-bar panel is
-    /// key; a no-op when the window is already hidden.
+    /// button land on the same path). performClose fires windowWillClose
+    /// (policy flip, poll cadence) even on an off-screen window, so a
+    /// hidden window gets a true no-op instead.
     func closeMainWindow() {
+        guard mainWindowIsVisible else { return }
         window?.performClose(nil)
     }
 
@@ -55,6 +67,11 @@ final class MainWindowManager: NSObject {
         // Zoom does nothing on a fixed-size window; disable it
         // explicitly rather than leave a live-looking button.
         window.standardWindowButton(.zoomButton)?.isEnabled = false
+        // The disabled zoom button is only one entry point: Window ▸
+        // Zoom, Dock menus, and the full-screen affordance all route
+        // through window APIs. fullScreenNone rejects full screen; the
+        // delegate's windowShouldZoom rejects zoom requests.
+        window.collectionBehavior = .fullScreenNone
         // Hosting sizing propagation OFF: the hosting view must not
         // drive the window size from page content. Default sizing
         // options push min/intrinsic/max into the window as pages swap
@@ -77,6 +94,10 @@ extension MainWindowManager: NSWindowDelegate {
         NSApp.setActivationPolicy(.accessory)
         model?.windowDidDisappear()
         model = nil
+    }
+
+    func windowShouldZoom(_ window: NSWindow, toFrame newFrame: NSRect) -> Bool {
+        false
     }
 
     // The window has no `.resizable` style bit, so min/max only guard

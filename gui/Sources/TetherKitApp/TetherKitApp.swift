@@ -75,10 +75,7 @@ struct TetherKitApplication: App {
             // ⌘W: no Window scene means no built-in system Close, so
             // this menu item hides the main window and drops to
             // menu-bar mode (same as the red close button).
-            CommandGroup(after: .newItem) {
-                Button(L(.closeWindow)) { MainWindowManager.shared.closeMainWindow() }
-                    .keyboardShortcut("w")
-            }
+            CommandGroup(after: .newItem) { FileMenuItems(model: model) }
             // 「检查更新…」放在 App 菜单「关于」下面的惯例位置。
             // 只查不换 —— 原因见 UpdateChecker.swift 的类型注释。
             CommandGroup(after: .appInfo) { AppMenuItems(model: model) }
@@ -134,6 +131,22 @@ private struct LanguageMenu: View {
     }
 }
 
+/// File ▸ Close Window (⌘W).
+///
+/// Same reason as AppMenuItems below: a flat Button in a CommandGroup
+/// picks its label from the global string table, which depends on no
+/// @Observable, so a language switch never re-evaluates it (AGENTS.md
+/// pitfall 18). Reading languageRevision here re-labels the item.
+private struct FileMenuItems: View {
+    var model: AppModel
+
+    var body: some View {
+        let _ = model.languageRevision
+        Button(L(.closeWindow)) { MainWindowManager.shared.closeMainWindow() }
+            .keyboardShortcut("w")
+    }
+}
+
 /// Main window root: fixed-size content + poll startup.
 ///
 /// The window itself is AppKit-managed (`MainWindowManager`); closing
@@ -178,7 +191,10 @@ final class TetherKitAppDelegate: NSObject, NSApplicationDelegate {
     /// the window. SwiftUI's scene lifecycle never delivered this
     /// callback; reopen shows the main window.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
-        if !hasVisibleWindows, let model = Self.launchModel {
+        // hasVisibleWindows cannot decide this: the menu-bar panel is
+        // a window too, so a hidden main window behind an open panel
+        // still counts as "visible". Ask about the main window itself.
+        if !MainWindowManager.shared.mainWindowIsVisible, let model = Self.launchModel {
             MainWindowManager.shared.present(model)
         }
         return true
