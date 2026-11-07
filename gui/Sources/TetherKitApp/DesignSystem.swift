@@ -13,9 +13,8 @@ enum Design {
     enum Spacing {
         static let tight: CGFloat = 6
         static let small: CGFloat = 10
-        /// Gutter between cards. The whole page must fit on one screen,
-        /// so card spacing is the first place to economize: it appears
-        /// most often and carries zero information.
+        /// Gutter between cards. Spacing carries no information, so it
+        /// is the first knob to turn when a page must gain room.
         static let gutter: CGFloat = 12
         static let medium: CGFloat = 16
         static let large: CGFloat = 24

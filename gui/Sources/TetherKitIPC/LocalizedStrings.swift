@@ -139,7 +139,7 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case scriptOutput
     case scriptNoOutput
 
-    // MARK: - Menu items (TetherKitApp.swift)
+    // MARK: - Main window, dialogs and helper management
 
     case closeWindow
     case menuCheckForUpdates
@@ -474,7 +474,7 @@ extension L10nKey {
         case .scriptOutput: return ("%1$@脚本输出：\n%2$@", "%1$@Script output:\n%2$@")
         case .scriptNoOutput: return ("（无输出）", "(no output)")
 
-        // MARK: 主界面
+        // MARK: Main window, dialogs and helper management
 
         case .closeWindow: return ("关闭窗口", "Close Window")
         case .menuCheckForUpdates: return ("检查更新…", "Check for Updates…")

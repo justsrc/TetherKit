@@ -15,9 +15,9 @@ struct StatusHeroCard: View {
             HStack(alignment: .top, spacing: Design.Spacing.large) {
                 StatusRing(status: model.status, accent: accent)
 
-                // No Spacer between the address lines: the page hands out
-                // its spare height itself, and a Spacer inside the hero
-                // card would stretch it without bound.
+                // No Spacer between the address lines: this page scrolls
+                // on its content, so a Spacer here is inert anyway, and
+                // the text lines should read as one block.
                 VStack(alignment: .leading, spacing: Design.Spacing.small) {
                     headline
                     subline
