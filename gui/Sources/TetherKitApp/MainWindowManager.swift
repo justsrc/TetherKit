@@ -49,7 +49,11 @@ final class MainWindowManager: NSObject {
     /// (policy flip, poll cadence) even on an off-screen window, so a
     /// hidden window gets a true no-op instead.
     func closeMainWindow() {
-        guard mainWindowIsVisible else { return }
+        // A miniaturized window reports isVisible == false (probed on
+        // macOS 26.5), so the isVisible guard alone would silently
+        // dead-end cmd-W on a dock-minimized window. performClose
+        // works from that state and deminiaturizes on the way to close.
+        guard mainWindowIsVisible || window?.isMiniaturized == true else { return }
         window?.performClose(nil)
     }
 
