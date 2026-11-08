@@ -66,9 +66,15 @@ jobs:
           echo "base=$base" >> "$GITHUB_OUTPUT"
 
       - name: Check the formatting of the changed lines
-        # -style file is required: the clang-format binary's built-in default
-        # is LLVM style, not the repo's .clang-format.
+        # -style file pins the repo's .clang-format explicitly. Recent
+        # clang-format releases already default to file style; the flag costs
+        # one word and survives a future default change.
         run: |
+          # pipefail: a failed git diff must not feed empty stdin to the
+          # checker, whose exit 0 would read as pass (fail-open). The
+          # base-resolution step above normally fails the job under -e
+          # first; this closes the same hole independently.
+          set -o pipefail
           git diff -U0 --no-color "${{ steps.base.outputs.base }}" \
             -- '*.cc' '*.h' ':!:third_party/*' \
             | python3 .github/scripts/clang-format-diff.py -p1 -style file

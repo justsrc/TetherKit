@@ -344,6 +344,10 @@ jobs:
           # passing output is the evidence.
           # The grep strings match text printed by tests/test_net_link.cc
           # (ReportSkip and the pair-creation MESSAGE); keep them in sync.
+          # pipefail: GitHub's default shell is bash -e with no -o pipefail,
+          # so this pipeline's status was tee's (always 0); a test failing
+          # after the pair-creation MESSAGE would still look green.
+          set -o pipefail
           sudo env TETHERKIT_ROOT_TESTS=1 \
             ctest --test-dir build -V -R 'net\.' 2>&1 | tee abi.log
 
