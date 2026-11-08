@@ -31,11 +31,22 @@ if(TETHERKIT_ENABLE_UBSAN)
   # 因此 alignment 检查保持开启，用来抓真正的 bug。
 endif()
 
+set(_tk_ubsan_recover_opts "")
+if(TETHERKIT_ENABLE_UBSAN)
+  # UBSan defaults to report-and-continue: a diagnostic prints and the
+  # process keeps running, so ctest still exits 0 and a sanitizer job stays
+  # green through real UB. Compile every UBSan diagnostic fatal instead;
+  # the CI job that enables UBSan additionally sets UBSAN_OPTIONS=
+  # halt_on_error=1 to cover sanitizers inside code we cannot recompile.
+  list(APPEND _tk_ubsan_recover_opts -fno-sanitize-recover=undefined)
+endif()
+
 if(_tk_san_list)
   list(JOIN _tk_san_list "," _tk_san_flags)
   set(TETHERKIT_SANITIZER_SUMMARY "${_tk_san_flags}")
   target_compile_options(tetherkit_sanitizers INTERFACE -fsanitize=${_tk_san_flags}
-                                                        -fno-omit-frame-pointer -g)
+                                                        -fno-omit-frame-pointer -g
+                                                        ${_tk_ubsan_recover_opts})
   target_link_options(tetherkit_sanitizers INTERFACE -fsanitize=${_tk_san_flags})
   message(STATUS "已启用消毒器: ${_tk_san_flags}")
 else()

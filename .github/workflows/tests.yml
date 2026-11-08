@@ -232,9 +232,13 @@ jobs:
   # TSan targets concurrency; this pair targets memory errors and UB. The
   # libusb transfer pool's lifetimes, the BPF buffer walk (the bh_hdrlen and
   # BPF_WORDALIGN alignment arithmetic), and the reinterpret_cast-heavy private
-  # ABI bridge are exactly their hunting ground. ASan and UBSan can be enabled
-  # together (Sanitizers.cmake only makes ASan+TSan mutually exclusive), and
-  # UBSan's alignment checks are deliberately left on.
+  # ABI bridge are exactly their hunting ground. ASan aborts on its first
+  # discovery by default; UBSan does not (report-and-continue), so the build
+  # flags it with -fno-sanitize-recover=undefined (cmake/Sanitizers.cmake) and
+  # the test step sets UBSAN_OPTIONS=halt_on_error as a belt for sanitizer
+  # runtime pieces built elsewhere. The feth/BPF cases run as root here:
+  # without root they would skip, and the structs named above would never
+  # reach the sanitizer.
   # ----------------------------------------------------------------------------
   asan-ubsan:
     name: ASan + UBSan
@@ -252,8 +256,16 @@ jobs:
             -DTETHERKIT_ENABLE_UBSAN=ON
           cmake --build build-asan -j"$(sysctl -n hw.ncpu)"
 
-      - name: Test
-        run: ctest --test-dir build-asan --output-on-failure
+      - name: Disable feth hardware checksum offload
+        # These sysctls are snapshotted at feth-creation time, so set them
+        # first. The root cases below create real feth pairs, same as the
+        # abi-check job - now under the sanitizer build.
+        run: sudo sysctl -w net.link.fake.hwcsum=0
+
+      - name: Test (feth/BPF cases included, as root)
+        run: sudo env TETHERKIT_ROOT_TESTS=1 \
+          UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+          ctest --test-dir build-asan --output-on-failure
 
   # ----------------------------------------------------------------------------
   # Private-ABI drift monitoring.
