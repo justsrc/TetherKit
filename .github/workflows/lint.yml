@@ -26,9 +26,11 @@ permissions:
   contents: read
 
 # Cancel superseded runs on the same branch when new commits land; macOS
-# minutes are billed at 10x Linux.
+# minutes are billed at 10x Linux. event_name follows tests.yml: a push to
+# main and a manual dispatch are different events and must not cancel each
+# other.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
