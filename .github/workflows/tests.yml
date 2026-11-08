@@ -1,0 +1,251 @@
+# Tests: unit tests, the deployment-target floor, GUI assembly, TSan, and
+# private-ABI drift monitoring.
+#
+# Split out of ci.yml. The five jobs below carry over ci.yml's steps and checks
+# unchanged; the one deliberate deviation from the ci.yml text is
+# actions/checkout v5 -> v7 (latest major). Triggers narrowed from "push to
+# main and swift-app branches + v* tags" to "push to main + PR + manual"
+# because:
+# 1. release.yml is self-sufficient (it builds and tests on its own), so tag
+#    pushes are covered there;
+# 2. the swift-app branch is retired.
+#
+# The project only compiles on macOS: the source uses Darwin BPF (net/bpf.h)
+# and xnu's private if_fake ABI directly, and CMakeLists fatals on non-Apple
+# platforms. GitHub's hosted macOS runners are real machines (Apple Silicon
+# VMs), so it just works.
+
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Cancel superseded runs on the same branch when new commits land; macOS
+# minutes are billed at 10x Linux.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ----------------------------------------------------------------------------
+  # Main build plus unit tests.
+  #
+  # All 168 cases need neither root nor a USB device; the feth/BPF ones skip
+  # themselves without root (see RootTestsEnabled in tests/test_net_link.cc).
+  # ----------------------------------------------------------------------------
+  build-test:
+    name: ${{ matrix.os }} · ${{ matrix.build_type }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, macos-15, macos-26]
+        build_type: [RelWithDebInfo, Release]
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install libusb
+        run: brew install libusb
+
+      - name: Record toolchain versions
+        run: |
+          sw_vers
+          cmake --version
+          c++ --version
+
+      - name: Configure
+        run: |
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DTETHERKIT_WARNINGS_AS_ERRORS=ON
+
+      - name: Build
+        run: cmake --build build -j"$(sysctl -n hw.ncpu)"
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Smoke test (--list needs no root)
+        run: |
+          ./build/bin/tetherkit-cli --version
+          ./build/bin/tetherkit-cli --list
+
+  # ----------------------------------------------------------------------------
+  # Verify the macOS 13.3 floor the README claims.
+  #
+  # The macos-13 runner image is gone, so nothing can actually run on 13.3
+  # anymore. The std::to_chars availability annotation CMakeLists worries about
+  # is checked at compile time against the deployment target, though, so pinning
+  # CMAKE_OSX_DEPLOYMENT_TARGET to 13.3 exercises that floor.
+  #
+  # This only proves "compiles for 13.3", not "runs on 13.3"; proving the latter
+  # would take a real 13.3 machine, which hosted runners no longer offer.
+  #
+  # warnings-as-errors stays off here on purpose: Homebrew's libusb is built for
+  # the host version, so lowering the deployment target necessarily produces
+  # "building for macOS-13.3, but linking with dylib which was built for newer
+  # version" linker warnings. Expected noise, not a regression.
+  # ----------------------------------------------------------------------------
+  deployment-target:
+    name: Compile for macOS 13.3
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install libusb
+        run: brew install libusb
+
+      - name: Configure & Build
+        run: |
+          cmake -S . -B build-min \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=13.3
+          cmake --build build-min -j"$(sysctl -n hw.ncpu)"
+
+      - name: Test
+        run: ctest --test-dir build-min --output-on-failure
+
+  # ----------------------------------------------------------------------------
+  # GUI: SwiftPM build + IPC unit tests + assembling the .app + signature
+  # self-checks.
+  #
+  # Runs on both macos-14 and macos-26: the former proves the GUI's claimed
+  # macOS 14 floor still holds on the oldest usable toolchain, the latter
+  # watches for regressions on the newest OS.
+  # ----------------------------------------------------------------------------
+  gui:
+    name: GUI · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, macos-26]
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # macos-14 images default xcode-select to Xcode 15.0, whose SDK predates
+      # SwiftUI making View entirely @MainActor; this repo is written against
+      # the new semantics and does not compile under it. Select the newest
+      # Xcode in the image: what is being proven is that the macOS 14 runtime
+      # floor holds, and the compiler version is irrelevant to that. On
+      # macos-26 the step is a no-op equal to the default.
+      - name: Select the newest Xcode in the image
+        run: |
+          latest="$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
+          echo "selected: ${latest}"
+          sudo xcode-select -s "${latest}"
+          swift --version
+
+      - name: Install libusb
+        run: brew install libusb
+
+      - name: Build C++ (the GUI links libtetherkit)
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DTETHERKIT_BUILD_TESTS=OFF -DTETHERKIT_BUILD_BENCHMARKS=OFF
+          cmake --build build -j"$(sysctl -n hw.ncpu)"
+
+      - name: Swift unit tests
+        run: TETHERKIT_LIB_DIR="$PWD/build/lib" swift test --package-path gui
+
+      - name: Assemble TetherKit.app
+        run: cmake --build build --target gui
+
+      - name: Self-checks
+        run: |
+          codesign --verify --deep --strict dist/TetherKit.app
+          # The non-root path of --install must fail loudly instead of
+          # half-installing.
+          payload="dist/TetherKit.app/Contents/Library/HelperTools"
+          if "${payload}/com.tetherkit.helper" --install; then
+            echo "::error::helper --install unexpectedly succeeded without root"
+            exit 1
+          fi
+          # The Finder-alias install mode always exits 0 (result on stdout).
+          ./dist/TetherKit.app/Contents/MacOS/TetherKit --install-finder-alias
+
+  # ----------------------------------------------------------------------------
+  # ThreadSanitizer: the correctness backstop for the lock-free queue and the
+  # multithreaded data path.
+  # ----------------------------------------------------------------------------
+  tsan:
+    name: ThreadSanitizer
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install libusb
+        run: brew install libusb
+
+      - name: Configure & Build
+        run: |
+          cmake -S . -B build-tsan -DTETHERKIT_ENABLE_TSAN=ON
+          cmake --build build-tsan -j"$(sysctl -n hw.ncpu)"
+
+      - name: Test
+        run: ctest --test-dir build-tsan --output-on-failure
+
+  # ----------------------------------------------------------------------------
+  # Private-ABI drift monitoring.
+  #
+  # The biggest long-term risk here is xnu changing struct if_fake_request's
+  # layout in some macOS update. A real feth create/destroy round-trip catches
+  # that earlier than anything else.
+  #
+  # This job is a gate, not a signal: ABI drift must turn the pipeline red
+  # itself, otherwise the check is toothless. continue-on-error was set briefly,
+  # on the fear that runner VMs might not manage if_fake; macos-14/15/26 kept
+  # really creating feth pairs for many consecutive rounds, so the fear was
+  # unfounded and the flag is gone. If some future runner image truly cannot do
+  # it, one red run beats a permanently false green.
+  # ----------------------------------------------------------------------------
+  abi-check:
+    name: feth private-ABI check · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, macos-15, macos-26]
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install libusb
+        run: brew install libusb
+
+      - name: Build
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          cmake --build build -j"$(sysctl -n hw.ncpu)"
+
+      - name: Disable feth hardware checksum offload
+        # These sysctls are snapshotted at feth-creation time, so set them first.
+        run: sudo sysctl -w net.link.fake.hwcsum=0
+
+      - name: Run the feth/BPF cases as root
+        run: |
+          # -V instead of --output-on-failure: this is a forensic job; the
+          # passing output is the evidence.
+          # The grep patterns below match text printed by the test binary; keep
+          # them byte-exact.
+          sudo env TETHERKIT_ROOT_TESTS=1 \
+            ctest --test-dir build -V -R 'net\.' 2>&1 | tee abi.log
+
+          # Critical: root cases SKIP (not fail) when preconditions are unmet,
+          # and skipped still shows green. Without this guard the job could sit
+          # permanently green while having checked nothing.
+          if grep -q "需要 root 且需设置" abi.log; then
+            echo "::error::feth/BPF cases were skipped; this ABI check did not actually run"
+            exit 1
+          fi
+          # Positive confirmation: a real feth pair was created.
+          if ! grep -q "创建了 feth" abi.log; then
+            echo "::error::no feth creation in the log; cannot confirm the private ABI still works"
+            exit 1
+          fi
+          echo "✓ Confirmed a real feth creation: $(grep -m1 '创建了 feth' abi.log)"

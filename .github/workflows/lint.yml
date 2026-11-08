@@ -1,0 +1,79 @@
+# Lint: code formatting and static analysis.
+#
+# Two independent jobs:
+# 1. clang-format: a hard gate on formatting (vendored third-party code
+#    excluded);
+# 2. clang-tidy: advisory static analysis. It does not block the pipeline; the
+#    log is uploaded as an artifact and the warning count goes to the step
+#    summary.
+
+name: Lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Cancel superseded runs on the same branch when new commits land; macOS
+# minutes are billed at 10x Linux.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  clang-format:
+    name: clang-format
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install clang-format
+        run: brew install clang-format
+
+      - name: Check formatting
+        # third_party/doctest is vendored third-party code and is excluded; the
+        # repo-root .clang-format applies automatically.
+        run: git ls-files '*.cc' '*.h' ':!:third_party/*' | xargs clang-format --dry-run --Werror
+
+  clang-tidy:
+    name: clang-tidy
+    runs-on: macos-26
+    # The empty WarningsAsErrors in the repo's .clang-tidy is deliberate
+    # (advisory semantics). Once the existing-warning count reaches zero, drop
+    # continue-on-error to promote this to a hard gate.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install libusb
+        run: brew install libusb
+
+      - name: Install LLVM
+        run: |
+          brew install llvm
+          echo "/opt/homebrew/opt/llvm/bin" >> "$GITHUB_PATH"
+
+      - name: Configure CMake to emit compile_commands.json
+        # CMakeLists.txt exports compile_commands.json by default.
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
+
+      - name: Run clang-tidy
+        run: git ls-files '*.cc' '*.h' ':!:third_party/*' | xargs clang-tidy -p build 2>&1 | tee tidy.log
+
+      - name: Count warnings into the step summary
+        if: always()
+        run: |
+          if [ -f tidy.log ]; then
+            warning_count=$(grep -c ': warning:' tidy.log || true)
+            echo "### clang-tidy report" >> "$GITHUB_STEP_SUMMARY"
+            echo "Found **${warning_count}** warnings (advisory, not a hard gate)." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload the clang-tidy log
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: tetherkit-tidy-log
+          path: tidy.log
+          retention-days: 14

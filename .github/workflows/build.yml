@@ -1,0 +1,105 @@
+# Build: a manually triggered full build with artifact upload.
+#
+# Dispatch-only full build: C++ (warnings as errors) + the libtetherkit shared
+# library + GUI packaging. Artifacts are uploaded for each run.
+
+name: Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      os:
+        description: "Runner OS image"
+        type: choice
+        options:
+          - macos-26
+          - macos-15
+          - macos-14
+        default: macos-26
+      build_type:
+        description: "Build type"
+        type: choice
+        options:
+          - Release
+          - RelWithDebInfo
+          - Debug
+        default: Release
+
+jobs:
+  build:
+    name: Build and package · ${{ inputs.os }} · ${{ inputs.build_type }}
+    runs-on: ${{ inputs.os }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install libusb
+        run: brew install libusb
+
+      # macos-14 images default xcode-select to Xcode 15.0, whose SDK predates
+      # SwiftUI making View entirely @MainActor; this repo is written against
+      # the new semantics and does not compile under it. Select the newest
+      # Xcode in the image: what is being proven is that the macOS 14 runtime
+      # floor holds, and the compiler version is irrelevant to that. On
+      # macos-26 the step is a no-op equal to the default.
+      - name: Select the newest Xcode in the image
+        run: |
+          latest="$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
+          echo "selected: ${latest}"
+          sudo xcode-select -s "${latest}"
+          swift --version
+
+      - name: Configure
+        run: |
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=${{ inputs.build_type }} \
+            -DTETHERKIT_WARNINGS_AS_ERRORS=ON
+
+      - name: Build
+        run: cmake --build build -j"$(sysctl -n hw.ncpu)"
+
+      # Basic tetherkit-cli smoke checks; --list only enumerates devices and
+      # state, no root needed.
+      - name: Smoke test (--list needs no root)
+        run: |
+          ./build/bin/tetherkit-cli --version
+          ./build/bin/tetherkit-cli --list
+
+      - name: Assemble TetherKit.app
+        run: cmake --build build --target gui
+
+      - name: Self-checks
+        run: |
+          codesign --verify --deep --strict dist/TetherKit.app
+          # The non-root path of --install must fail loudly instead of
+          # half-installing.
+          payload="dist/TetherKit.app/Contents/Library/HelperTools"
+          if "${payload}/com.tetherkit.helper" --install; then
+            echo "::error::helper --install unexpectedly succeeded without root"
+            exit 1
+          fi
+          # The Finder-alias install mode always exits 0 (result on stdout).
+          ./dist/TetherKit.app/Contents/MacOS/TetherKit --install-finder-alias
+
+      - name: Package TetherKit.app
+        run: |
+          # ditto preserves the bundle structure and extended attributes; it is
+          # the standard way to package a .app.
+          ditto -c -k --keepParent dist/TetherKit.app "TetherKit-${{ github.run_number }}-${{ inputs.os }}-${{ inputs.build_type }}.zip"
+
+      # upload-artifact@v7 supports single-file direct upload (archive: false):
+      # the downloaded artifact IS the ditto zip above, not a zip inside another
+      # zip. With archive: false the name input is ignored (the file name wins).
+      - name: Upload TetherKit.app artifact
+        uses: actions/upload-artifact@v7
+        with:
+          path: TetherKit-${{ github.run_number }}-${{ inputs.os }}-${{ inputs.build_type }}.zip
+          archive: false
+          retention-days: 14
+
+      - name: Upload libtetherkit shared-library artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: tetherkit-libs-${{ github.run_number }}-${{ inputs.os }}-${{ inputs.build_type }}
+          path: build/lib/libtetherkit*.dylib
+          retention-days: 14

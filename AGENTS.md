@@ -248,6 +248,7 @@ Swift 的 C++ 互操作吞不下，所以 C ABI 这一层不可省。
 | 32 | `feat(gui): 特权组件与 App 版本不一致时给出更新入口` | ✅ | 比的是**库**版本而不是 Info.plist（`swift run` 没有 bundle）；只取版本号，构建配置不同不算不一致；协议号没变的版本以前完全没有提示 |
 | 33 | `chore(release): v0.1.5 —— 组件版本对不上时可一键更新` | ✅ | 协议号仍是 3，旧组件照常能用；升级后管理行会提示更新，不更新也不会坏 |
 | 34 | `feat(gui): 侧栏五页布局与 AppKit 主窗口（本分支）` | ✅ | 33 个提交：两栏仪表盘改为五页侧栏；主窗口改 AppKit 自管（第 7 节坑 19、20）；sdk 26 门控 chrome（第 7 节坑 19）；页面切换零动画（第 7 节坑 22、23，docs/GUI-ARCHITECTURE.md 4.11） |
+| 35 | `build(ci): split CI into tests, build, and lint workflows` | ✅ | ci.yml's five jobs moved into tests.yml with their steps and checks unchanged, triggers narrowed to PR + push main + manual (tag pushes covered by the self-sufficient release.yml; the swift-app branch is retired); new build.yml (workflow_dispatch only, runner-image and build-type inputs, .app and shared-library artifacts) and lint.yml (clang-format as a hard gate; clang-tidy advisory, since WarningsAsErrors: '' in .clang-tidy is an existing choice, promote it once the backlog is zero); all actions pinned to the latest major, checkout@v7 / upload-artifact@v7, with the .app uploaded via v7 single-file direct upload so the ditto zip arrives as itself |
 
 ### 当前状态
 
@@ -255,6 +256,11 @@ Swift 的 C++ 互操作吞不下，所以 C ABI 这一层不可省。
   GUI 侧 `swift test` 24 个用例通过（17 个 TetherKitIPC + 7 个
   TetherKitUIModel，含 LocalizationTests、HelperConstantsTests）
 - **构建**：`-Werror` 零告警；命令行、共享库、GUI 三套产物均可构建
+- **CI**: legacy ci.yml split into tests.yml (five jobs migrated with their
+  steps and checks unchanged, PR + push main triggers), build.yml (manual
+  trigger only, full build + artifacts) and lint.yml (clang-format gate +
+  advisory clang-tidy); every action pinned to the latest major (checkout@v7,
+  upload-artifact@v7)
 - **可运行**：`--version` / `--help` / `--list` 均正常；非 root 启动给出清晰提示
   并返回退出码 1；`TetherKit.app` 与 `tetherkit-helper` 打包后均可启动；
   特权组件可在 App 内一键安装 / 卸载（安装路径已真机走通）；
