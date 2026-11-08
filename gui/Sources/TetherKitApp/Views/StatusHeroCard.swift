@@ -6,7 +6,7 @@ import TetherKitIPC
 /// 一屏之内回答四个问题：现在通不通、通到哪张网卡、什么 IP、要不要断开。
 /// 其余细节都往下面的卡片里放 —— 用户九成的时间只看这一块。
 struct StatusHeroCard: View {
-    @Bindable var model: AppModel
+    var model: AppModel
 
     private var accent: Color { Design.accent(for: model.status.runState) }
 
@@ -15,8 +15,9 @@ struct StatusHeroCard: View {
             HStack(alignment: .top, spacing: Design.Spacing.large) {
                 StatusRing(status: model.status, accent: accent)
 
-                // 不能用 Spacer 隔开地址行：整页布局靠「多余高度归两栏」工作，
-                // 卡片里一根 Spacer 就会把横幅无限撑高。
+                // No Spacer between the address lines: this page scrolls
+                // on its content, so a Spacer here is inert anyway, and
+                // the text lines should read as one block.
                 VStack(alignment: .leading, spacing: Design.Spacing.small) {
                     headline
                     subline

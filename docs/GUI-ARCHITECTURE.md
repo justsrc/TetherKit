@@ -62,8 +62,13 @@ gui/
 │   ├── TetherKitIPC/                  App 与 helper 共享：协议、模型、授权、文案表
 │   ├── TetherKitCore/                 C ABI 的 Swift 封装
 │   ├── TetherKitHelper/               特权 helper
-│   └── TetherKitApp/                  SwiftUI 界面
+│   ├── TetherKitUIModel/              主窗口页面模型（SidebarPage：固定取色与
+│   │                                  会话状态取色、持久化选择解析）—— 独立
+│   │                                  library 是为了可单测（可执行 target 不能
+│   │                                  被 @testable import）
+│   └── TetherKitApp/                  SwiftUI 界面（含主窗口管理与各页面视图）
 ├── Tests/TetherKitIPCTests/           授权凭据生命周期 + 文案表占位符一致性
+├── Tests/TetherKitUIModelTests/       页面 tint 语义 + 持久化选择解析
 ├── Resources/                         Info.plist、LaunchDaemon plist
 └── Scripts/                           构建 / 安装 / 卸载脚本
 ```
@@ -226,11 +231,23 @@ helper 根本没有它 —— 那就又回到了「对不上还查不出来」�
   在缓冲被写满、没有 NUL 时会越界读。
 - **非负值的 C 枚举被导入成 `UInt32`**，而结构体字段是 `int32_t`，比较前必须
   显式转换。
-- **MenuBarExtra 与 Window 同存时，点菜单栏图标会让 SwiftUI 擅自重建主窗口。**
-  实测确认，且不走 `applicationShouldHandleReopen`（插桩证明该委托从未被调用，
-  SwiftUI 生命周期不转发它），没有干净的委托口子可堵。对策在结果端：窗口每次
-  出现时问 AppModel「这次展示登记过吗」（App 启动与「打开主窗口」按钮是仅有的
-  两个登记点，3 秒时间窗），没登记过的当场 dismiss。见 `MainWindowRoot`。
+- **主窗口由 AppKit 直接管理（`MainWindowManager`），不再走 SwiftUI 的 Window
+  场景。** 两个原因：一是 SwiftUI 会在菜单栏模式下「擅自重建」Window 场景、
+  主窗口莫名冒回来（`applicationShouldHandleReopen` 不走，插桩确认没被调用，
+  没有干净的委托口子可堵）—— 自己管窗口之后这条路就没了；二是 macOS 26 的
+  窗口 chrome 由 `LC_BUILD_VERSION` 的 SDK 决定：SwiftPM 链出来的 `sdk 14.0`
+  全机器都是 legacy 三灯（14×16pt 按钮框、20pt 间距、内只画约 12pt 圆），加
+  `-platform_version macos 14.0.0 26.5.0` 并保持 minos 14.0 即可拿回 stock
+  大灯（两个方面均见 AGENTS.md 第 7 节第 19–21 条）。主窗口因此是
+  `fullSizeContentView` + 透明隐藏标题栏的普通 NSWindow，内容由
+  NSHostingView 承载；App 启动与菜单栏「打开主窗口」都走
+  `MainWindowManager.shared.present(model)`，关闭 = orderOut，回到菜单栏
+  模式（`NSWindowDelegate.windowWillClose` 里退到 accessory 策略）。
+- **dev 裸跑现在照常弹窗。** 窗口由 delegate 在
+  `applicationDidFinishLaunching` 创建并 `makeKeyAndOrderFront`，不再依赖
+  SwiftUI 的实例化时机，也不需要菜单栏手动救回。
+  `TetherKitApplication.init()` 的 `.prohibited → .regular` 自检保留：
+  它管的是未激活进程的正常激活语义。
 - **轮询是自适应的**：会话在跑 / 正在启停 / 窗口开着 → 500 ms；纯后台待机 →
   2 秒。窗口重新打开时立刻补一次刷新，避免第一眼看到陈旧数据。
 
@@ -306,7 +323,7 @@ helper 缺失或版本不匹配时，界面给一个「安装 / 更新特权组�
   （剥掉 ANSI 色码）放进弹窗。
 - **弹框之前先自检**：载荷不在（`swift run` 的裸可执行文件）或 AEWP 不在，
   都要在要密码**之前**报出来，并引导回终端脚本。
-- **卸载走同一条链**：仪表盘底部的「卸载特权组件…」（低调的 caption 行 ——
+- **卸载走同一条链**：「管理」页的「卸载特权组件…」（低调的 caption 行 ——
   极低频动作不抢注意力，但必须存在于主界面）→ 确认框 → `--uninstall` →
   `uninstall-helper.sh`。成败判定方向相反：等的是「连不上」。卸载后界面
   自然回到安装引导页，随时可重装。
@@ -319,7 +336,7 @@ helper 缺失或版本不匹配时，界面给一个「安装 / 更新特权组�
 和不能走 Cask 是同一堵墙。真正的更新通道是 `brew upgrade` 或源码重编。
 
 - 入口两个：App 菜单「检查更新…」（结果弹窗，带可复制的 brew 命令与
-  发布页链接）；自动检查每天至多一次，发现新版只点亮管理行里的
+  发布页链接）；自动检查每天至多一次，发现新版在「管理」页的特权组件行点亮
   「有新版 x.y.z」，绝不弹窗打断。提示跨启动记忆（defaults），升级完成后
   因版本比较自然熄灭。
 - 隐私：只访问 GitHub 公开 API，失败静默；
@@ -329,6 +346,55 @@ helper 缺失或版本不匹配时，界面给一个「安装 / 更新特权组�
   发布 Release**，否则查不到。
 - 查到新版后的落地由既有机制接力：`brew upgrade` 换掉 App，重启后
   `protocolRevision` 不匹配触发「更新特权组件」一键重装（4.6 / 4.9 节）。
+
+### 4.11 页面切换为何零动画（macOS 26 的插值链）
+
+侧栏换页要求逐像素不动。此前 macOS 26 上点击换页时新页短暂放大约 8-10% 再缩回，
+且**只有点击触发**（定时器驱动同一状态完全纯净）。两层根因（AGENTS.md 第 7 节
+第 22、23 条）叠加，单堵任何一层都只让跳变变快、不能根除 —— 三重钳制，缺一不可：
+
+1. **`SidebarRow`：`InstantButtonStyle`（`PrimitiveButtonStyle`）** —— 系统默认
+   样式会为按下 / 标签状态创建**按钮激活上下文**（带动画的事务）；它用
+   `.transaction { animation = nil }` + `.contentShape(Rectangle)` +
+   `.simultaneousGesture(TapGesture().onEnded { trigger() })` 彻底不创建
+   （对 configuration 调 `trigger()` 不是 `action()`）。
+2. **`SidebarShell.select`：状态写入跳出激活拍** —— `DispatchQueue.main.async`
+   到下一拍写入，写处再挂 instant 事务（`animation = nil` +
+   `disablesAnimations = true`）兜底；content/pageBody 同挂
+   `.transition(.identity)`，进出场永不插值。
+3. **`MainWindowManager`：掐断 resize 事件源** —— macOS 26 把「内容尺寸变化」
+   与「窗口 frame 动画」同步（WWDC25-256、release notes 61158194）；
+   `NSHostingView` 默认 `sizingOptions` 会把每页固有尺寸推进窗口（页高不同 →
+   每次换页一次 resize）。`hosting.sizingOptions = []` 在**附加 contentView
+   之前**设置；min/max 钉成固定尺寸。
+
+**为什么单独堵一层不够**：transition 只在事务带动画时插值，激活上下文永远带
+动画；`disablesAnimations` 只拦新的隐式 `.animation` 写入（objc.io 的
+Transaction / transitions 两篇）—— 唯一「完全不插值」的环境是带 nil 动画的
+下一拍事务，即第 2 条。
+
+**不变式**：改侧栏选中的新代码路径**必须走 `select()`**（保持跳出激活拍），
+不许在激活事务内直接写 `storedPage` —— 每多一个换页入口，这条都得跟着保持。
+窗口侧：delegate 的 `windowDidBecomeMain` / `windowDidResize` 幂等重新钉
+min/max —— 实测 macOS 26 窗口展示后不久会把 min/max **重置为未设**，伴随一次
++32pt 的 chrome settle（调用栈 `_setFrameCommon:display:fromServer:`）；
+`styleMask` 从不含 `.resizable`（min/max 只防程序化改动），幂等写法同时防
+`windowDidResize` 自递归。
+
+**验证（无头，不靠肉眼）**：`NSEvent` mouseDown/mouseUp +
+`NSWindow.sendEvent` 合成点击走真实响应链（无需 Accessibility / 录屏权限）；
+对自己进程可用 `AXUIElement` 读按钮几何自检命中（自家进程无 TCC 弹窗），命中
+12/12；每次点击抓 20 张间隔 35ms 的上部内容带帧 = 240 帧，YAVG 配对分析 ——
+每次换页恰好**一个单帧跳变**、无衰减序列（若仍有 0.2-0.3s 的 settle，会出现
+5-8 个连续中幅配对），点击路径零 `didResize`。⚠️ CA 动画键探针全程
+`animLayers=0`：**SwiftUI 插值对 CALayer 不可见，只有位图捕获能看到**，别拿
+「有没有 CA 动画」当判据。AX 注意点：常量导入为 `String`（传给 AX API 要
+`as CFString`）；`CFArray` 元素用 `CFArrayGetValueAtIndex` + `unsafeBitCast`
+取，配 `AXValueGetTypeID()` 检查。
+
+无碍项：`LogCard` 自动滚动（`withAnimation(.easeOut 0.15)`）与 `StatusHeroCard`
+的 repeatForever 呼吸动画都拥有自己的事务，`select()` 的钳制不影响它们
+（实测通过）。
 
 ---
 
@@ -349,8 +415,9 @@ helper 缺失或版本不匹配时，界面给一个「安装 / 更新特权组�
 | App 内一键安装 / 更新 / 卸载特权组件 | `gui/Sources/TetherKitApp/HelperInstaller.swift` |
 | 检查更新（只查不换，每日自动 + 手动菜单） | `gui/Sources/TetherKitApp/UpdateChecker.swift` |
 | Finder 别名自动维护（首次启动建立，聚焦可搜可启动；brew postinstall 有沙箱建不了） | `gui/Sources/TetherKitApp/FinderAlias.swift` |
-| SwiftUI 界面（状态、设备、网络、吞吐、日志） | `gui/Sources/TetherKitApp` |
+| SwiftUI 界面（侧边栏五页：连接 / 网络 / 吞吐 / 日志 / 管理，`SidebarShell` 分页；日志页列表填满页高） | `gui/Sources/TetherKitApp/Views/SidebarShell.swift` |
 | 菜单栏实时速率 + 后台运行（仅菜单栏模式） | `gui/Sources/TetherKitApp/Views/MenuBarPanel.swift` |
+| dev 自截工具（App 窗口自捕成 PNG，无屏幕权限迭代循环） | `gui/Sources/TetherKitApp/Views/UiSelfCapture.swift` |
 | 中英双语（运行期可切，界面 / 库日志 / helper 提示三处同步） | `gui/Sources/TetherKitIPC/Localization.swift`、`tk_set_language` |
 
 ### 未实现 / 已知限制
@@ -388,10 +455,10 @@ open dist/TetherKit.app
 ```bash
 export TETHERKIT_LIB_DIR="$PWD/build/lib"
 swift build --package-path gui
-swift test  --package-path gui     # TetherKitIPC 的单元测试
+swift test  --package-path gui     # TetherKitIPC + TetherKitUIModel 的单元测试
 ```
 
-卸载：仪表盘底部的「卸载特权组件…」按钮（见 4.9 节），或：
+卸载：「管理」页的「卸载特权组件…」按钮（见 4.9 节），或：
 
 ```bash
 sudo ./gui/Scripts/uninstall-helper.sh
@@ -410,4 +477,4 @@ sudo ./gui/Scripts/uninstall-helper.sh
 | 点「安装特权组件」报「不带安装载荷」 | 跑的是 `swift run` 的裸可执行文件，载荷只在 build-gui.sh 组装的 .app 里；用终端脚本装 |
 | 授权框只有密码、没有指纹 | 这是系统 API 的限制，不是缺陷，见第 4.5 节 |
 | 设备拔掉重插后点「连接」报「会话已经在运行了」 | helper 是旧版（失败态旧会话未被清理），重装 helper |
-| 仅菜单栏模式下双击访达图标没反应 | 已知权衡（见 MainWindowRoot 的说明），从菜单栏面板打开即可 |
+| 双击访达图标没反应 | 已修复：`applicationShouldHandleReopen` 里重新呈现主窗口（AppKit 自管窗口之后才拿得到这个回调） |

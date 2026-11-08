@@ -161,12 +161,9 @@ final class AppModel {
     /// 上次枚举设备的时刻。用单调时钟，避免系统时间被调整时算出负的间隔。
     private var lastDeviceRefresh: ContinuousClock.Instant?
 
-    /// 主窗口当前是否可见。只影响轮询节奏；程序坞图标策略在视图层处理。
+    /// Main window visible? Affects poll cadence only; the dock icon
+    /// policy lives in MainWindowManager.
     private var isWindowVisible = true
-
-    /// 最近一次「明确要求显示主窗口」的时刻。初始值 = 现在，因为 App 启动本身
-    /// 就是一次合法的窗口展示。
-    private var windowPresentationRequestedAt = ContinuousClock.now
 
     /// 缓存的授权令牌。为 nil 表示下次特权操作需要弹框。
     ///
@@ -272,23 +269,6 @@ final class AppModel {
     /// 主窗口关闭。App 转入后台模式，轮询继续（菜单栏靠它喂数据）但会放慢。
     func windowDidDisappear() {
         isWindowVisible = false
-    }
-
-    /// 登记「接下来这次主窗口展示是我们主动要求的」。
-    ///
-    /// App 启动时（初始化默认值）与「打开主窗口」按钮各登记一次。
-    func expectWindowPresentation() {
-        windowPresentationRequestedAt = ContinuousClock.now
-    }
-
-    /// 这次窗口出现是不是我们自己要求的。
-    ///
-    /// SwiftUI 会在「无窗口的 App 被激活」时（点菜单栏图标就会触发）擅自重建
-    /// Window 场景，那种复活必须当场关掉。用时间窗而不是一次性标志来判定：
-    /// 「3 秒内登记过」就算数 —— 一次性标志在「窗口已开着时再点打开」这类
-    /// 路径上会残留，时间窗天然自愈。
-    func isWindowPresentationExpected() -> Bool {
-        ContinuousClock.now - windowPresentationRequestedAt < .seconds(3)
     }
 
     /// 当前该用的轮询间隔。
@@ -572,7 +552,8 @@ final class AppModel {
                              failureNotice: L(.installScriptRanButUnreachable))
     }
 
-    /// 卸载特权组件（仪表盘底部的「卸载…」，确认框在 UI 层）。
+    /// Uninstall the privileged helper (the "Uninstall…" action on the
+    /// Manage page; the confirmation alert lives in the UI layer).
     ///
     /// bootout 给 helper 发 SIGTERM —— 正在跑的会话被优雅停掉、虚拟网卡销毁，
     /// 这一点必须在确认框里向用户说明。卸载完成后界面自然回到安装引导页。

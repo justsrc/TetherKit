@@ -126,7 +126,7 @@ TetherKit.app（SwiftUI）把「选设备 → 连接 → 配 IP」做成了三�
 sudo ./gui/Scripts/install-helper.sh
 ```
 
-卸载：仪表盘底部有「卸载特权组件…」按钮（终端等价命令
+卸载：App 内「管理」页有「卸载特权组件…」按钮（终端等价命令
 `sudo ./gui/Scripts/uninstall-helper.sh`）。
 
 界面里可以配置**上网方式**：
@@ -144,8 +144,8 @@ sudo ./gui/Scripts/install-helper.sh
 特权组件持有，即使退出界面也不会断。
 
 **检查更新**：菜单「TetherKit → 检查更新…」手动查；App 也会每天自动查一次
-（只访问 GitHub 的公开 Releases API，不上报任何信息），发现新版在仪表盘
-底部点亮一条提示。更新本身仍走 `brew upgrade` 或源码重编 —— 免证书分发下
+（只访问 GitHub 的公开 Releases API，不上报任何信息），发现新版会在
+「管理」页点亮一条提示。更新本身仍走 `brew upgrade` 或源码重编 —— 免证书分发下
 自动替换 .app 会被 Gatekeeper 拦下，所以刻意只查不换。不想要自动检查：
 `defaults write com.tetherkit.app updateCheckDisabled -bool YES`。
 

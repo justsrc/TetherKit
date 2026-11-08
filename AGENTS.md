@@ -120,6 +120,7 @@ TetherKit/
 ├── gui/                   SwiftUI 图形界面（SwiftPM 工程，见 docs/GUI-ARCHITECTURE.md）
 │   ├── Sources/CTetherKit/     C ABI 的模块映射（头文件是符号链接）
 │   ├── Sources/TetherKitIPC/   App 与 helper 共享：XPC 协议、模型、授权
+│   ├── Sources/TetherKitUIModel/  侧栏页面模型（独立 target，测试可 @testable import）
 │   ├── Sources/TetherKitCore/  C ABI 的 Swift 封装
 │   ├── Sources/TetherKitHelper/  特权 helper（root，由 launchd 拉起）
 │   ├── Sources/TetherKitApp/   SwiftUI 界面
@@ -246,11 +247,13 @@ Swift 的 C++ 互操作吞不下，所以 C ABI 这一层不可省。
 | 31 | `chore(release): v0.1.4 —— 中英双语` | ✅ | README 英文版转正为默认（HoRNDIS 搜索意图 SEO）；**升级后用户必须在 App 内更新一次特权组件**（协议号变了） |
 | 32 | `feat(gui): 特权组件与 App 版本不一致时给出更新入口` | ✅ | 比的是**库**版本而不是 Info.plist（`swift run` 没有 bundle）；只取版本号，构建配置不同不算不一致；协议号没变的版本以前完全没有提示 |
 | 33 | `chore(release): v0.1.5 —— 组件版本对不上时可一键更新` | ✅ | 协议号仍是 3，旧组件照常能用；升级后管理行会提示更新，不更新也不会坏 |
+| 34 | `feat(gui): 侧栏五页布局与 AppKit 主窗口（本分支）` | ✅ | 33 个提交：两栏仪表盘改为五页侧栏；主窗口改 AppKit 自管（第 7 节坑 19、20）；sdk 26 门控 chrome（第 7 节坑 19）；页面切换零动画（第 7 节坑 22、23，docs/GUI-ARCHITECTURE.md 4.11） |
 
 ### 当前状态
 
 - **测试**：23 个 ctest 用例全部通过（新增 common.i18n 核对两种语言的占位符）；
-  GUI 侧 `swift test` 17 个用例通过（含 LocalizationTests、HelperConstantsTests）
+  GUI 侧 `swift test` 24 个用例通过（17 个 TetherKitIPC + 7 个
+  TetherKitUIModel，含 LocalizationTests、HelperConstantsTests）
 - **构建**：`-Werror` 零告警；命令行、共享库、GUI 三套产物均可构建
 - **可运行**：`--version` / `--help` / `--list` 均正常；非 root 启动给出清晰提示
   并返回退出码 1；`TetherKit.app` 与 `tetherkit-helper` 打包后均可启动；
@@ -580,6 +583,60 @@ TX 就从 4.8 回到了 87 Mbps。
    同一类问题还有一个变种：**`static let` 存的文案只求值一次**，切语言后
    永远不更新。凡是存文案的静态成员一律改成计算属性（`AppModel` 的三条授权
    提示、`NetworkCard.dnsHint` 都踩过）。
+19. **macOS 26 的窗口 chrome 由 `LC_BUILD_VERSION` 的 `sdk` 决定。** 实测：
+   `swift build` 产物被 SwiftPM 链成 `sdk 14.0`（`-target arm64-apple-macos14.0`
+   被折进 LC_BUILD_VERSION），于是 Tahoe 全机器走 **legacy chrome** —— 三灯是
+   14×16pt 按钮框、20pt 间距、内只画约 12pt 圆；对照：Hand Mirror（minos 14.4 /
+   sdk 26.5）与 Dropover（minos 13.0 / sdk 27.0）都是 14×14pt 按钮框、23pt 间距、
+   满格画圆。
+   所有 AppKit 窗口画的都是同一套 `_NSTheme*Widget`，差别只在 SDK 门控。
+   修复：`TetherKitApp` target 链接时加 `-platform_version macos 14.0.0 26.5.0`
+   （gui/Package.swift），**minos 保持 14.0，只有 chrome 受影响**。
+   以后每个发行包都核对：
+   `otool -l <binary> | rg -A4 LC_BUILD_VERSION` —— `sdk` 必须 ≥ 26。
+   主窗口另改为 AppKit 自管 `NSWindow`（MainWindowManager）：启动即确定性呈现，
+   不再依赖 SwiftUI 场景的实例化时机。三灯样式与窗口归属无关，由上面的
+   `sdk` 决定。`build-gui.sh` 自检现强制执行此核对（LC_BUILD_VERSION sdk 戳
+   ≥ 26），跑一次打包即验证。
+20. **`.prohibited` / dev 裸跑的窗口展示**：主窗口不再由 SwiftUI `Window`
+   场景出，而是由 `@NSApplicationDelegateAdaptor` 的 delegate 在
+   `applicationDidFinishLaunching` 里创建并 `makeKeyAndOrderFront` ——
+   裸跑照常弹窗，不再需要菜单栏手动救回；`isWindowPresentationExpected`
+   一类的把关代码全部删除（窗口何时出现由 MainWindowManager 自管，SwiftUI
+   再无场景可擅自重建）。保留 `TetherKitApplication.init()` 里的
+   `.prohibited → .regular` 自检：它不管窗口显现，管的是未激活进程的
+   正常激活语义。
+21. **SwiftPM 把 `sdk` 钉成 deployment target 是系统性问题。** 任何不打
+   `-platform_version` 的 SwiftPM 工程在 Tahoe 上都会被当 legacy app；
+   Homebrew 构建同样受影响 —— 若 formula 构建漏带该 flag，用户装出来
+   仍是 legacy 三灯。
+22. **macOS 26 把 Button 动作的视图更新包进带动画的事务（按钮激活上下文）。**
+   点击侧栏换页时新页短暂放大约 8-10% 再缩回，仅点击触发；定时器驱动同一状态
+   则逐像素纯净。`Transaction.disablesAnimations` 只阻止新的隐式 `.animation`
+   写入事务、**禁不掉 transition** —— transition 只在事务带动画时插值
+   （objc.io 的 Transaction / transitions 两篇）—— 故激活事务包住的页面写入
+   永远被插值，`.transition(.identity)` / instant 事务只让跳变变快，未根除。
+   修两处（源码注释「三重钳制」）：`SidebarRow` 换 `InstantButtonStyle`
+   （`PrimitiveButtonStyle`）：`.transaction { animation = nil }` +
+   `.contentShape(Rectangle)` + `.simultaneousGesture(TapGesture().onEnded
+   { trigger() })`，彻底不创建激活上下文（对 configuration 调 `trigger()`
+   不是 `action()`）；`SidebarShell.select` 把状态写入跳到下一 runloop 拍
+   （`DispatchQueue.main.async`）并挂 instant 事务兜底。
+   详见 docs/GUI-ARCHITECTURE.md「页面切换为何零动画」。
+
+23. **macOS 26 把「内容尺寸变化」与「窗口 frame 动画」同步**（WWDC25-256、
+   release notes 61158194），而 `NSHostingView` 默认 `sizingOptions` 会把每页
+   固有尺寸推进窗口 —— 页高不同，每次换页就是一次窗口 resize 事件源。
+   修法（`MainWindowManager`）：`hosting.sizingOptions = []` 必须在**附加
+   contentView 之前**设置；`minSize` / `maxSize` 钉成固定尺寸。
+   ⚠️ 实测 macOS 26 在窗口展示后不久会把 min/max **重置为未设**，伴随一次
+   +32pt 的 chrome settle（调用栈 `_setFrameCommon:display:fromServer:`）——
+   所以 delegate 的 `windowDidBecomeMain` / `windowDidResize` 里幂等重新钉；
+   幂等写法同时防自递归。窗口 `styleMask` 从不含 `.resizable`，min/max
+   只用于防程序化改动。
+    ⚠️ 反方向「纠偏 frame」不可行：用 `setFrame` 把 frame 从 592 纠回设计
+    尺寸 560，settle 会立刻把它再长回 592 并重置 min/max，往复循环直至
+    SIGTRAP 崩溃。min/max 幂等重钉就是终态，frame 不要碰。
 
 ---
 

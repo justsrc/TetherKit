@@ -6,13 +6,16 @@ import TetherKitIPC
 ///
 /// 图表刻意只画**速率**而不画累计量：累计曲线永远单调上升，看不出任何东西；
 /// 而速率能一眼看出卡顿、抖动和被限速。累计量放在下面的指标格里，需要时能读到。
+///
+/// The card carries no title row: it is the body of the "Throughput"
+/// page and the page header already says it (with the LIVE badge).
 struct ThroughputCard: View {
-    @Bindable var model: AppModel
+    var model: AppModel
 
     private var hasData: Bool { !model.throughputHistory.isEmpty }
 
     var body: some View {
-        Card(title: L(.throughputSectionTitle), systemImage: "chart.line.uptrend.xyaxis", accessory: AnyView(liveBadge)) {
+        Card {
             VStack(alignment: .leading, spacing: Design.Spacing.medium) {
                 rateRow
                 chart
@@ -25,15 +28,8 @@ struct ThroughputCard: View {
         }
     }
 
-    @ViewBuilder
-    private var liveBadge: some View {
-        if model.status.runState == .running {
-            StatusBadge(text: L(.throughputLive), color: .green)
-        }
-    }
-
-    // 速率四格排成 2×2 而不是一行：这卡现在住在半栏里，一行四格会把
-    // 「下行（设备 → 本机）」这类说明挤到截断。
+    // 2x2 rather than one row: down and up keep their columns aligned
+    // across the rate row and the pps row.
     private var rateRow: some View {
         Grid(alignment: .leading,
              horizontalSpacing: Design.Spacing.medium,

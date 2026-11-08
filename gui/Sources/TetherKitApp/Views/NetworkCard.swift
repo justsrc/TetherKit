@@ -10,8 +10,10 @@ import TetherKitIPC
 ///   静态模式我们只能尽力而为地补一个键，能不能被系统采纳取决于 IPMonitor。
 ///   与其向用户承诺一个可能不成立的结果，不如把真实状态摆出来。
 ///
-/// 这张卡的高度直接决定左栏能不能一屏放下（最高的状态是「静态表单 + 当前生效」
-/// 同时展开），所以输入格与回读值都排成两列，长解释一律进悬停提示。
+/// This card lives on the "Network" page with the full content width
+/// to itself. The two-column grid works on a full-width page: a single
+/// column would stretch the form sparse and tall (IPv4 values are
+/// short), and long explanations stay in tooltips.
 struct NetworkCard: View {
     @Bindable var model: AppModel
 
@@ -31,36 +33,39 @@ struct NetworkCard: View {
     var body: some View {
         Card(title: L(.ipModeLabel), systemImage: "network", accessory: AnyView(interfaceBadge)) {
             VStack(alignment: .leading, spacing: Design.Spacing.small) {
-                modePicker
-
-                switch model.networkConfiguration.mode {
-                case .dhcp:
-                    dhcpExplanation
-                case .manual:
-                    manualForm
-                case .none:
-                    EmptyView()
-                }
-
-                defaultRouteToggle
-                actionRow
-
-                if interfaceReady {
-                    Divider()
-                    EffectiveStateView(state: model.networkState,
-                                       interface: model.status.systemInterface)
-                }
-            }
-            .disabled(!interfaceReady)
-            .opacity(interfaceReady ? 1 : 0.55)
-            .overlay(alignment: .center) {
+                // The "connect first" hint sits inline above the form
+                // instead of floating over it; at full width the old
+                // centered capsule covered the DHCP explanation.
                 if !interfaceReady {
-                    Text(L(.connectBeforeConfiguring))
+                    Label(L(.connectBeforeConfiguring), systemImage: "cable.connector")
                         .font(.callout)
                         .foregroundStyle(.secondary)
-                        .padding(Design.Spacing.small)
-                        .background(.regularMaterial, in: Capsule())
+                        .fixedSize(horizontal: false, vertical: true)
                 }
+
+                Group {
+                    modePicker
+
+                    switch model.networkConfiguration.mode {
+                    case .dhcp:
+                        dhcpExplanation
+                    case .manual:
+                        manualForm
+                    case .none:
+                        EmptyView()
+                    }
+
+                    defaultRouteToggle
+                    actionRow
+
+                    if interfaceReady {
+                        Divider()
+                        EffectiveStateView(state: model.networkState,
+                                           interface: model.status.systemInterface)
+                    }
+                }
+                .disabled(!interfaceReady)
+                .opacity(interfaceReady ? 1 : 0.55)
             }
         }
     }
@@ -94,8 +99,6 @@ struct NetworkCard: View {
         }
     }
 
-    /// 静态表单。四个地址格排成两列网格 —— IPv4 短，半栏宽度足够，
-    /// 而高度直接砍半。
     private var manualForm: some View {
         Grid(alignment: .leading,
              horizontalSpacing: Design.Spacing.medium,

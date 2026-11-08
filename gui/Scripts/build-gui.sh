@@ -213,6 +213,15 @@ codesign --force --sign - --timestamp=none --deep "${APP_DIR}" >/dev/null
 log "自检"
 codesign --verify --deep --strict "${APP_DIR}" || die ".app 签名校验失败"
 
+# LC_BUILD_VERSION's sdk stamp must be >= 26, otherwise the whole app
+# renders legacy traffic lights on Tahoe (AGENTS.md pitfall 19). Enforce
+# the "recheck on every release" rule in the script, not in memory.
+sdk_stamp="$(otool -l "${APP_DIR}/Contents/MacOS/TetherKit" | awk '/LC_BUILD_VERSION/{s=1} s && / sdk /{print $NF; exit}')"
+if [[ "$(printf '%s' "${sdk_stamp}" | cut -d. -f1)" -lt 26 ]]; then
+  die "sdk stamp is ${sdk_stamp:-missing}; Tahoe would render legacy chrome (need >= 26, see -platform_version in Package.swift)"
+fi
+echo "  ✓ LC_BUILD_VERSION sdk = ${sdk_stamp}"
+
 if otool -L "${APP_DIR}/Contents/Frameworks"/libtetherkit.*.*.*.dylib | grep -q '/opt/homebrew'; then
   echo "  ⚠️  产物仍依赖 /opt/homebrew，拷到别的机器上会跑不起来"
 else

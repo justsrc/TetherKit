@@ -139,8 +139,9 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case scriptOutput
     case scriptNoOutput
 
-    // MARK: - 主界面（ContentView.swift）
+    // MARK: - Main window, dialogs and helper management
 
+    case closeWindow
     case menuCheckForUpdates
     case alertOperationFailed
     case confirmUninstallTitle
@@ -200,7 +201,6 @@ public enum L10nKey: String, CaseIterable, Sendable {
 
     // MARK: - 日志卡（LogCard.swift）
 
-    case logSectionTitle
     case logDroppedNotice
     case logLevelLabel
     case logLevelAll
@@ -213,6 +213,15 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case logClear
     case logRepeatSuffix
     case logRepeatTooltip
+
+    // MARK: - Sidebar pages (SidebarPage.swift)
+
+    case pageConnectionTitle
+    case pageNetworkTitle
+    case pageThroughputTitle
+    case pageLogTitle
+    case pageManageTitle
+    case manageHelperSectionTitle
 
     // MARK: - 菜单栏面板（MenuBarPanel.swift）
 
@@ -258,7 +267,6 @@ public enum L10nKey: String, CaseIterable, Sendable {
 
     // MARK: - 吞吐卡（ThroughputCard.swift）
 
-    case throughputSectionTitle
     case throughputLive
     case throughputDownstream
     case throughputUpstream
@@ -466,8 +474,9 @@ extension L10nKey {
         case .scriptOutput: return ("%1$@脚本输出：\n%2$@", "%1$@Script output:\n%2$@")
         case .scriptNoOutput: return ("（无输出）", "(no output)")
 
-        // MARK: 主界面
+        // MARK: Main window, dialogs and helper management
 
+        case .closeWindow: return ("关闭窗口", "Close Window")
         case .menuCheckForUpdates: return ("检查更新…", "Check for Updates…")
         case .alertOperationFailed: return ("操作失败", "Operation failed")
         case .confirmUninstallTitle: return ("卸载特权组件？", "Uninstall the privileged helper?")
@@ -605,7 +614,6 @@ extension L10nKey {
 
         // MARK: 日志卡
 
-        case .logSectionTitle: return ("运行日志", "Log")
         case .logDroppedNotice:
             return ("有 %ld 条日志因缓冲写满被丢弃", "%ld log lines were dropped because the buffer filled up")
         case .logLevelLabel: return ("级别", "Level")
@@ -702,7 +710,6 @@ extension L10nKey {
 
         // MARK: 吞吐卡
 
-        case .throughputSectionTitle: return ("吞吐", "Throughput")
         case .throughputLive: return ("实时", "Live")
         case .throughputDownstream: return ("下行（设备 → 本机）", "Down (device -> Mac)")
         case .throughputUpstream: return ("上行（本机 → 设备）", "Up (Mac -> device)")
@@ -722,6 +729,15 @@ extension L10nKey {
         case .upstreamDropped: return ("上行丢弃", "Up dropped")
         case .kernelDrops: return ("内核丢包", "Kernel drops")
         case .transmitBackpressure: return ("发送背压", "TX backpressure")
+
+        // MARK: Sidebar pages
+
+        case .pageConnectionTitle: return ("连接", "Connection")
+        case .pageNetworkTitle: return ("网络", "Network")
+        case .pageThroughputTitle: return ("吞吐", "Throughput")
+        case .pageLogTitle: return ("日志", "Log")
+        case .pageManageTitle: return ("管理", "Manage")
+        case .manageHelperSectionTitle: return ("特权组件", "Privileged helper")
         }
     }
 }
