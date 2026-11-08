@@ -65,14 +65,29 @@ jobs:
         # another image: under the one-major-Xcode-per-image model the
         # macos-26 image tops out at 26.6 and macos-15 at 26.3, so Xcode 27
         # arrives as its own label (macOS 27 base, default toolchain Xcode
-        # 27.x; GA since 2026-10-15, runner-images #14404). The label rides
-        # runs-on through matrix.os directly, so no selection step is needed
-        # here — the image's default is the toolchain being tested.
+        # 27.x; GA since 2026-10-15, runner-images #14404). macos-15/26 keep
+        # the image default (the macos-15 leg is the old-compiler coverage:
+        # Xcode 16.4, not the 26.3 maximum it could pick); the xcode-27 leg
+        # is special-cased by the pin step below because that image also
+        # carries a 27.2 release candidate.
         os: [macos-15, macos-26, xcode-27]
         build_type: [RelWithDebInfo, Release]
 
     steps:
       - uses: actions/checkout@v7
+
+      - name: Pin Xcode 27.1 on the xcode-27 leg
+        if: matrix.os == 'xcode-27'
+        # CI must not silently build with a pre-release toolchain, and name
+        # discovery cannot guarantee that here: the image ships Xcode_27.2.0
+        # as a symlink whose clean name no filter can catch (live run
+        # 42491763714 selected it). Pin the last stable 27.x; bump by hand
+        # when a 27.x GA ships. Runs first so the version step below records
+        # the pinned compiler on the pinned leg.
+        run: |
+          test -d /Applications/Xcode_27.1.app \
+            || { echo "::error::Xcode_27.1.app is gone; bump this pin deliberately"; exit 1; }
+          sudo xcode-select -s /Applications/Xcode_27.1.app
 
       - name: Install libusb
         run: brew install libusb
@@ -139,8 +154,8 @@ jobs:
   # GUI: SwiftPM build + IPC unit tests + assembling the .app + signature
   # self-checks.
   #
-  # Runs on macos-15, macos-26, and xcode-27 (macOS 27 base + its newest
-  # non-beta Xcode 27.x, which the select-newest step below picks on its own).
+  # Runs on macos-15, macos-26, and xcode-27 (macOS 27 base, with the
+  # toolchain deliberately filtered or pinned per leg in the steps below).
   # macos-14 used to be this leg — proving the
   # GUI's claimed macOS 14 runtime floor on the oldest usable image — but
   # GitHub retired the macos-14 runner image on 2026-11-02, so macos-15 is now
@@ -154,9 +169,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # xcode-27 rides the select-newest step below: on that image the
-        # newest non-beta Xcode is the 27.x default (27.1 at the time of
-        # writing).
+        # On xcode-27 the toolchain is pinned below instead of discovered:
+        # the image carries Xcode 27.2 as a release candidate behind a
+        # name-clean symlink that discovery cannot exclude.
         os: [macos-15, macos-26, xcode-27]
 
     steps:
@@ -167,13 +182,26 @@ jobs:
       # SDK predates SwiftUI making View entirely @MainActor (this repo does
       # not compile under it), and macos-15 inherits the same reasoning one
       # generation later. On macos-26 the step is a no-op equal to the default.
-      # Filter beta out: if a beta Xcode ever shows up in an image, CI must not
-      # silently switch to the beta toolchain.
       - name: Select the newest Xcode in the image
+        if: matrix.os != 'xcode-27'
         run: |
-          latest="$(ls -d /Applications/Xcode_*.app | grep -iv beta | sort -V | tail -1)"
+          # Filter pre-release toolchains out: CI must not silently switch
+          # to a beta or a release candidate.
+          latest="$(ls -d /Applications/Xcode_*.app | grep -ivE 'beta|release.?candidate' | sort -V | tail -1)"
           echo "selected: ${latest}"
           sudo xcode-select -s "${latest}"
+          swift --version
+
+      - name: Pin Xcode 27.1 on the xcode-27 leg
+        if: matrix.os == 'xcode-27'
+        # Same doctrine, but discovery fails here by construction: the
+        # image ships Xcode_27.2.0 as a Release-Candidate symlink with a
+        # clean name (live run 42491763714 selected it through a beta-only
+        # filter), so the stable 27.x is pinned and bumped deliberately.
+        run: |
+          test -d /Applications/Xcode_27.1.app \
+            || { echo "::error::Xcode_27.1.app is gone; bump this pin deliberately"; exit 1; }
+          sudo xcode-select -s /Applications/Xcode_27.1.app
           swift --version
 
       - name: Install libusb

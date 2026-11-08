@@ -14,6 +14,7 @@ on:
         options:
           - macos-26
           - macos-15
+          - xcode-27
         default: macos-26
       build_type:
         description: "Build type"
@@ -45,13 +46,27 @@ jobs:
       # SDK predates SwiftUI making View entirely @MainActor (this repo does
       # not compile under it), and macos-15 inherits the same reasoning one
       # generation later. On macos-26 the step is a no-op equal to the default.
-      # Filter beta out: if a beta Xcode ever shows up in an image, CI must not
-      # silently switch to the beta toolchain.
       - name: Select the newest Xcode in the image
+        if: inputs.os != 'xcode-27'
         run: |
-          latest="$(ls -d /Applications/Xcode_*.app | grep -iv beta | sort -V | tail -1)"
+          # Filter pre-release toolchains out: CI must not silently switch to
+          # a beta or a release candidate.
+          latest="$(ls -d /Applications/Xcode_*.app | grep -ivE 'beta|release.?candidate' | sort -V | tail -1)"
           echo "selected: ${latest}"
           sudo xcode-select -s "${latest}"
+          swift --version
+
+      - name: Pin Xcode 27.1 on the xcode-27 leg
+        if: inputs.os == 'xcode-27'
+        # Discovery fails on the xcode-27 image by construction: it ships
+        # Xcode_27.2.0 as a Release-Candidate symlink whose clean name no
+        # filter can call out (live run 42491763714 selected it through a
+        # beta-only filter). Pin the last stable 27.x; bump by hand when a
+        # 27.x GA ships.
+        run: |
+          test -d /Applications/Xcode_27.1.app \
+            || { echo "::error::Xcode_27.1.app is gone; bump this pin deliberately"; exit 1; }
+          sudo xcode-select -s /Applications/Xcode_27.1.app
           swift --version
 
       - name: Configure
