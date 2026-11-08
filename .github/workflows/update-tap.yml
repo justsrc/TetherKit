@@ -20,6 +20,11 @@ on:
         description: "The tag to sync, e.g. v0.1.0"
         required: true
         type: string
+    # Declared so release.yml's named secrets map validates: an undeclared
+    # secret name fails a workflow_call at startup, with zero jobs and no logs.
+    secrets:
+      HOMEBREW_TAP_DEPLOY_KEY:
+        required: true
   # For manual re-syncs: after a broken tap or a failed automatic sync.
   workflow_dispatch:
     inputs:
