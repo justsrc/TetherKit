@@ -1,4 +1,4 @@
-# Sync the new version to the Homebrew tap (XiaoMiku01/homebrew-tap).
+# Sync the new version to the Homebrew tap (justsrc/homebrew-tap).
 #
 # Why not `on: release: published`:
 #   release.yml creates the Release with GITHUB_TOKEN, and events triggered by
@@ -59,7 +59,7 @@ jobs:
           ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null
 
       - name: Check out the tap
-        run: git clone git@github.com:XiaoMiku01/homebrew-tap.git tap
+        run: git clone git@github.com:justsrc/homebrew-tap.git tap
 
       - name: Rewrite the formulas (tetherkit and tetherkit-cli)
         working-directory: tap
@@ -87,18 +87,18 @@ jobs:
       # checksum" class of error before the push.
       - name: Verify both formulas install
         run: |
-          tap_dir="$(brew --repository)/Library/Taps/xiaomiku01/homebrew-tap"
+          tap_dir="$(brew --repository)/Library/Taps/justsrc/homebrew-tap"
           mkdir -p "$(dirname "$tap_dir")"
           ln -s "${GITHUB_WORKSPACE}/tap" "$tap_dir"
 
-          brew audit --strict --online xiaomiku01/tap/tetherkit-cli
-          brew audit --strict --online xiaomiku01/tap/tetherkit
+          brew audit --strict --online justsrc/tap/tetherkit-cli
+          brew audit --strict --online justsrc/tap/tetherkit
 
-          brew install --build-from-source xiaomiku01/tap/tetherkit-cli
+          brew install --build-from-source justsrc/tap/tetherkit-cli
           test "$(tetherkit-cli --version | head -1)" \
             = "TetherKit ${{ steps.src.outputs.version }} (C++23, macOS 13.3+)"
 
-          brew install --build-from-source xiaomiku01/tap/tetherkit
+          brew install --build-from-source justsrc/tap/tetherkit
           app="$(brew --prefix)/opt/tetherkit/TetherKit.app"
           test -d "$app"
           codesign --verify --deep --strict "$app"

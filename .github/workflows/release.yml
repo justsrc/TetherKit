@@ -102,8 +102,8 @@ jobs:
           Homebrew is recommended (built from source, no Gatekeeper prompt):
 
           ```bash
-          brew install XiaoMiku01/tap/tetherkit        # GUI, TetherKit.app
-          brew install XiaoMiku01/tap/tetherkit-cli    # command-line tool
+          brew install justsrc/tap/tetherkit           # GUI, TetherKit.app
+          brew install justsrc/tap/tetherkit-cli       # command-line tool
           ```
 
           After installing the GUI, `open "$(brew --prefix)/opt/tetherkit/TetherKit.app"`.
