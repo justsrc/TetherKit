@@ -1,0 +1,410 @@
+# Tests: unit tests, the deployment-target floor, GUI assembly, ASan/UBSan/TSan,
+# and private-ABI drift monitoring.
+#
+# Split out of ci.yml. The five legacy jobs keep their steps and checks; later
+# additions are the ASan+UBSan job, the weekly schedule trigger, the
+# least-privilege permissions block, and the xcode-27 image legs. Deliberate
+# deviations from the ci.yml text, four in all: actions/checkout is pinned to
+# the latest major (v5 -> v7); the select-newest Xcode steps filter pre-release
+# toolchains (beta and release candidate); the matrix os values carry the
+# current image labels (macos-15, macos-26, xcode-27); and the abi-check grep
+# evidence strings are English (this directory was translated wholesale).
+# Triggers narrowed
+# from "push to main and swift-app branches + v* tags" to "push to main + PR +
+# manual + weekly schedule" because:
+# 1. tag pushes run release.yml, which builds and unit-tests on its own,
+#    though not the whole matrix (no Swift tests, sanitizers, abi-check, or
+#    the 13.3 floor) - so tag pushes are covered at release granularity;
+# 2. the swift-app branch is retired;
+# 3. the schedule covers the blind spot where the breakage is not your commit:
+#    runner images update silently (new macOS, new Xcode, which the gui job
+#    then auto-selects), brew installs the latest libusb every run, and xnu's
+#    private ABI drifts. This needs to surface before the next PR, not with it.
+#
+# The project only compiles on macOS: the source uses Darwin BPF (net/bpf.h)
+# and xnu's private if_fake ABI directly, and CMakeLists fatals on non-Apple
+# platforms. GitHub's hosted macOS runners are real machines (Apple Silicon
+# VMs), so it just works.
+
+name: Tests
+
+on:
+  schedule:
+    # Every Monday 06:00 UTC. GitHub auto-disables scheduled workflows after
+    # 60 days of repo inactivity; a quiet fork needs to re-enable this one
+    # by hand after a two-month lull.
+    - cron: "0 6 * * 1"
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Least privilege: the full test matrix needs no write access (only
+# release.yml's release path needs contents: write).
+permissions:
+  contents: read
+
+# Cancel superseded runs on the same branch when new commits land; macOS
+# minutes are billed at 10x Linux. github.event_name keeps one group per
+# event kind, so a push to main cannot cancel the in-flight Monday cron -
+# the exact run that is the drift early-warning.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ----------------------------------------------------------------------------
+  # Main build plus unit tests.
+  #
+  # The suite needs neither root nor a USB device to run; the feth/BPF cases
+  # skip themselves without root (see RootTestsEnabled in
+  # tests/test_net_link.cc).
+  #
+  # The xcode-27 leg pins Xcode 27.1 (see the pin step below): a new compiler
+  # major regularly introduces -Werror-visible warnings, and riding the leg
+  # on every PR is a deliberate spend of 10x-billed macOS minutes that buys
+  # a toolchain-drift check at review time instead of at release time.
+  # ----------------------------------------------------------------------------
+  build-test:
+    name: ${{ matrix.os }} · ${{ matrix.build_type }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # xcode-27 is a hosted runner-image label, not an Xcode install on
+        # another image: under the one-major-Xcode-per-image model the
+        # macos-26 image tops out at 26.6 and macos-15 at 26.3, so Xcode 27
+        # arrives as its own label (macOS 27 base, default toolchain Xcode
+        # 27.x; GA since 2026-10-15, runner-images #14404). macos-15/26 keep
+        # the image default (the macos-15 leg is the old-compiler coverage:
+        # Xcode 16.4, not the 26.3 maximum it could pick); the xcode-27 leg
+        # is special-cased by the pin step below because that image also
+        # carries a 27.2 release candidate.
+        os: [macos-15, macos-26, xcode-27]
+        build_type: [RelWithDebInfo, Release]
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Pin Xcode 27.1 on the xcode-27 leg
+        if: matrix.os == 'xcode-27'
+        # CI must not silently build with a pre-release toolchain, and name
+        # discovery cannot guarantee that here: the image ships Xcode_27.2.0
+        # as a symlink whose clean name no filter can catch (live run
+        # 42491763714 selected it). Pin the last stable 27.x; bump by hand
+        # when a 27.x GA ships. Runs first so the version step below records
+        # the pinned compiler on the pinned leg.
+        run: |
+          test -d /Applications/Xcode_27.1.app \
+            || { echo "::error::Xcode_27.1.app is gone; bump this pin deliberately"; exit 1; }
+          sudo xcode-select -s /Applications/Xcode_27.1.app
+
+      - name: Install libusb
+        run: brew install libusb
+
+      - name: Record toolchain versions
+        run: |
+          sw_vers
+          cmake --version
+          c++ --version
+
+      - name: Configure
+        run: |
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DTETHERKIT_WARNINGS_AS_ERRORS=ON
+
+      - name: Build
+        run: cmake --build build -j"$(sysctl -n hw.ncpu)"
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Smoke test (--list needs no root)
+        run: |
+          ./build/bin/tetherkit-cli --version
+          ./build/bin/tetherkit-cli --list
+
+  # ----------------------------------------------------------------------------
+  # Verify the macOS 13.3 floor the README claims.
+  #
+  # The macos-13 runner image is gone, so nothing can actually run on 13.3
+  # anymore. The std::to_chars availability annotation CMakeLists worries about
+  # is checked at compile time against the deployment target, though, so pinning
+  # CMAKE_OSX_DEPLOYMENT_TARGET to 13.3 exercises that floor.
+  #
+  # This only proves "compiles for 13.3", not "runs on 13.3"; proving the latter
+  # would take a real 13.3 machine, which hosted runners no longer offer.
+  #
+  # warnings-as-errors stays off here on purpose: Homebrew's libusb is built for
+  # the host version, so lowering the deployment target necessarily produces
+  # "building for macOS-13.3, but linking with dylib which was built for newer
+  # version" linker warnings. Expected noise, not a regression.
+  # ----------------------------------------------------------------------------
+  deployment-target:
+    name: Compile for macOS 13.3
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install libusb
+        run: brew install libusb
+
+      - name: Configure & Build
+        run: |
+          cmake -S . -B build-min \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=13.3
+          cmake --build build-min -j"$(sysctl -n hw.ncpu)"
+
+      - name: Test
+        run: ctest --test-dir build-min --output-on-failure
+
+  # ----------------------------------------------------------------------------
+  # GUI: SwiftPM build + IPC unit tests + assembling the .app + signature
+  # self-checks.
+  #
+  # Runs on macos-15, macos-26, and xcode-27 (macOS 27 base, with the
+  # toolchain deliberately filtered or pinned per leg in the steps below).
+  # macos-14 used to be this leg — proving the
+  # GUI's claimed macOS 14 runtime floor on the oldest usable image — but
+  # GitHub retired the macos-14 runner image on 2026-11-02, so macos-15 is now
+  # the oldest hosted macOS that can run this at all. macos-14 coverage ends at
+  # what the build proves (the app links with minos 14.0.0) plus the
+  # "Compile for macOS 13.3" job for the CLI's floor.
+  # ----------------------------------------------------------------------------
+  gui:
+    name: GUI · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # On xcode-27 the toolchain is pinned below instead of discovered:
+        # the image carries Xcode 27.2 as a release candidate behind a
+        # name-clean symlink that discovery cannot exclude.
+        os: [macos-15, macos-26, xcode-27]
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # Select the newest Xcode in the image without trusting the image's
+      # default: the original trigger was macos-14's Xcode 15.0 default, whose
+      # SDK predates SwiftUI making View entirely @MainActor (this repo does
+      # not compile under it), and macos-15 inherits the same reasoning one
+      # generation later. On macos-26 the step is a no-op equal to the default.
+      - name: Select the newest Xcode in the image
+        if: matrix.os != 'xcode-27'
+        run: |
+          # Filter pre-release toolchains out: CI must not silently switch
+          # to a beta or a release candidate.
+          latest="$(ls -d /Applications/Xcode_*.app | grep -ivE 'beta|release.?candidate' | sort -V | tail -1)"
+          echo "selected: ${latest}"
+          sudo xcode-select -s "${latest}"
+          swift --version
+
+      - name: Pin Xcode 27.1 on the xcode-27 leg
+        if: matrix.os == 'xcode-27'
+        # Same doctrine, but discovery fails here by construction: the
+        # image ships Xcode_27.2.0 as a Release-Candidate symlink with a
+        # clean name (live run 42491763714 selected it through a beta-only
+        # filter), so the stable 27.x is pinned and bumped deliberately.
+        run: |
+          test -d /Applications/Xcode_27.1.app \
+            || { echo "::error::Xcode_27.1.app is gone; bump this pin deliberately"; exit 1; }
+          sudo xcode-select -s /Applications/Xcode_27.1.app
+          swift --version
+
+      - name: Install libusb
+        run: brew install libusb
+
+      - name: Build C++ (the GUI links libtetherkit)
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DTETHERKIT_BUILD_TESTS=OFF -DTETHERKIT_BUILD_BENCHMARKS=OFF
+          cmake --build build -j"$(sysctl -n hw.ncpu)"
+
+      - name: Swift unit tests
+        run: TETHERKIT_LIB_DIR="$PWD/build/lib" swift test --package-path gui
+
+      - name: Assemble TetherKit.app
+        run: cmake --build build --target gui
+
+      - name: Self-checks
+        run: |
+          codesign --verify --deep --strict dist/TetherKit.app
+          # The non-root path of --install must fail loudly instead of
+          # half-installing.
+          payload="dist/TetherKit.app/Contents/Library/HelperTools"
+          if "${payload}/com.tetherkit.helper" --install; then
+            echo "::error::helper --install unexpectedly succeeded without root"
+            exit 1
+          fi
+          # The Finder-alias install mode always exits 0 (result on stdout).
+          ./dist/TetherKit.app/Contents/MacOS/TetherKit --install-finder-alias
+
+  # ----------------------------------------------------------------------------
+  # ThreadSanitizer: the correctness backstop for the lock-free queue and the
+  # multithreaded data path. It runs on the macos-26 default toolchain;
+  # the newer-compiler legs live in build-test.
+  # ----------------------------------------------------------------------------
+  tsan:
+    name: ThreadSanitizer
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install libusb
+        run: brew install libusb
+
+      - name: Configure & Build
+        run: |
+          cmake -S . -B build-tsan -DTETHERKIT_ENABLE_TSAN=ON
+          cmake --build build-tsan -j"$(sysctl -n hw.ncpu)"
+
+      - name: Test
+        run: ctest --test-dir build-tsan --output-on-failure
+
+  # ----------------------------------------------------------------------------
+  # AddressSanitizer + UndefinedBehaviorSanitizer.
+  #
+  # TSan targets concurrency; this pair targets memory errors and UB. The
+  # libusb transfer pool's lifetimes, the BPF buffer walk (the bh_hdrlen and
+  # BPF_WORDALIGN alignment arithmetic), and the reinterpret_cast-heavy private
+  # ABI bridge are exactly their hunting ground. ASan aborts on its first
+  # discovery by default; UBSan does not (report-and-continue), so the build
+  # flags it with -fno-sanitize-recover=undefined (cmake/Sanitizers.cmake) and
+  # the test steps set UBSAN_OPTIONS=halt_on_error as a belt for sanitizer
+  # runtime pieces built elsewhere. The suite runs as the runner user, since
+  # its permission cases assert non-root behavior; a second, filtered sudo
+  # run covers the feth/BPF root cases, which the skipper would otherwise
+  # hide from the sanitizer entirely.
+  # ----------------------------------------------------------------------------
+  asan-ubsan:
+    name: ASan + UBSan
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install libusb
+        run: brew install libusb
+
+      - name: Configure & Build
+        run: |
+          cmake -S . -B build-asan \
+            -DTETHERKIT_ENABLE_ASAN=ON \
+            -DTETHERKIT_ENABLE_UBSAN=ON
+          cmake --build build-asan -j"$(sysctl -n hw.ncpu)"
+
+      - name: Disable feth hardware checksum offload
+        # These sysctls are snapshotted at feth-creation time, so set them
+        # first. The root run below creates real feth pairs, same as the
+        # abi-check job - now under the sanitizer build.
+        run: sudo sysctl -w net.link.fake.hwcsum=0
+
+      - name: Test (suite as the runner user)
+        # The suite runs unprivileged on purpose: its capi permission cases
+        # assert the non-root contract (TK_ERR_PERMISSION without root). As
+        # root those gates legitimately pass, so the same CHECKs that used to
+        # verify -4 now see 0 or -3 and fail. Feth/BPF root cases skip
+        # quietly here and get their own root step below.
+        env:
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: ctest --test-dir build-asan --output-on-failure
+
+      - name: Test (feth/BPF cases as root)
+        run: |
+          # -R 'net\.': matches all three net.* suites; net.feth is the one
+          # root gates. net.abi and net.loopback ride along cheaply under the
+          # sanitizer build; everything else ran in the previous step (or
+          # asserts non-root behavior).
+          # -V + tee: forensic evidence; pipefail makes the pipeline's status
+          # ctest's, never tee's.
+          # The grep strings match text printed by tests/test_net_link.cc
+          # (ReportSkip and the pair-creation MESSAGE); keep them in sync.
+          set -o pipefail
+          sudo env TETHERKIT_ROOT_TESTS=1 \
+            UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+            ctest --test-dir build-asan -V -R 'net\.' 2>&1 | tee abi-asan.log
+
+          # Root cases SKIP (not fail) when preconditions are unmet, and
+          # skipped still shows green. The name filter would hide an
+          # unexpected skip from the exit code; these guards make it loud.
+          if grep -q "requires root and TETHERKIT_ROOT_TESTS" abi-asan.log; then
+            echo "::error::feth/BPF cases were skipped under the sanitizer build"
+            exit 1
+          fi
+          if ! grep -q "created feth" abi-asan.log; then
+            echo "::error::no feth creation in the log; sanitized feth/BPF coverage not confirmed"
+            exit 1
+          fi
+          echo "✓ Confirmed a real feth creation: $(grep -m1 'created feth' abi-asan.log)"
+
+  # ----------------------------------------------------------------------------
+  # Private-ABI drift monitoring.
+  #
+  # The biggest long-term risk here is xnu changing struct if_fake_request's
+  # layout in some macOS update. A real feth create/destroy round-trip catches
+  # that earlier than anything else.
+  #
+  # This job is a gate, not a signal: ABI drift must turn the pipeline red
+  # itself, otherwise the check is toothless. continue-on-error was set briefly,
+  # on the fear that runner VMs might not manage if_fake; macos-14/15/26 kept
+  # really creating feth pairs for many consecutive rounds (macos-14 until
+  # GitHub retired its image on 2026-11-02), so the fear was
+  # unfounded and the flag is gone. If some future runner image truly cannot do
+  # it, one red run beats a permanently false green. The xcode-27 leg is
+  # macOS 27's xnu in disguise — the newest kernel, exactly where private-ABI
+  # drift would show up first.
+  # ----------------------------------------------------------------------------
+  abi-check:
+    name: feth private-ABI check · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # xcode-27 matters here precisely because its base OS is macOS 27:
+        # the newest xnu is exactly where struct if_fake_request or the
+        # net.link.fake sysctl surface could drift next.
+        os: [macos-15, macos-26, xcode-27]
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install libusb
+        run: brew install libusb
+
+      - name: Build
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          cmake --build build -j"$(sysctl -n hw.ncpu)"
+
+      - name: Disable feth hardware checksum offload
+        # These sysctls are snapshotted at feth-creation time, so set them first.
+        run: sudo sysctl -w net.link.fake.hwcsum=0
+
+      - name: Run the feth/BPF cases as root
+        run: |
+          # -V instead of --output-on-failure: this is a forensic job; the
+          # passing output is the evidence.
+          # The grep strings match text printed by tests/test_net_link.cc
+          # (ReportSkip and the pair-creation MESSAGE); keep them in sync.
+          # pipefail: GitHub's default shell is bash -e with no -o pipefail,
+          # so this pipeline's status was tee's (always 0); a test failing
+          # after the pair-creation MESSAGE would still look green.
+          set -o pipefail
+          sudo env TETHERKIT_ROOT_TESTS=1 \
+            ctest --test-dir build -V -R 'net\.' 2>&1 | tee abi.log
+
+          # Critical: root cases SKIP (not fail) when preconditions are unmet,
+          # and skipped still shows green. Without this guard the job could sit
+          # permanently green while having checked nothing.
+          if grep -q "requires root and TETHERKIT_ROOT_TESTS" abi.log; then
+            echo "::error::feth/BPF cases were skipped; this ABI check did not actually run"
+            exit 1
+          fi
+          # Positive confirmation: a real feth pair was created.
+          if ! grep -q "created feth" abi.log; then
+            echo "::error::no feth creation in the log; cannot confirm the private ABI still works"
+            exit 1
+          fi
+          echo "✓ Confirmed a real feth creation: $(grep -m1 'created feth' abi.log)"

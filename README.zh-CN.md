@@ -70,14 +70,14 @@ macOS 内核**没有** RNDIS 驱动。插上开了 USB 网络共享的 Android �
 
 ```bash
 # 图形界面 TetherKit.app（macOS 14+）
-brew install XiaoMiku01/tap/tetherkit
+brew install justsrc/tap/tetherkit
 
 # 命令行工具 tetherkit-cli（macOS 13.3+）
-brew install XiaoMiku01/tap/tetherkit-cli
+brew install justsrc/tap/tetherkit-cli
 ```
 
 两个 formula 都从源码构建，`libusb` 会被自动带上。tap 仓库在
-[XiaoMiku01/homebrew-tap](https://github.com/XiaoMiku01/homebrew-tap)。
+[justsrc/homebrew-tap](https://github.com/justsrc/homebrew-tap)。
 
 图形界面装完这样启动（首次启动会自动在「应用程序」里建立 Finder 别名，
 之后在聚焦里搜 TetherKit 即可直接启动）：
@@ -98,7 +98,7 @@ brew upgrade tetherkit tetherkit-cli
 > 命令行改名 `tetherkit-cli`（二进制同名）。之前装过命令行的请
 > `brew uninstall tetherkit && brew install tetherkit-cli`。
 
-也可以从 [Releases](https://github.com/XiaoMiku01/TetherKit/releases) 直接下预编译产物
+也可以从 [Releases](https://github.com/justsrc/TetherKit/releases) 直接下预编译产物
 （仅 arm64）。但它们**没有签名**，浏览器下载后会被 Gatekeeper 隔离，得手动解除：
 
 ```bash

@@ -79,14 +79,14 @@ SIP stays on, the Apple Silicon security policy stays at *Full Security*.
 
 ```bash
 # The GUI, TetherKit.app (macOS 14+)
-brew install XiaoMiku01/tap/tetherkit
+brew install justsrc/tap/tetherkit
 
 # The command-line tool, tetherkit-cli (macOS 13.3+)
-brew install XiaoMiku01/tap/tetherkit-cli
+brew install justsrc/tap/tetherkit-cli
 ```
 
 Both formulae build from source and pull in `libusb` automatically. The tap
-lives at [XiaoMiku01/homebrew-tap](https://github.com/XiaoMiku01/homebrew-tap).
+lives at [justsrc/homebrew-tap](https://github.com/justsrc/homebrew-tap).
 
 Launch the GUI like this (on first launch the app drops a Finder alias into
 /Applications, so Spotlight can find and launch TetherKit from then on):
@@ -109,7 +109,7 @@ brew upgrade tetherkit tetherkit-cli
 > the CLI installed, run `brew uninstall tetherkit && brew install tetherkit-cli`.
 
 You can also grab prebuilt artifacts straight from
-[Releases](https://github.com/XiaoMiku01/TetherKit/releases) (arm64 only). They are
+[Releases](https://github.com/justsrc/TetherKit/releases) (arm64 only). They are
 **unsigned**, so a browser download gets quarantined by Gatekeeper and you have to
 clear the attribute yourself:
 

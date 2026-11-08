@@ -1,0 +1,134 @@
+# Build: a manually triggered full build with artifact upload.
+#
+# Dispatch-only full build: C++ (warnings as errors) + the libtetherkit shared
+# library + GUI packaging. Artifacts are uploaded for each run.
+
+name: Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      os:
+        description: "Runner OS image"
+        type: choice
+        options:
+          - macos-26
+          - macos-15
+          - xcode-27
+        default: macos-26
+      build_type:
+        description: "Build type"
+        type: choice
+        options:
+          - Release
+          - RelWithDebInfo
+          - Debug
+        default: Release
+
+# Least privilege: a manual build only uploads artifacts, no write access
+# needed.
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and package · ${{ inputs.os }} · ${{ inputs.build_type }}
+    runs-on: ${{ inputs.os }}
+
+    # Dispatched inputs reach run: text only through env passage: workflow
+    # inputs must never be interpolated directly into run:. The upload
+    # with: blocks read the same values via the env context so the names
+    # stay in lockstep with what the shell builds.
+    env:
+      DISPATCHED_OS: ${{ inputs.os }}
+      DISPATCHED_BUILD_TYPE: ${{ inputs.build_type }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install libusb
+        run: brew install libusb
+
+      # Select the newest Xcode in the image without trusting the image's
+      # default: the original trigger was macos-14's Xcode 15.0 default, whose
+      # SDK predates SwiftUI making View entirely @MainActor (this repo does
+      # not compile under it), and macos-15 inherits the same reasoning one
+      # generation later. On macos-26 the step is a no-op equal to the default.
+      - name: Select the newest Xcode in the image
+        if: inputs.os != 'xcode-27'
+        run: |
+          # Filter pre-release toolchains out: CI must not silently switch to
+          # a beta or a release candidate.
+          latest="$(ls -d /Applications/Xcode_*.app | grep -ivE 'beta|release.?candidate' | sort -V | tail -1)"
+          echo "selected: ${latest}"
+          sudo xcode-select -s "${latest}"
+          swift --version
+
+      - name: Pin Xcode 27.1 on the xcode-27 leg
+        if: inputs.os == 'xcode-27'
+        # Discovery fails on the xcode-27 image by construction: it ships
+        # Xcode_27.2.0 as a Release-Candidate symlink whose clean name no
+        # filter can call out (live run 42491763714 selected it through a
+        # beta-only filter). Pin the last stable 27.x; bump by hand when a
+        # 27.x GA ships.
+        run: |
+          test -d /Applications/Xcode_27.1.app \
+            || { echo "::error::Xcode_27.1.app is gone; bump this pin deliberately"; exit 1; }
+          sudo xcode-select -s /Applications/Xcode_27.1.app
+          swift --version
+
+      - name: Configure
+        run: |
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE="${DISPATCHED_BUILD_TYPE}" \
+            -DTETHERKIT_WARNINGS_AS_ERRORS=ON
+
+      - name: Build
+        run: cmake --build build -j"$(sysctl -n hw.ncpu)"
+
+      # Basic tetherkit-cli smoke checks; --list only enumerates devices and
+      # state, no root needed.
+      - name: Smoke test (--list needs no root)
+        run: |
+          ./build/bin/tetherkit-cli --version
+          ./build/bin/tetherkit-cli --list
+
+      - name: Assemble TetherKit.app
+        run: cmake --build build --target gui
+
+      - name: Self-checks
+        run: |
+          codesign --verify --deep --strict dist/TetherKit.app
+          # The non-root path of --install must fail loudly instead of
+          # half-installing.
+          payload="dist/TetherKit.app/Contents/Library/HelperTools"
+          if "${payload}/com.tetherkit.helper" --install; then
+            echo "::error::helper --install unexpectedly succeeded without root"
+            exit 1
+          fi
+          # The Finder-alias install mode always exits 0 (result on stdout).
+          ./dist/TetherKit.app/Contents/MacOS/TetherKit --install-finder-alias
+
+      - name: Package TetherKit.app
+        run: |
+          # ditto preserves the bundle structure and extended attributes; it is
+          # the standard way to package a .app.
+          name="TetherKit-${GITHUB_RUN_NUMBER}-${DISPATCHED_OS}-${DISPATCHED_BUILD_TYPE}.zip"
+          ditto -c -k --keepParent dist/TetherKit.app "$name"
+
+      # upload-artifact@v7 supports single-file direct upload (archive: false):
+      # the downloaded artifact IS the ditto zip above, not a zip inside another
+      # zip. With archive: false the name input is ignored (the file name wins).
+      - name: Upload TetherKit.app artifact
+        uses: actions/upload-artifact@v7
+        with:
+          path: TetherKit-${{ github.run_number }}-${{ env.DISPATCHED_OS }}-${{ env.DISPATCHED_BUILD_TYPE }}.zip
+          archive: false
+          retention-days: 14
+
+      - name: Upload libtetherkit shared-library artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: tetherkit-libs-${{ github.run_number }}-${{ env.DISPATCHED_OS }}-${{ env.DISPATCHED_BUILD_TYPE }}
+          path: build/lib/libtetherkit*.dylib
+          retention-days: 14
