@@ -12,12 +12,9 @@
 name: Bench
 
 on:
+  # No inputs: tetherkit_bench never reads argv (benchmarks/ has no argv or
+  # argc use), so the old args input was dead plumbing.
   workflow_dispatch:
-    inputs:
-      args:
-        description: "Extra arguments for tetherkit_bench (empty runs the full suite)"
-        required: false
-        default: ""
 
 # Manual dispatch; the job needs no write access beyond its artifact.
 permissions:
@@ -44,13 +41,9 @@ jobs:
 
       - name: Run
         # pipefail: keep tee from swallowing the benchmark's exit code.
-        # env passage, not direct expansion, so the inputs.args expression
-        # never lands inside run: text.
-        env:
-          BENCH_ARGS: ${{ inputs.args }}
         run: |
           set -o pipefail
-          ./build-rel/bin/tetherkit_bench $BENCH_ARGS | tee bench-report.md
+          ./build-rel/bin/tetherkit_bench | tee bench-report.md
 
       - name: Upload the bench report
         uses: actions/upload-artifact@v7
