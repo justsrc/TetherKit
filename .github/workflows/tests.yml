@@ -3,13 +3,18 @@
 #
 # Split out of ci.yml. The five legacy jobs keep their steps and checks; later
 # additions are the ASan+UBSan job, the weekly schedule trigger, the
-# least-privilege permissions block, and the xcode-27 image legs. The one
-# deliberate deviation from
-# the ci.yml text is actions/checkout v5 -> v7 (latest major). Triggers narrowed
+# least-privilege permissions block, and the xcode-27 image legs. Deliberate
+# deviations from the ci.yml text, four in all: actions/checkout is pinned to
+# the latest major (v5 -> v7); the select-newest Xcode steps filter pre-release
+# toolchains (beta and release candidate); the matrix os values carry the
+# current image labels (macos-15, macos-26, xcode-27); and the abi-check grep
+# evidence strings are English (this directory was translated wholesale).
+# Triggers narrowed
 # from "push to main and swift-app branches + v* tags" to "push to main + PR +
 # manual + weekly schedule" because:
-# 1. release.yml is self-sufficient (it builds and tests on its own), so tag
-#    pushes are covered there;
+# 1. tag pushes run release.yml, which builds and unit-tests on its own,
+#    though not the whole matrix (no Swift tests, sanitizers, abi-check, or
+#    the 13.3 floor) - so tag pushes are covered at release granularity;
 # 2. the swift-app branch is retired;
 # 3. the schedule covers the blind spot where the breakage is not your commit:
 #    runner images update silently (new macOS, new Xcode, which the gui job
@@ -25,7 +30,9 @@ name: Tests
 
 on:
   schedule:
-    # Every Monday 06:00 UTC.
+    # Every Monday 06:00 UTC. GitHub auto-disables scheduled workflows after
+    # 60 days of repo inactivity; a quiet fork needs to re-enable this one
+    # by hand after a two-month lull.
     - cron: "0 6 * * 1"
   push:
     branches: [main]
@@ -38,22 +45,25 @@ permissions:
   contents: read
 
 # Cancel superseded runs on the same branch when new commits land; macOS
-# minutes are billed at 10x Linux.
+# minutes are billed at 10x Linux. github.event_name keeps one group per
+# event kind, so a push to main cannot cancel the in-flight Monday cron -
+# the exact run that is the drift early-warning.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   # ----------------------------------------------------------------------------
   # Main build plus unit tests.
   #
-  # All 168 cases need neither root nor a USB device; the feth/BPF ones skip
-  # themselves without root (see RootTestsEnabled in tests/test_net_link.cc).
+  # The suite needs neither root nor a USB device to run; the feth/BPF cases
+  # skip themselves without root (see RootTestsEnabled in
+  # tests/test_net_link.cc).
   #
-  # The xcode-27 leg pins the newest toolchain (macOS 27 base, Xcode 27.x
-  # default): a new compiler major regularly introduces -Werror-visible
-  # warnings, and this catches toolchain drift on the cron instead of at
-  # release time.
+  # The xcode-27 leg pins Xcode 27.1 (see the pin step below): a new compiler
+  # major regularly introduces -Werror-visible warnings, and riding the leg
+  # on every PR is a deliberate spend of 10x-billed macOS minutes that buys
+  # a toolchain-drift check at review time instead of at release time.
   # ----------------------------------------------------------------------------
   build-test:
     name: ${{ matrix.os }} · ${{ matrix.build_type }}

@@ -2,9 +2,11 @@
 #
 #   git tag -a v0.2.0 -m "TetherKit 0.2.0" && git push origin v0.2.0
 #
-# This workflow builds and tests on its own and depends on no other CI result:
-# the release path must be self-sufficient, otherwise a "CI was green but the
-# code changed before the release" divergence would go unnoticed.
+# This workflow builds and unit-tests on its own (ctest plus the GUI
+# packaging), so a tag cut after a main-branch regression is still caught at
+# release time. It deliberately does NOT run the whole matrix - no Swift
+# tests, sanitizers, abi-check, or the macOS 13.3 floor - a tag can ship
+# without those; they gate pushes, PRs, and the weekly cron in tests.yml.
 
 name: Release
 
