@@ -275,21 +275,21 @@ jobs:
         run: |
           # -V instead of --output-on-failure: this is a forensic job; the
           # passing output is the evidence.
-          # The grep patterns below match text printed by the test binary; keep
-          # them byte-exact.
+          # The grep strings match text printed by tests/test_net_link.cc
+          # (ReportSkip and the pair-creation MESSAGE); keep them in sync.
           sudo env TETHERKIT_ROOT_TESTS=1 \
             ctest --test-dir build -V -R 'net\.' 2>&1 | tee abi.log
 
           # Critical: root cases SKIP (not fail) when preconditions are unmet,
           # and skipped still shows green. Without this guard the job could sit
           # permanently green while having checked nothing.
-          if grep -q "需要 root 且需设置" abi.log; then
+          if grep -q "requires root and TETHERKIT_ROOT_TESTS" abi.log; then
             echo "::error::feth/BPF cases were skipped; this ABI check did not actually run"
             exit 1
           fi
           # Positive confirmation: a real feth pair was created.
-          if ! grep -q "创建了 feth" abi.log; then
+          if ! grep -q "created feth" abi.log; then
             echo "::error::no feth creation in the log; cannot confirm the private ABI still works"
             exit 1
           fi
-          echo "✓ Confirmed a real feth creation: $(grep -m1 '创建了 feth' abi.log)"
+          echo "✓ Confirmed a real feth creation: $(grep -m1 'created feth' abi.log)"

@@ -72,14 +72,16 @@ std::string Why(const T& result) {
   return result.has_value() ? std::string{} : result.error().ToString();
 }
 
-/// 打印跳过原因，让「跳过」在测试输出里是可见的、而不是静默通过。
+/// Print the skip reason so a "skipped" case stays visible in the test output
+/// instead of passing silently.
 ///
-/// 先用 std::format 拼成一个 std::string 再交给 MESSAGE：doctest 的
-/// MessageBuilder 对 `const char*` 会按指针字符串化，直接流进去会打出地址。
+/// Build the std::string with std::format first, then hand it to MESSAGE:
+/// doctest's MessageBuilder stringifies `const char*` by pointer, so streaming
+/// it directly would print an address.
 void ReportSkip(std::string_view what) {
   const std::string message =
-      std::format("跳过 {}：需要 root 且需设置 TETHERKIT_ROOT_TESTS=1（当前 euid={}）", what,
-                  IsRunningAsRoot() ? "0" : "非 0");
+      std::format("Skipped {}: requires root and TETHERKIT_ROOT_TESTS=1 (current euid={})", what,
+                  IsRunningAsRoot() ? "0" : "not 0");
   MESSAGE(message);
 }
 
@@ -430,7 +432,7 @@ TEST_CASE("完整生命周期：创建、配对、设 MTU/MAC、UP、销毁") {
 
   const std::string system_name{pair->SystemSide().Name()};
   const std::string driver_name{pair->DriverSide().Name()};
-  MESSAGE(std::format("创建了 {} ←→ {}", system_name, driver_name));
+  MESSAGE(std::format("created {} <-> {}", system_name, driver_name));
 
   // 配对关系双向成立。
   const auto driver_peer = pair->DriverSide().QueryPeer();

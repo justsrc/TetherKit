@@ -1,13 +1,15 @@
-# 把新版本同步到 Homebrew tap（XiaoMiku01/homebrew-tap）。
+# Sync the new version to the Homebrew tap (XiaoMiku01/homebrew-tap).
 #
-# ⚠️ 为什么不用 `on: release: published`：
-#   release.yml 是用 GITHUB_TOKEN 建的 Release，而 GITHUB_TOKEN 触发的事件
-#   **不会**再触发别的工作流（GitHub 防递归机制）。挂 release 事件会永远不响。
-#   所以这里走 workflow_call，由 release.yml 显式调用。
+# Why not `on: release: published`:
+#   release.yml creates the Release with GITHUB_TOKEN, and events triggered by
+#   GITHUB_TOKEN do not trigger other workflows (GitHub's anti-recursion
+#   guard). A release-event hook would never fire.
+#   So this workflow is workflow_call, invoked explicitly by release.yml.
 #
-# 凭据：homebrew-tap 上装了一把写权限 deploy key，私钥存在本仓库的
-# HOMEBREW_TAP_DEPLOY_KEY secret 里。GITHUB_TOKEN 跨不了仓库，只能这样。
-# 该密钥的权限仅限那一个仓库，泄露的爆炸半径就是 tap 本身。
+# Credentials: the tap carries a write-scoped deploy key; the private key
+# lives in this repo's HOMEBREW_TAP_DEPLOY_KEY secret. GITHUB_TOKEN cannot
+# cross repositories, which is why it has to be a deploy key. The key's scope
+# is exactly that one repository, so a leak only exposes the tap.
 
 name: Update Homebrew Tap
 
@@ -15,71 +17,75 @@ on:
   workflow_call:
     inputs:
       tag:
-        description: "要同步的 tag，例如 v0.1.0"
+        description: "The tag to sync, e.g. v0.1.0"
         required: true
         type: string
-  # 手工重新同步用：tap 被改坏了、或某次自动同步失败时可以单独补跑。
+  # For manual re-syncs: after a broken tap or a failed automatic sync.
   workflow_dispatch:
     inputs:
       tag:
-        description: "要同步的 tag，例如 v0.1.0"
+        description: "The tag to sync, e.g. v0.1.0"
         required: true
         type: string
 
 jobs:
   update:
-    name: 同步 formula 到 ${{ inputs.tag }}
+    name: Sync the formula to ${{ inputs.tag }}
     runs-on: macos-26
 
     steps:
-      - name: 计算源码 tarball 的 sha256
+      - name: Compute the source tarball sha256
         id: src
         run: |
           tag="${{ inputs.tag }}"
           url="https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${tag}.tar.gz"
           for i in 1 2 3 4 5; do
             if curl -fsSL "$url" -o src.tar.gz; then break; fi
-            echo "第 ${i} 次未取到源码归档，5 秒后重试…"
+            echo "attempt ${i}: source archive not fetched yet, retrying in 5s…"
             sleep 5
           done
-          test -s src.tar.gz || { echo "::error::拿不到源码归档 ${url}"; exit 1; }
+          test -s src.tar.gz || { echo "::error::could not fetch the source archive ${url}"; exit 1; }
           {
             echo "url=${url}"
             echo "sha256=$(shasum -a 256 src.tar.gz | awk '{print $1}')"
             echo "version=${tag#v}"
           } >> "$GITHUB_OUTPUT"
 
-      - name: 配置 deploy key
+      - name: Set up the deploy key
         run: |
           mkdir -p ~/.ssh
           printf '%s\n' "${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null
 
-      - name: 检出 tap
+      - name: Check out the tap
         run: git clone git@github.com:XiaoMiku01/homebrew-tap.git tap
 
-      - name: 改写 formula（tetherkit 与 tetherkit-cli）
+      - name: Rewrite the formulas (tetherkit and tetherkit-cli)
         working-directory: tap
         run: |
-          # 两个 formula 共用同一份源码 tarball，url/sha256 一起改。
-          # 用 perl 而不是 sed -i：BSD/GNU 的 -i 语义不一致，perl 两边都一样。
+          # Both formulas share the same source tarball, so the url/sha256 are
+          # rewritten together.
+          # perl instead of sed -i: BSD and GNU sed disagree about -i
+          # semantics, perl behaves the same on both.
           for f in Formula/tetherkit.rb Formula/tetherkit-cli.rb; do
             perl -pi -e 's|^  url ".*"|  url "${{ steps.src.outputs.url }}"|' "$f"
             perl -pi -e 's|^  sha256 ".*"|  sha256 "${{ steps.src.outputs.sha256 }}"|' "$f"
 
-            # 确认真的改成了预期的值 —— 正则没匹配上时 perl 是静默不动的，
-            # 不显式核对的话会推上去一个纹丝未动的 formula 还以为成功了。
+            # Verify the rewrite really happened. When the regex misses, perl
+            # silently changes nothing; without this check an unchanged
+            # formula gets pushed while looking successful.
             grep -q 'url "${{ steps.src.outputs.url }}"' "$f" \
-              || { echo "::error::${f} 的 url 没改成功"; exit 1; }
+              || { echo "::error::failed to rewrite the url in ${f}"; exit 1; }
             grep -q 'sha256 "${{ steps.src.outputs.sha256 }}"' "$f" \
-              || { echo "::error::${f} 的 sha256 没改成功"; exit 1; }
+              || { echo "::error::failed to rewrite the sha256 in ${f}"; exit 1; }
             ruby -c "$f"
           done
 
-      # 推之前先证明改出来的 formula 真的能用。brew install 会校验 sha256
-      # 是否与 tarball 相符，等于把「校验和写错」这一类错误彻底挡在推送之前。
-      - name: 验证两个 formula 可安装
+      # Prove the rewritten formulas actually work before pushing. brew install
+      # verifies the sha256 against the tarball, which stops the "wrong
+      # checksum" class of error before the push.
+      - name: Verify both formulas install
         run: |
           tap_dir="$(brew --repository)/Library/Taps/xiaomiku01/homebrew-tap"
           mkdir -p "$(dirname "$tap_dir")"
@@ -100,15 +106,15 @@ jobs:
 
           brew uninstall tetherkit tetherkit-cli
 
-      - name: 提交并推送
+      - name: Commit and push
         working-directory: tap
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           if git diff --quiet; then
-            echo "formula 已经是 ${{ inputs.tag }}，无需改动。"
+            echo "formula already at ${{ inputs.tag }}, nothing to do."
             exit 0
           fi
           git commit -am "tetherkit + tetherkit-cli ${{ steps.src.outputs.version }}"
           git push
-          echo "已把 tap 同步到 ${{ inputs.tag }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "Tap synced to ${{ inputs.tag }}" >> "$GITHUB_STEP_SUMMARY"
