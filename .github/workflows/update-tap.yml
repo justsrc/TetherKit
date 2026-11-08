@@ -36,8 +36,12 @@ jobs:
     steps:
       - name: Compute the source tarball sha256
         id: src
+        env:
+          TAP_TAG: ${{ inputs.tag }}
         run: |
-          tag="${{ inputs.tag }}"
+          # env passage, not direct expansion: workflow inputs must never be
+          # interpolated into run: text.
+          tag="$TAP_TAG"
           url="https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${tag}.tar.gz"
           for i in 1 2 3 4 5; do
             if curl -fsSL "$url" -o src.tar.gz; then break; fi
@@ -61,23 +65,35 @@ jobs:
       - name: Check out the tap
         run: git clone git@github.com:justsrc/homebrew-tap.git tap
 
+      - name: "Preflight: verify the formulas exist"
+        working-directory: tap
+        run: |
+          # A missing formula must stop everything before any rewrite starts,
+          # with a clear message, instead of failing perl mid-loop.
+          for f in Formula/tetherkit.rb Formula/tetherkit-cli.rb; do
+            test -f "$f" || { echo "::error::$f is missing in justsrc/homebrew-tap"; exit 1; }
+          done
+
       - name: Rewrite the formulas (tetherkit and tetherkit-cli)
         working-directory: tap
+        env:
+          FORMULA_URL: ${{ steps.src.outputs.url }}
+          FORMULA_SHA256: ${{ steps.src.outputs.sha256 }}
         run: |
           # Both formulas share the same source tarball, so the url/sha256 are
           # rewritten together.
           # perl instead of sed -i: BSD and GNU sed disagree about -i
           # semantics, perl behaves the same on both.
           for f in Formula/tetherkit.rb Formula/tetherkit-cli.rb; do
-            perl -pi -e 's|^  url ".*"|  url "${{ steps.src.outputs.url }}"|' "$f"
-            perl -pi -e 's|^  sha256 ".*"|  sha256 "${{ steps.src.outputs.sha256 }}"|' "$f"
+            perl -pi -e 's|^  url ".*"|  url "$ENV{FORMULA_URL}"|' "$f"
+            perl -pi -e 's|^  sha256 ".*"|  sha256 "$ENV{FORMULA_SHA256}"|' "$f"
 
             # Verify the rewrite really happened. When the regex misses, perl
             # silently changes nothing; without this check an unchanged
             # formula gets pushed while looking successful.
-            grep -q 'url "${{ steps.src.outputs.url }}"' "$f" \
+            grep -q "url \"$FORMULA_URL\"" "$f" \
               || { echo "::error::failed to rewrite the url in ${f}"; exit 1; }
-            grep -q 'sha256 "${{ steps.src.outputs.sha256 }}"' "$f" \
+            grep -q "sha256 \"$FORMULA_SHA256\"" "$f" \
               || { echo "::error::failed to rewrite the sha256 in ${f}"; exit 1; }
             ruby -c "$f"
           done
@@ -86,6 +102,8 @@ jobs:
       # verifies the sha256 against the tarball, which stops the "wrong
       # checksum" class of error before the push.
       - name: Verify both formulas install
+        env:
+          TAP_VERSION: ${{ steps.src.outputs.version }}
         run: |
           tap_dir="$(brew --repository)/Library/Taps/justsrc/homebrew-tap"
           mkdir -p "$(dirname "$tap_dir")"
@@ -96,7 +114,7 @@ jobs:
 
           brew install --build-from-source justsrc/tap/tetherkit-cli
           test "$(tetherkit-cli --version | head -1)" \
-            = "TetherKit ${{ steps.src.outputs.version }} (C++23, macOS 13.3+)"
+            = "TetherKit ${TAP_VERSION} (C++23, macOS 13.3+)"
 
           brew install --build-from-source justsrc/tap/tetherkit
           app="$(brew --prefix)/opt/tetherkit/TetherKit.app"
@@ -108,13 +126,16 @@ jobs:
 
       - name: Commit and push
         working-directory: tap
+        env:
+          TAP_TAG: ${{ inputs.tag }}
+          TAP_VERSION: ${{ steps.src.outputs.version }}
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           if git diff --quiet; then
-            echo "formula already at ${{ inputs.tag }}, nothing to do."
+            echo "formula already at ${TAP_TAG}, nothing to do."
             exit 0
           fi
-          git commit -am "tetherkit + tetherkit-cli ${{ steps.src.outputs.version }}"
+          git commit -am "tetherkit + tetherkit-cli ${TAP_VERSION}"
           git push
-          echo "Tap synced to ${{ inputs.tag }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "Tap synced to ${TAP_TAG}" >> "$GITHUB_STEP_SUMMARY"

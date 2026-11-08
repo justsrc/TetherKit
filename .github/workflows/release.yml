@@ -174,4 +174,7 @@ jobs:
     uses: ./.github/workflows/update-tap.yml
     with:
       tag: ${{ github.ref_name }}
-    secrets: inherit
+    # Narrow mapping instead of secrets: inherit: the callee needs exactly
+    # one secret, and the caller's remaining secrets stay out of its scope.
+    secrets:
+      HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}

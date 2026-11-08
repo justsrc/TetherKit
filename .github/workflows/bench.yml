@@ -19,10 +19,15 @@ on:
         required: false
         default: ""
 
+# Manual dispatch; the job needs no write access beyond its artifact.
+permissions:
+  contents: read
+
 jobs:
   bench:
     name: Benchmarks (Release, no sanitizers)
     runs-on: macos-26
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
 
@@ -39,9 +44,13 @@ jobs:
 
       - name: Run
         # pipefail: keep tee from swallowing the benchmark's exit code.
+        # env passage, not direct expansion, so the inputs.args expression
+        # never lands inside run: text.
+        env:
+          BENCH_ARGS: ${{ inputs.args }}
         run: |
           set -o pipefail
-          ./build-rel/bin/tetherkit_bench ${{ inputs.args }} | tee bench-report.md
+          ./build-rel/bin/tetherkit_bench $BENCH_ARGS | tee bench-report.md
 
       - name: Upload the bench report
         uses: actions/upload-artifact@v7

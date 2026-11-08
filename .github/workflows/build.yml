@@ -35,6 +35,14 @@ jobs:
     name: Build and package · ${{ inputs.os }} · ${{ inputs.build_type }}
     runs-on: ${{ inputs.os }}
 
+    # Dispatched inputs reach run: text only through env passage: workflow
+    # inputs must never be interpolated directly into run:. The upload
+    # with: blocks read the same values via the env context so the names
+    # stay in lockstep with what the shell builds.
+    env:
+      DISPATCHED_OS: ${{ inputs.os }}
+      DISPATCHED_BUILD_TYPE: ${{ inputs.build_type }}
+
     steps:
       - uses: actions/checkout@v7
 
@@ -72,7 +80,7 @@ jobs:
       - name: Configure
         run: |
           cmake -S . -B build \
-            -DCMAKE_BUILD_TYPE=${{ inputs.build_type }} \
+            -DCMAKE_BUILD_TYPE="${DISPATCHED_BUILD_TYPE}" \
             -DTETHERKIT_WARNINGS_AS_ERRORS=ON
 
       - name: Build
@@ -105,7 +113,8 @@ jobs:
         run: |
           # ditto preserves the bundle structure and extended attributes; it is
           # the standard way to package a .app.
-          ditto -c -k --keepParent dist/TetherKit.app "TetherKit-${{ github.run_number }}-${{ inputs.os }}-${{ inputs.build_type }}.zip"
+          name="TetherKit-${GITHUB_RUN_NUMBER}-${DISPATCHED_OS}-${DISPATCHED_BUILD_TYPE}.zip"
+          ditto -c -k --keepParent dist/TetherKit.app "$name"
 
       # upload-artifact@v7 supports single-file direct upload (archive: false):
       # the downloaded artifact IS the ditto zip above, not a zip inside another
@@ -113,13 +122,13 @@ jobs:
       - name: Upload TetherKit.app artifact
         uses: actions/upload-artifact@v7
         with:
-          path: TetherKit-${{ github.run_number }}-${{ inputs.os }}-${{ inputs.build_type }}.zip
+          path: TetherKit-${{ github.run_number }}-${{ env.DISPATCHED_OS }}-${{ env.DISPATCHED_BUILD_TYPE }}.zip
           archive: false
           retention-days: 14
 
       - name: Upload libtetherkit shared-library artifact
         uses: actions/upload-artifact@v7
         with:
-          name: tetherkit-libs-${{ github.run_number }}-${{ inputs.os }}-${{ inputs.build_type }}
+          name: tetherkit-libs-${{ github.run_number }}-${{ env.DISPATCHED_OS }}-${{ env.DISPATCHED_BUILD_TYPE }}
           path: build/lib/libtetherkit*.dylib
           retention-days: 14
