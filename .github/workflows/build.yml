@@ -25,6 +25,11 @@ on:
           - Debug
         default: Release
 
+# Least privilege: a manual build only uploads artifacts, no write access
+# needed.
+permissions:
+  contents: read
+
 jobs:
   build:
     name: Build and package · ${{ inputs.os }} · ${{ inputs.build_type }}
@@ -42,9 +47,11 @@ jobs:
       # Xcode in the image: what is being proven is that the macOS 14 runtime
       # floor holds, and the compiler version is irrelevant to that. On
       # macos-26 the step is a no-op equal to the default.
+      # Filter beta out: if a beta Xcode ever shows up in an image, CI must not
+      # silently switch to the beta toolchain.
       - name: Select the newest Xcode in the image
         run: |
-          latest="$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
+          latest="$(ls -d /Applications/Xcode_*.app | grep -iv beta | sort -V | tail -1)"
           echo "selected: ${latest}"
           sudo xcode-select -s "${latest}"
           swift --version

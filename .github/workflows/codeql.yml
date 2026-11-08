@@ -1,0 +1,58 @@
+# CodeQL: C++ static security and quality analysis, the hard signal that
+# complements lint.yml's advisory clang-tidy.
+#
+# clang-tidy is advisory in this repo (empty WarningsAsErrors in .clang-tidy is
+# an existing choice). CodeQL's C++ interprocedural analysis adds the missing
+# red-flag channel: use-after-free, out-of-bounds and broken error propagation
+# in the libusb transfer pool, the BPF buffer walk, and the
+# reinterpret_cast-heavy private ABI bridge are exactly its turf.
+#
+# Free for public repos. Must run on macOS: CMakeLists fatals on non-Apple
+# platforms.
+#
+# No pull_request trigger, on purpose: alerts on main are the wanted hard
+# signal, and running a many-minute C++ build-and-analyze per push of a PR is
+# not worth it. No concurrency block either: canceling would throw away the
+# whole analysis.
+
+name: CodeQL
+
+on:
+  schedule:
+    # Every Monday 06:30 UTC, half an hour after tests.yml, to spread runner load.
+    - cron: "30 6 * * 1"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  # Uploading SARIF to Code Scanning requires write access.
+  security-events: write
+  contents: read
+
+jobs:
+  analyze:
+    name: C++ analysis
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install libusb
+        run: brew install libusb
+
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: cpp
+          # Manual build mode: the build commands come from the next step.
+          build-mode: manual
+
+      - name: Build
+        run: |
+          # Tests and benchmarks stay enabled: everything compiles, everything
+          # lands in the analysis set.
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          cmake --build build -j"$(sysctl -n hw.ncpu)"
+
+      - uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:cpp"

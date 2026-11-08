@@ -1,0 +1,17 @@
+# Dependabot: keep GitHub Actions on the latest versions automatically.
+#
+# Repo convention: pin every action to the latest major (checkout@v7,
+# upload-artifact@v7, ...). Watching upstream releases by hand leaks; Dependabot
+# folds stale pins into one grouped PR per week, and merges are backstopped by
+# the normal test suite. Major jumps like v7 -> v8 arrive in the same stream.
+
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns:
+          - "*"

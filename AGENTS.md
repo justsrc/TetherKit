@@ -249,6 +249,7 @@ Swift 的 C++ 互操作吞不下，所以 C ABI 这一层不可省。
 | 33 | `chore(release): v0.1.5 —— 组件版本对不上时可一键更新` | ✅ | 协议号仍是 3，旧组件照常能用；升级后管理行会提示更新，不更新也不会坏 |
 | 34 | `feat(gui): 侧栏五页布局与 AppKit 主窗口（本分支）` | ✅ | 33 个提交：两栏仪表盘改为五页侧栏；主窗口改 AppKit 自管（第 7 节坑 19、20）；sdk 26 门控 chrome（第 7 节坑 19）；页面切换零动画（第 7 节坑 22、23，docs/GUI-ARCHITECTURE.md 4.11） |
 | 35 | `build(ci): split CI into tests, build, and lint workflows` | ✅ | ci.yml's five jobs moved into tests.yml with their steps and checks unchanged, triggers narrowed to PR + push main + manual (tag pushes covered by the self-sufficient release.yml; the swift-app branch is retired); new build.yml (workflow_dispatch only, runner-image and build-type inputs, .app and shared-library artifacts) and lint.yml (clang-format as a hard gate; clang-tidy advisory, since WarningsAsErrors: '' in .clang-tidy is an existing choice, promote it once the backlog is zero); all actions pinned to the latest major, checkout@v7 / upload-artifact@v7, with the .app uploaded via v7 single-file direct upload so the ditto zip arrives as itself |
+| 36 | `build(ci): add weekly regression, ASan/UBSan, CodeQL, benchmarks, and hardening` | ✅ | tests.yml gains a Monday cron (catches runner-image / new Xcode / latest libusb / xnu ABI drift before the next PR) and an ASan+UBSan job (splits the work with TSan: memory and UB vs concurrency; Sanitizers.cmake only forbids ASan+TSan together); new codeql.yml (github/codeql-action@v4, manual C++ build analysis, push main + cron, a hard complement to advisory lint) and bench.yml (dispatch-only benchmarks, Release without sanitizers, Markdown artifact, hosted-runner noise caveat); dependabot.yml bumps actions weekly in one grouped PR (backs the latest-major convention); tests/lint/build get permissions: contents: read; Xcode selection filters out beta versions |
 
 ### 当前状态
 
@@ -257,10 +258,13 @@ Swift 的 C++ 互操作吞不下，所以 C ABI 这一层不可省。
   TetherKitUIModel，含 LocalizationTests、HelperConstantsTests）
 - **构建**：`-Werror` 零告警；命令行、共享库、GUI 三套产物均可构建
 - **CI**: legacy ci.yml split into tests.yml (five jobs migrated with their
-  steps and checks unchanged, PR + push main triggers), build.yml (manual
-  trigger only, full build + artifacts) and lint.yml (clang-format gate +
-  advisory clang-tidy); every action pinned to the latest major (checkout@v7,
-  upload-artifact@v7)
+  steps and checks unchanged, triggers PR + push main + Monday cron + ASan/UBSan),
+  build.yml (manual trigger only, full build + artifacts) and lint.yml
+  (clang-format gate + advisory clang-tidy); new codeql.yml (weekly + push main
+  C++ scanning), bench.yml (manual benchmarks) and dependabot.yml (weekly
+  grouped action bumps); permissions: contents: read across tests/lint/build;
+  Xcode selection filters beta; every action pinned to the latest major
+  (checkout@v7, upload-artifact@v7)
 - **可运行**：`--version` / `--help` / `--list` 均正常；非 root 启动给出清晰提示
   并返回退出码 1；`TetherKit.app` 与 `tetherkit-helper` 打包后均可启动；
   特权组件可在 App 内一键安装 / 卸载（安装路径已真机走通）；

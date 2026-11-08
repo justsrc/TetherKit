@@ -1,14 +1,19 @@
-# Tests: unit tests, the deployment-target floor, GUI assembly, TSan, and
-# private-ABI drift monitoring.
+# Tests: unit tests, the deployment-target floor, GUI assembly, ASan/UBSan/TSan,
+# and private-ABI drift monitoring.
 #
-# Split out of ci.yml. The five jobs below carry over ci.yml's steps and checks
-# unchanged; the one deliberate deviation from the ci.yml text is
-# actions/checkout v5 -> v7 (latest major). Triggers narrowed from "push to
-# main and swift-app branches + v* tags" to "push to main + PR + manual"
-# because:
+# Split out of ci.yml. The five legacy jobs keep their steps and checks; later
+# additions are exactly three: the ASan+UBSan job, the weekly schedule trigger,
+# and the least-privilege permissions block. The one deliberate deviation from
+# the ci.yml text is actions/checkout v5 -> v7 (latest major). Triggers narrowed
+# from "push to main and swift-app branches + v* tags" to "push to main + PR +
+# manual + weekly schedule" because:
 # 1. release.yml is self-sufficient (it builds and tests on its own), so tag
 #    pushes are covered there;
-# 2. the swift-app branch is retired.
+# 2. the swift-app branch is retired;
+# 3. the schedule covers the blind spot where the breakage is not your commit:
+#    runner images update silently (new macOS, new Xcode, which the gui job
+#    then auto-selects), brew installs the latest libusb every run, and xnu's
+#    private ABI drifts. This needs to surface before the next PR, not with it.
 #
 # The project only compiles on macOS: the source uses Darwin BPF (net/bpf.h)
 # and xnu's private if_fake ABI directly, and CMakeLists fatals on non-Apple
@@ -18,10 +23,18 @@
 name: Tests
 
 on:
+  schedule:
+    # Every Monday 06:00 UTC.
+    - cron: "0 6 * * 1"
   push:
     branches: [main]
   pull_request:
   workflow_dispatch:
+
+# Least privilege: the full test matrix needs no write access (only
+# release.yml's release path needs contents: write).
+permissions:
+  contents: read
 
 # Cancel superseded runs on the same branch when new commits land; macOS
 # minutes are billed at 10x Linux.
@@ -134,9 +147,11 @@ jobs:
       # Xcode in the image: what is being proven is that the macOS 14 runtime
       # floor holds, and the compiler version is irrelevant to that. On
       # macos-26 the step is a no-op equal to the default.
+      # Filter beta out: if a beta Xcode ever shows up in an image, CI must not
+      # silently switch to the beta toolchain.
       - name: Select the newest Xcode in the image
         run: |
-          latest="$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
+          latest="$(ls -d /Applications/Xcode_*.app | grep -iv beta | sort -V | tail -1)"
           echo "selected: ${latest}"
           sudo xcode-select -s "${latest}"
           swift --version
@@ -189,6 +204,35 @@ jobs:
 
       - name: Test
         run: ctest --test-dir build-tsan --output-on-failure
+
+  # ----------------------------------------------------------------------------
+  # AddressSanitizer + UndefinedBehaviorSanitizer.
+  #
+  # TSan targets concurrency; this pair targets memory errors and UB. The
+  # libusb transfer pool's lifetimes, the BPF buffer walk (the bh_hdrlen and
+  # BPF_WORDALIGN alignment arithmetic), and the reinterpret_cast-heavy private
+  # ABI bridge are exactly their hunting ground. ASan and UBSan can be enabled
+  # together (Sanitizers.cmake only makes ASan+TSan mutually exclusive), and
+  # UBSan's alignment checks are deliberately left on.
+  # ----------------------------------------------------------------------------
+  asan-ubsan:
+    name: ASan + UBSan
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install libusb
+        run: brew install libusb
+
+      - name: Configure & Build
+        run: |
+          cmake -S . -B build-asan \
+            -DTETHERKIT_ENABLE_ASAN=ON \
+            -DTETHERKIT_ENABLE_UBSAN=ON
+          cmake --build build-asan -j"$(sysctl -n hw.ncpu)"
+
+      - name: Test
+        run: ctest --test-dir build-asan --output-on-failure
 
   # ----------------------------------------------------------------------------
   # Private-ABI drift monitoring.

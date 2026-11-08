@@ -1,0 +1,51 @@
+# Bench: manually triggered performance benchmarks.
+#
+# benchmarks/ ships a lightweight harness (benchmarks/harness.h) that prints
+# Markdown directly. Use this workflow for before/after comparison of a fix.
+#
+# Hosted runner hardware and scheduling are noisy: numbers from here support
+# relative comparisons only and must not be read next to the real-device
+# end-to-end figures in docs/BENCHMARKS.md (324 to 327 Mbps and alike).
+# Findings worth keeping get archived manually into docs/BENCHMARKS.md; the
+# artifact here only serves the analysis at hand.
+
+name: Bench
+
+on:
+  workflow_dispatch:
+    inputs:
+      args:
+        description: "Extra arguments for tetherkit_bench (empty runs the full suite)"
+        required: false
+        default: ""
+
+jobs:
+  bench:
+    name: Benchmarks (Release, no sanitizers)
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install libusb
+        run: brew install libusb
+
+      # Sanitizers crush throughput; benchmarks must build Release with none of
+      # the TETHERKIT_ENABLE_*SAN options (the cmake/Sanitizers.cmake contract;
+      # all default off, so not passing them is already correct).
+      - name: Configure & Build
+        run: |
+          cmake -S . -B build-rel -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-rel --target tetherkit_bench -j"$(sysctl -n hw.ncpu)"
+
+      - name: Run
+        # pipefail: keep tee from swallowing the benchmark's exit code.
+        run: |
+          set -o pipefail
+          ./build-rel/bin/tetherkit_bench ${{ inputs.args }} | tee bench-report.md
+
+      - name: Upload the bench report
+        uses: actions/upload-artifact@v7
+        with:
+          name: tetherkit-bench-${{ github.run_number }}
+          path: bench-report.md
+          retention-days: 14

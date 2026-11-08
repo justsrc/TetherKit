@@ -15,6 +15,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Least privilege: gates and advisory output need no write access.
+permissions:
+  contents: read
+
 # Cancel superseded runs on the same branch when new commits land; macOS
 # minutes are billed at 10x Linux.
 concurrency:
