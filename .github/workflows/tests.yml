@@ -313,8 +313,10 @@ jobs:
 
       - name: Test (feth/BPF cases as root)
         run: |
-          # -R 'net\.': the root-gated feth/BPF cases only. Everything else
-          # ran in the previous step (or asserts non-root behavior).
+          # -R 'net\.': matches all three net.* suites; net.feth is the one
+          # root gates. net.abi and net.loopback ride along cheaply under the
+          # sanitizer build; everything else ran in the previous step (or
+          # asserts non-root behavior).
           # -V + tee: forensic evidence; pipefail makes the pipeline's status
           # ctest's, never tee's.
           # The grep strings match text printed by tests/test_net_link.cc
