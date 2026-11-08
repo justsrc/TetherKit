@@ -2,8 +2,9 @@
 # and private-ABI drift monitoring.
 #
 # Split out of ci.yml. The five legacy jobs keep their steps and checks; later
-# additions are exactly three: the ASan+UBSan job, the weekly schedule trigger,
-# and the least-privilege permissions block. The one deliberate deviation from
+# additions are the ASan+UBSan job, the weekly schedule trigger, the
+# least-privilege permissions block, and the xcode-27 image legs. The one
+# deliberate deviation from
 # the ci.yml text is actions/checkout v5 -> v7 (latest major). Triggers narrowed
 # from "push to main and swift-app branches + v* tags" to "push to main + PR +
 # manual + weekly schedule" because:
@@ -48,6 +49,11 @@ jobs:
   #
   # All 168 cases need neither root nor a USB device; the feth/BPF ones skip
   # themselves without root (see RootTestsEnabled in tests/test_net_link.cc).
+  #
+  # The xcode-27 leg pins the newest toolchain (macOS 27 base, Xcode 27.x
+  # default): a new compiler major regularly introduces -Werror-visible
+  # warnings, and this catches toolchain drift on the cron instead of at
+  # release time.
   # ----------------------------------------------------------------------------
   build-test:
     name: ${{ matrix.os }} · ${{ matrix.build_type }}
@@ -55,7 +61,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-15, macos-26]
+        # xcode-27 is a hosted runner-image label, not an Xcode install on
+        # another image: under the one-major-Xcode-per-image model the
+        # macos-26 image tops out at 26.6 and macos-15 at 26.3, so Xcode 27
+        # arrives as its own label (macOS 27 base, default toolchain Xcode
+        # 27.x; GA since 2026-10-15, runner-images #14404). The label rides
+        # runs-on through matrix.os directly, so no selection step is needed
+        # here — the image's default is the toolchain being tested.
+        os: [macos-15, macos-26, xcode-27]
         build_type: [RelWithDebInfo, Release]
 
     steps:
@@ -126,7 +139,9 @@ jobs:
   # GUI: SwiftPM build + IPC unit tests + assembling the .app + signature
   # self-checks.
   #
-  # Runs on macos-15 and macos-26. macos-14 used to be this leg — proving the
+  # Runs on macos-15, macos-26, and xcode-27 (macOS 27 base + its newest
+  # non-beta Xcode 27.x, which the select-newest step below picks on its own).
+  # macos-14 used to be this leg — proving the
   # GUI's claimed macOS 14 runtime floor on the oldest usable image — but
   # GitHub retired the macos-14 runner image on 2026-11-02, so macos-15 is now
   # the oldest hosted macOS that can run this at all. macos-14 coverage ends at
@@ -139,7 +154,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-15, macos-26]
+        # xcode-27 rides the select-newest step below: on that image the
+        # newest non-beta Xcode is the 27.x default (27.1 at the time of
+        # writing).
+        os: [macos-15, macos-26, xcode-27]
 
     steps:
       - uses: actions/checkout@v7
@@ -188,7 +206,8 @@ jobs:
 
   # ----------------------------------------------------------------------------
   # ThreadSanitizer: the correctness backstop for the lock-free queue and the
-  # multithreaded data path.
+  # multithreaded data path. It runs on the macos-26 default toolchain;
+  # the newer-compiler legs live in build-test.
   # ----------------------------------------------------------------------------
   tsan:
     name: ThreadSanitizer
@@ -249,7 +268,9 @@ jobs:
   # really creating feth pairs for many consecutive rounds (macos-14 until
   # GitHub retired its image on 2026-11-02), so the fear was
   # unfounded and the flag is gone. If some future runner image truly cannot do
-  # it, one red run beats a permanently false green.
+  # it, one red run beats a permanently false green. The xcode-27 leg is
+  # macOS 27's xnu in disguise — the newest kernel, exactly where private-ABI
+  # drift would show up first.
   # ----------------------------------------------------------------------------
   abi-check:
     name: feth private-ABI check · ${{ matrix.os }}
@@ -257,7 +278,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-15, macos-26]
+        # xcode-27 matters here precisely because its base OS is macOS 27:
+        # the newest xnu is exactly where struct if_fake_request or the
+        # net.link.fake sysctl surface could drift next.
+        os: [macos-15, macos-26, xcode-27]
 
     steps:
       - uses: actions/checkout@v7
