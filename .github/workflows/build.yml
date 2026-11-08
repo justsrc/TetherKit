@@ -14,7 +14,6 @@ on:
         options:
           - macos-26
           - macos-15
-          - macos-14
         default: macos-26
       build_type:
         description: "Build type"
@@ -41,12 +40,11 @@ jobs:
       - name: Install libusb
         run: brew install libusb
 
-      # macos-14 images default xcode-select to Xcode 15.0, whose SDK predates
-      # SwiftUI making View entirely @MainActor; this repo is written against
-      # the new semantics and does not compile under it. Select the newest
-      # Xcode in the image: what is being proven is that the macOS 14 runtime
-      # floor holds, and the compiler version is irrelevant to that. On
-      # macos-26 the step is a no-op equal to the default.
+      # Select the newest Xcode in the image without trusting the image's
+      # default: the original trigger was macos-14's Xcode 15.0 default, whose
+      # SDK predates SwiftUI making View entirely @MainActor (this repo does
+      # not compile under it), and macos-15 inherits the same reasoning one
+      # generation later. On macos-26 the step is a no-op equal to the default.
       # Filter beta out: if a beta Xcode ever shows up in an image, CI must not
       # silently switch to the beta toolchain.
       - name: Select the newest Xcode in the image

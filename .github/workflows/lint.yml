@@ -1,8 +1,14 @@
 # Lint: code formatting and static analysis.
 #
 # Two independent jobs:
-# 1. clang-format: a hard gate on formatting (vendored third-party code
-#    excluded);
+# 1. clang-format: a hard gate, scoped to the lines the change touches.
+#    clang-format-diff.py (vendored under .github/scripts, LLVM's upstream
+#    script) reads the change's -U0 diff and checks only those hunks against
+#    the repo .clang-format. Line-scoped rather than repo-wide because the
+#    pre-existing baseline is not clang-format-clean; a repo-wide gate would be
+#    permanently red on untouched files. The repo-wide backlog is counted into
+#    the job summary instead, so files can be promoted to full cleanliness as
+#    they get touched.
 # 2. clang-tidy: advisory static analysis. It does not block the pipeline; the
 #    log is uploaded as an artifact and the warning count goes to the step
 #    summary.
@@ -31,14 +37,51 @@ jobs:
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v7
+        # fetch-depth 2 provides the HEAD~1 fallback base below; anything older
+        # (a pull-request base tip, or github.event.before on a batch push) is
+        # fetched explicitly when missing.
+        with:
+          fetch-depth: 2
 
       - name: Install clang-format
         run: brew install clang-format
 
-      - name: Check formatting
-        # third_party/doctest is vendored third-party code and is excluded; the
-        # repo-root .clang-format applies automatically.
-        run: git ls-files '*.cc' '*.h' ':!:third_party/*' | xargs clang-format --dry-run --Werror
+      - name: Determine the diff base
+        id: base
+        run: |
+          # PRs diff against the base tip, pushes against the previous commit;
+          # a missing or all-zero sha (first push of a branch, manual dispatch
+          # on a single-commit checkout) degrades to HEAD~1.
+          base="${{ github.event.pull_request.base.sha }}"
+          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
+            base="${{ github.event.before }}"
+          fi
+          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
+            base=HEAD~1
+          fi
+          if ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            # GitHub serves fetches of arbitrary advertised SHAs.
+            git fetch --no-tags --quiet origin "$base"
+          fi
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+
+      - name: Check the formatting of the changed lines
+        # -style file is required: the clang-format binary's built-in default
+        # is LLVM style, not the repo's .clang-format.
+        run: |
+          git diff -U0 --no-color "${{ steps.base.outputs.base }}" \
+            -- '*.cc' '*.h' ':!:third_party/*' \
+            | python3 .github/scripts/clang-format-diff.py -p1 -style file
+
+      - name: Report the repo-wide backlog (advisory)
+        if: always()
+        run: |
+          git ls-files '*.cc' '*.h' ':!:third_party/*' | xargs clang-format --dry-run 2>&1 \
+            | grep 'code should be clang-formatted' | cut -d: -f1 | sort -u > backlog.txt || true
+          count="$(wc -l < backlog.txt | tr -d ' ')"
+          echo "### clang-format backlog (advisory, not a gate)" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Pre-existing unformatted files outside this change's gate: **${count}**." >> "$GITHUB_STEP_SUMMARY"
 
   clang-tidy:
     name: clang-tidy

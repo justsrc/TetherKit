@@ -55,7 +55,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-14, macos-15, macos-26]
+        os: [macos-15, macos-26]
         build_type: [RelWithDebInfo, Release]
 
     steps:
@@ -126,9 +126,12 @@ jobs:
   # GUI: SwiftPM build + IPC unit tests + assembling the .app + signature
   # self-checks.
   #
-  # Runs on both macos-14 and macos-26: the former proves the GUI's claimed
-  # macOS 14 floor still holds on the oldest usable toolchain, the latter
-  # watches for regressions on the newest OS.
+  # Runs on macos-15 and macos-26. macos-14 used to be this leg — proving the
+  # GUI's claimed macOS 14 runtime floor on the oldest usable image — but
+  # GitHub retired the macos-14 runner image on 2026-11-02, so macos-15 is now
+  # the oldest hosted macOS that can run this at all. macos-14 coverage ends at
+  # what the build proves (the app links with minos 14.0.0) plus the
+  # "Compile for macOS 13.3" job for the CLI's floor.
   # ----------------------------------------------------------------------------
   gui:
     name: GUI · ${{ matrix.os }}
@@ -136,17 +139,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-14, macos-26]
+        os: [macos-15, macos-26]
 
     steps:
       - uses: actions/checkout@v7
 
-      # macos-14 images default xcode-select to Xcode 15.0, whose SDK predates
-      # SwiftUI making View entirely @MainActor; this repo is written against
-      # the new semantics and does not compile under it. Select the newest
-      # Xcode in the image: what is being proven is that the macOS 14 runtime
-      # floor holds, and the compiler version is irrelevant to that. On
-      # macos-26 the step is a no-op equal to the default.
+      # Select the newest Xcode in the image without trusting the image's
+      # default: the original trigger was macos-14's Xcode 15.0 default, whose
+      # SDK predates SwiftUI making View entirely @MainActor (this repo does
+      # not compile under it), and macos-15 inherits the same reasoning one
+      # generation later. On macos-26 the step is a no-op equal to the default.
       # Filter beta out: if a beta Xcode ever shows up in an image, CI must not
       # silently switch to the beta toolchain.
       - name: Select the newest Xcode in the image
@@ -244,7 +246,8 @@ jobs:
   # This job is a gate, not a signal: ABI drift must turn the pipeline red
   # itself, otherwise the check is toothless. continue-on-error was set briefly,
   # on the fear that runner VMs might not manage if_fake; macos-14/15/26 kept
-  # really creating feth pairs for many consecutive rounds, so the fear was
+  # really creating feth pairs for many consecutive rounds (macos-14 until
+  # GitHub retired its image on 2026-11-02), so the fear was
   # unfounded and the flag is gone. If some future runner image truly cannot do
   # it, one red run beats a permanently false green.
   # ----------------------------------------------------------------------------
@@ -254,7 +257,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-14, macos-15, macos-26]
+        os: [macos-15, macos-26]
 
     steps:
       - uses: actions/checkout@v7
