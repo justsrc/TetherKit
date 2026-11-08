@@ -273,10 +273,11 @@ jobs:
   # ABI bridge are exactly their hunting ground. ASan aborts on its first
   # discovery by default; UBSan does not (report-and-continue), so the build
   # flags it with -fno-sanitize-recover=undefined (cmake/Sanitizers.cmake) and
-  # the test step sets UBSAN_OPTIONS=halt_on_error as a belt for sanitizer
-  # runtime pieces built elsewhere. The feth/BPF cases run as root here:
-  # without root they would skip, and the structs named above would never
-  # reach the sanitizer.
+  # the test steps set UBSAN_OPTIONS=halt_on_error as a belt for sanitizer
+  # runtime pieces built elsewhere. The suite runs as the runner user, since
+  # its permission cases assert non-root behavior; a second, filtered sudo
+  # run covers the feth/BPF root cases, which the skipper would otherwise
+  # hide from the sanitizer entirely.
   # ----------------------------------------------------------------------------
   asan-ubsan:
     name: ASan + UBSan
@@ -296,15 +297,45 @@ jobs:
 
       - name: Disable feth hardware checksum offload
         # These sysctls are snapshotted at feth-creation time, so set them
-        # first. The root cases below create real feth pairs, same as the
+        # first. The root run below creates real feth pairs, same as the
         # abi-check job - now under the sanitizer build.
         run: sudo sysctl -w net.link.fake.hwcsum=0
 
-      - name: Test (feth/BPF cases included, as root)
+      - name: Test (suite as the runner user)
+        # The suite runs unprivileged on purpose: its capi permission cases
+        # assert the non-root contract (TK_ERR_PERMISSION without root). As
+        # root those gates legitimately pass, so the same CHECKs that used to
+        # verify -4 now see 0 or -3 and fail. Feth/BPF root cases skip
+        # quietly here and get their own root step below.
+        env:
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: ctest --test-dir build-asan --output-on-failure
+
+      - name: Test (feth/BPF cases as root)
         run: |
+          # -R 'net\.': the root-gated feth/BPF cases only. Everything else
+          # ran in the previous step (or asserts non-root behavior).
+          # -V + tee: forensic evidence; pipefail makes the pipeline's status
+          # ctest's, never tee's.
+          # The grep strings match text printed by tests/test_net_link.cc
+          # (ReportSkip and the pair-creation MESSAGE); keep them in sync.
+          set -o pipefail
           sudo env TETHERKIT_ROOT_TESTS=1 \
             UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
-            ctest --test-dir build-asan --output-on-failure
+            ctest --test-dir build-asan -V -R 'net\.' 2>&1 | tee abi-asan.log
+
+          # Root cases SKIP (not fail) when preconditions are unmet, and
+          # skipped still shows green. The name filter would hide an
+          # unexpected skip from the exit code; these guards make it loud.
+          if grep -q "requires root and TETHERKIT_ROOT_TESTS" abi-asan.log; then
+            echo "::error::feth/BPF cases were skipped under the sanitizer build"
+            exit 1
+          fi
+          if ! grep -q "created feth" abi-asan.log; then
+            echo "::error::no feth creation in the log; sanitized feth/BPF coverage not confirmed"
+            exit 1
+          fi
+          echo "✓ Confirmed a real feth creation: $(grep -m1 'created feth' abi-asan.log)"
 
   # ----------------------------------------------------------------------------
   # Private-ABI drift monitoring.
