@@ -1,6 +1,163 @@
 import AppKit
 import SwiftUI
 import TetherKitIPC
+import TetherKitUIModel
+
+/// The main window. `performKeyEquivalent` is AppKit's window-level
+/// key-equivalent phase: it runs BEFORE the raw key reaches the first
+/// responder, so Return can be claimed for the sidebar with no
+/// lifecycle bookkeeping (a local NSEvent monitor would need explicit
+/// install/removal across the menu-bar show/hide cycles instead).
+/// Return passes through FKA untouched (research round 6: Full
+/// Keyboard Access converts Space and the arrows — never Return — to
+/// accessibility commands), so this is the one reliable in-app site
+/// for that key; Space's real-FKA path is the rows' own
+/// `.accessibilityAction(.default)` instead. Round 11: the claim
+/// resolves the row through the SYSTEM-WIDE focused element (the real
+/// FKA focus track) — the app's own `kAXFocusedUIElement` answer was
+/// retired as a claim source after the user hardware pass showed it
+/// permanently answering the last-anchored page; the focused row also
+/// carries a read-free `.onKeyPress` backstop (SidebarRow), which
+/// never fires when the system-wide read resolves (the claim consumes
+/// the key first), and covers the setups where it does not.
+
+private final class SidebarMainWindow: NSWindow {
+    /// Virtual keycodes (macOS `keyCode` values): Return and keypad
+    /// Enter activate under Full Keyboard Access; arrows step pages
+    /// with the pane toggle off.
+    private enum KeyCode {
+        static let returnKey = 36
+        static let keypadEnter = 76
+        static let downArrow = 125
+        static let upArrow = 126
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        // Bare keys only: modifier chords (⌘⏎ and friends) fall
+        // through to normal shortcut handling for everything below.
+        // (Arrows carry macOS's `.function` device-independent bit
+        // even with no keys held — that bit is deliberately NOT
+        // banned; the ban is an explicit set, probed r7.)
+        let isActivationKey = event.keyCode == KeyCode.returnKey
+            || event.keyCode == KeyCode.keypadEnter
+        let isArrow = event.keyCode == KeyCode.downArrow
+            || event.keyCode == KeyCode.upArrow
+        guard isActivationKey || isArrow,
+              event.modifierFlags
+                  .intersection([.capsLock, .shift, .control, .option, .command]).isEmpty
+        else {
+            return super.performKeyEquivalent(with: event)
+        }
+        if isArrow {
+            return handleArrowKey(event)
+        }
+        // Return actuation is Full Keyboard Access-only (see
+        // SelfAccessibility.isFullKeyboardAccessOn): with the pane
+        // toggle off, AX focus on a row is stale-browsing state and
+        // Return must keep its normal behavior everywhere.
+        guard SelfAccessibility.isFullKeyboardAccessOn else {
+            return super.performKeyEquivalent(with: event)
+        }
+        // Deliberately narrow: Return yields only to the system field
+        // editor (the round 6 claim condition). Checked first to avoid
+        // any synchronous AX call when typing in text fields. Arrows
+        // use the broader editable-text predicate in `isFirstResponderEditableText`
+        // because caret movement applies to any editable text view.
+        let fieldEditorActive = (firstResponder as? NSTextView)?.isFieldEditor == true
+        guard !fieldEditorActive else {
+            return super.performKeyEquivalent(with: event)
+        }
+
+        // Claim the key when the SYSTEM's focused element — the
+        // Full Keyboard Access focus track, read system-wide — is one
+        // of the sidebar rows. Round 11: NOT the app's own
+        // `kAXFocusedUIElement` answer. That answer is our
+        // `@AccessibilityFocusState` binding, and the round-10 probe
+        // fact bites: the SwiftUI focus engine never fires for
+        // Tab-loop/FKA landings, so the binding only ever says what
+        // the last mouse click anchored (user hardware pass: Return
+        // on ANY row selected the last-clicked page, network). The
+        // app-level answer is a lie by construction; the system-wide
+        // read is the actual FKA focus track.
+        //
+        // Note: system-wide element reading requires Accessibility trust;
+        // if untrusted or if it resolves to nothing, the key passes
+        // through to the focused row's own `.onKeyPress(.return)` backstop
+        // (SidebarRow) — read-free, engine-fact only.
+        let (systemWideFocusedPage, claimDescription) =
+            SidebarPage.fromSystemWideFocusedDescription()
+#if DEBUG
+        // The description the claim resolved against — captured in the
+        // destructuring above, not a second AX read — reported for the
+        // user hardware pass (probe conventions: `PROBE [return-claim]`).
+        if let page = systemWideFocusedPage {
+            print("PROBE [return-claim] sys-wide matched page=\(page.rawValue) "
+                  + "desc=\(claimDescription ?? "nil")")
+        } else {
+            print("PROBE [return-claim] sys-wide matched nothing "
+                  + "(role=\(SelfAccessibility.systemWideFocusedRole() ?? "nil") "
+                  + "title=\(SelfAccessibility.systemWideFocusedTitle() ?? "nil") "
+                  + "desc=\(claimDescription ?? "nil")) "
+                  + "- key passes through to row backstop")
+        }
+#endif
+        if let page = systemWideFocusedPage {
+            // A real key event turn: the standard hop applies. The
+            // write goes straight to the storage key, which the
+            // shell's `@AppStorage` observes — but unlike the shell's
+            // `select`, it does not re-anchor AX focus (`syncAXFocus`).
+            ButtonTurn.write {
+                UserDefaults.standard.set(page.rawValue, forKey: SidebarPage.storageKey)
+            }
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+
+    /// True when the first responder is any editable text view — the
+    /// system field editor or an editable `NSTextView` — whose arrow
+    /// keys belong to caret movement, so the arrow claim must yield
+    /// and pass the key through to it.
+    private var isFirstResponderEditableText: Bool {
+        if let text = firstResponder as? NSTextView {
+            return text.isFieldEditor || text.isEditable
+        }
+        return false
+    }
+
+    /// Bare Arrow Up/Down stepping of the sidebar pages, claimed at the
+    /// key-equivalent phase — before any first-responder dispatch, and
+    /// therefore before AppKit's Keyboard Navigation key-nav engine.
+    ///
+    /// Claimed when the Accessibility-pane FKA toggle is off and the user
+    /// is not editing a text field. A focused button, card, or scroll
+    /// area does not consume arrow keys, so page stepping is always
+    /// available unless an active text editor owns the keys for caret
+    /// movement.
+    ///
+    /// Stepping wraps in line with the shell's `stepSelection`, and
+    /// the write goes through `ButtonTurn.write`.
+    private func handleArrowKey(_ event: NSEvent) -> Bool {
+        guard !SelfAccessibility.isFullKeyboardAccessOn else {
+            return super.performKeyEquivalent(with: event)
+        }
+        guard !isFirstResponderEditableText else {
+            return super.performKeyEquivalent(with: event)
+        }
+        let pages = SidebarPage.allCases
+        let currentRaw = UserDefaults.standard.string(forKey: SidebarPage.storageKey)
+        let current = pages.first(where: { $0.rawValue == currentRaw }) ?? pages[0]
+        let index = pages.firstIndex(of: current) ?? 0
+        let nextIndex = event.keyCode == KeyCode.downArrow
+            ? (index + 1) % pages.count
+            : (index + pages.count - 1) % pages.count
+        ButtonTurn.write {
+            UserDefaults.standard.set(pages[nextIndex].rawValue,
+                                      forKey: SidebarPage.storageKey)
+        }
+        return true
+    }
+}
 
 /// Owns the main window.
 ///
@@ -14,6 +171,7 @@ import TetherKitIPC
 /// One window object, reused forever: the menu bar's "Open Main
 /// Window" re-shows it, the red close button hides it, and closing it
 /// drops the app back to menu-bar-only mode.
+
 @MainActor
 final class MainWindowManager: NSObject {
     static let shared = MainWindowManager()
@@ -43,6 +201,9 @@ final class MainWindowManager: NSObject {
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         model.windowDidAppear()
+#if DEBUG
+        KeyboardProbe.armIfNeeded()
+#endif
     }
 
     /// Whether the main window itself is on screen. The menu-bar panel
@@ -65,9 +226,9 @@ final class MainWindowManager: NSObject {
     }
 
     private func makeWindow(_ model: AppModel) -> NSWindow {
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0,
-                                                  width: Design.Window.width,
-                                                  height: Design.Window.height),
+        let window = SidebarMainWindow(contentRect: NSRect(x: 0, y: 0,
+                                                           width: Design.Window.width,
+                                                           height: Design.Window.height),
                               styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
                               backing: .buffered,
                               defer: false)
