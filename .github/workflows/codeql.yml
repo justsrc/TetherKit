@@ -7,13 +7,25 @@
 # in the libusb transfer pool, the BPF buffer walk, and the
 # reinterpret_cast-heavy private ABI bridge are exactly its turf.
 #
+# third_party/doctest stays in the analysis set on purpose: paths-ignore is
+# inert for C/C++ manual builds (github/codeql-action#3890; the docs confine
+# paths filtering to build-mode none, and the workflow would warn about it at
+# run time). SARIF post-filtering means a new third-party action for exactly
+# one benign vendored-code alert (cpp/use-after-free at
+# third_party/doctest/doctest.h:3710). Accepted as baseline noise instead.
+#
 # Free for public repos. Must run on macOS: CMakeLists fatals on non-Apple
 # platforms.
 #
-# pull_request trigger restricted to workflow edits (paths: ['.github/**']):
-# running a many-minute C++ build on every PR push isn't worth it, but workflow
-# changes self-verify before landing. No concurrency block: canceling would throw
-# away the whole analysis.
+# pull_request trigger restricted to workflow edits (paths:
+# ['.github/workflows/**']): running a many-minute C++ build on every PR push
+# isn't worth it, but workflow changes self-verify before landing. dependabot.yml
+# and .github/scripts/ edits never reach the analyzer; Dependabot's weekly
+# grouped action-bump PR deliberately rides along because it edits workflow
+# files. The concurrency group below is event-scoped (the tests.yml doctrine):
+# push-to-main, the Monday cron and pull_request runs sit in different groups
+# and never cancel each other; within one event, canceling a superseded run is
+# safe because the newer run's SARIF simply replaces its alerts.
 
 name: CodeQL
 
@@ -25,13 +37,22 @@ on:
     branches: [main]
   pull_request:
     paths:
-      - ".github/**"
+      - ".github/workflows/**"
   workflow_dispatch:
 
 permissions:
   # Uploading SARIF to Code Scanning requires write access.
   security-events: write
   contents: read
+
+# Event-scoped group keyed like tests.yml's: github.event_name in the key keeps
+# a push to main from canceling the in-flight Monday cron, and pull_request
+# runs live in their own groups. Within one event, cancel-in-progress is safe:
+# a superseded commit's alerts are simply replaced by the newer run's SARIF,
+# and macOS minutes bill at 10x.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   analyze:
@@ -59,6 +80,10 @@ jobs:
           # Explicitly set CMAKE_OSX_ARCHITECTURES=arm64 so AppleClang outputs arm64
           # objects matching Homebrew's arm64 libusb; arch -arm64 builds under the
           # tracer break tracing.
+          #
+          # Hard-coded on purpose: under the tracer uname -m reports x86_64
+          # (Rosetta), so a tempting -DCMAKE_OSX_ARCHITECTURES=$(uname -m)
+          # "simplification" would silently reintroduce the bug.
           cmake -S . -B build \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DCMAKE_OSX_ARCHITECTURES=arm64
