@@ -70,6 +70,11 @@ struct SidebarShell: View {
     /// row). What remains is honest bookkeeping: anything ASKING the
     /// app for its focused element gets the row the user actually
     /// chose, not a stale anchor.
+    ///
+    /// Window claim paths (the window's arrow / Return claims) bypass
+    /// this on purpose: they write the selection without re-anchoring,
+    /// so after such a switch the vend stays pinned to the pre-switch
+    /// row by design.
     private func syncAXFocus(to page: SidebarPage) {
         guard SelfAccessibility.isFullKeyboardAccessOn else { return }
         axFocusedRow = page

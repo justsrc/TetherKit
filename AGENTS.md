@@ -756,7 +756,7 @@ TX 就从 4.8 回到了 87 Mbps。
     换、Return 在焦点行上正确认领切换、文字视图安全；合成方向键
     在 forced-UA 下仍经容器直切属无头混成态（真实 FKA-on 下 HID
     已吃掉 NSEvent，不会发生），不是缺陷。探针脚手架中 AxProbe.swift
-    已在 r7 验证后拆除；DEBUG fkaOverride 作为回归守卫保留。
+    已在 Round 7 验证后拆除；DEBUG fkaOverride 作为回归守卫保留。
     Round 8（焦点应答、Tab 归属与选择器收官）：
     ① 进程内挪 AX 焦点的唯一受支持通道是 SwiftUI 状态包装：
     `.focused`／`.accessibilityFocused` 逐行绑定、
