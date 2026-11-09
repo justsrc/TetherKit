@@ -99,7 +99,9 @@ enum SelfAccessibility {
         }
         var point = CGPoint.zero
         var size = CGSize.zero
-        guard AXValueGetValue(positionValue as! AXValue, .cgPoint, &point),
+        guard CFGetTypeID(positionValue) == AXValueGetTypeID(),
+              AXValueGetValue(positionValue as! AXValue, .cgPoint, &point),
+              CFGetTypeID(sizeValue) == AXValueGetTypeID(),
               AXValueGetValue(sizeValue as! AXValue, .cgSize, &size) else {
             return nil
         }
@@ -116,7 +118,7 @@ enum SelfAccessibility {
               CFGetTypeID(value) == AXUIElementGetTypeID() else {
             return nil
         }
-        return (value as! AXUIElement)
+        return value as! AXUIElement
     }
 #endif
 
@@ -154,11 +156,16 @@ enum SelfAccessibility {
         let result = AXUIElementCopyAttributeValue(systemWide,
                                                    kAXFocusedUIElementAttribute as CFString,
                                                    &ref)
-        guard result == .success,
-              let value = ref,
-              CFGetTypeID(value) == AXUIElementGetTypeID() else {
+        guard result == .success else {
 #if DEBUG
             print("PROBE [syswide-read] error=\(result.rawValue)")
+#endif
+            return nil
+        }
+        guard let value = ref,
+              CFGetTypeID(value) == AXUIElementGetTypeID() else {
+#if DEBUG
+            print("PROBE [syswide-read] focus unset or not an AX element")
 #endif
             return nil
         }

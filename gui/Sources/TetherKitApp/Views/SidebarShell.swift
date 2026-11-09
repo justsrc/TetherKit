@@ -221,10 +221,13 @@ struct SidebarShell: View {
     ///
     /// The sidebar's keys are claimed at the WINDOW level
     /// (`SidebarMainWindow.performKeyEquivalent`): bare arrows step the
-    /// pages with the Accessibility-pane FKA toggle off (round 7
-    /// contract — the system key-view loop cannot reach these rows,
-    /// round 10 probed every row style), and bare Return is resolved
-    /// against the system-wide focus track with FKA on (round 11).
+    /// pages with the Accessibility-pane FKA toggle off (round 11
+    /// contract; with FKA on the arrows belong to the system focus
+    /// engine), and bare Return is resolved against the system-wide
+    /// focus track with FKA on (round 11). The rows ARE reachable
+    /// through the system key-view loop — each row declares
+    /// `.focusable(FKA || isSelected)` — so Tab lands on them in both
+    /// modes.
     /// FKA Space actuates the row the focus engine landed on through
     /// the row's `.accessibilityAction` — it arrives as an AXPress,
     /// never an NSEvent (round 6). The container keeps arrow handlers
