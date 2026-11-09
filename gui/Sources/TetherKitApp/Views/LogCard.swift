@@ -1,5 +1,6 @@
 import SwiftUI
 import TetherKitIPC
+import TetherKitUIModel
 
 /// Log panel.
 ///
@@ -33,18 +34,28 @@ struct LogCard: View {
         }
     }
 
+    /// The menu-style picker mutates the filter inside its activation
+    /// turn; the write routes through ButtonTurn so the list (and the
+    /// dropped-notice line) swap without interpolation. Same rationale
+    /// as SidebarShell's select(): AGENTS.md pitfalls 22 / 24.
+    private var levelFilterBinding: Binding<LogLevel> {
+        ButtonTurn.routed(
+            get: { model.logLevelFilter },
+            set: { model.logLevelFilter = $0 })
+    }
+
     private var toolbar: some View {
         HStack(spacing: Design.Spacing.small) {
-            Picker(L(.logLevelLabel), selection: $model.logLevelFilter) {
+            Picker(L(.logLevelLabel), selection: levelFilterBinding) {
                 Text(L(.logLevelAll)).tag(LogLevel.trace)
                 Text(L(.logLevelDebug)).tag(LogLevel.debug)
                 Text(L(.logLevelInfo)).tag(LogLevel.info)
                 Text(L(.logLevelWarning)).tag(LogLevel.warning)
                 Text(L(.logLevelError)).tag(LogLevel.error)
             }
-            .pickerStyle(.segmented)
+            .pickerStyle(.menu)
             .labelsHidden()
-            .frame(maxWidth: 280)
+            .frame(maxWidth: 280, alignment: .leading)
 
             Spacer()
 
@@ -62,12 +73,20 @@ struct LogCard: View {
             .help(L(.logCopyAll))
 
             Button {
-                model.clearLogs()
+                // Clearing the list is a big membership change; inside
+                // the activation turn it would fade every row out
+                // (pitfall 22). Same escape as the filter binding.
+                ButtonTurn.write { model.clearLogs() }
             } label: {
                 Image(systemName: "trash")
             }
             .buttonStyle(.borderless)
             .help(L(.logClear))
+            .accessibilityAction(.default) {
+                // Direct write for AXPress (VoiceOver / accessibility turn):
+                // avoid async runloop hop dropped on macOS 26.5.
+                ButtonTurn.writeDirect { model.clearLogs() }
+            }
         }
     }
 

@@ -1,6 +1,7 @@
 import SwiftUI
 import TetherKitCore
 import TetherKitIPC
+import TetherKitUIModel
 
 /// 上网方式配置：DHCP 或静态 IP。
 ///
@@ -77,14 +78,26 @@ struct NetworkCard: View {
         }
     }
 
+    private var modeBinding: Binding<IPMode> {
+        ButtonTurn.routed(
+            get: { model.networkConfiguration.mode },
+            set: { model.networkConfiguration.mode = $0 }
+        )
+    }
+
     private var modePicker: some View {
-        Picker(L(.ipModeLabel), selection: $model.networkConfiguration.mode) {
-            // 刻意不把「不配置」放进选择器：它是一个动作（撤销），不是一种上网
-            // 方式。混在一起会让人以为选中它就已经生效了。
+        Picker(L(.ipModeLabel), selection: modeBinding) {
+            // Deliberately keep "Not configured" out of the picker: it
+            // is an action (revert), not a network mode. Mixed in, it
+            // would look like selecting it has already taken effect.
             Text(IPMode.dhcp.displayName).tag(IPMode.dhcp)
             Text(IPMode.manual.displayName).tag(IPMode.manual)
         }
-        .pickerStyle(.segmented)
+        // Segmented pickers are keyboard-inert under Keyboard
+        // Navigation and the Accessibility pane's FKA toggle; `.menu`
+        // is the keyboard-operable replacement (AGENTS.md pitfall 24,
+        // round 8). Same style choice as LogCard's level filter.
+        .pickerStyle(.menu)
         .labelsHidden()
     }
 
