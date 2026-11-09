@@ -3,8 +3,8 @@ import AppKit
 import TetherKitUIModel
 
 /// Headless keyboard probe (DEBUG only; opt-in via
-/// `TETHERKIT_SB_PROBE=walk|matrix|fka_on|full`; any other value runs
-/// the FKA-off contract suite).
+/// `TETHERKIT_SB_PROBE=walk|matrix|fka_on|full`; any other value
+/// fails with exit 1 rather than falling back to a mode).
 ///
 /// Walks the keyboard contract through the REAL dispatch chain —
 /// synthesized `NSEvent`s fed to `NSApp.sendEvent`, no private APIs,
@@ -31,6 +31,8 @@ import TetherKitUIModel
 ///     landing on a real button once hijacked the whole probe run):
 ///
 ///       - bare Down arrow steps the page             → round 7 claim
+///         (the assert is inequality-only on this leg; matrix mode
+///         owns the exact ±1 oracle for a bare Down)
 ///       - bare Space is inert                        → FKA-off
 ///         contract (no stale-row actuation)
 ///       - bare Return is inert                       → FKA-off
@@ -40,8 +42,12 @@ import TetherKitUIModel
 ///         invariance only — Tab landings are sampled and printed
 ///         (role/title/frame), never asserted
 ///       - a second Tab is equally inert on selection → no state
-///       - a Down from content focus steps the page   → round 11 full-state arrows
-///       - an Up then steps back                      → reverse round trip
+///       - a Down after two Tabs steps the page       → round 11 full-state arrows;
+///         this leg asserts the EXACT next page in the sidebar order, not just
+///         "it changed" (closes the double-step an inequality would let through)
+///       - an Up then steps back                      → reverse round trip; net-zero
+///         only: afterUp == afterDown proves reversibility, not per-key magnitude
+///         (the leg above carries the exact step)
 ///
 /// Exits 0 on PASS (or walk completion), 1 on FAIL, 3 on the 20 s
 /// watchdog, 4 if event synthesis failed. Armed once, from
@@ -86,8 +92,11 @@ enum KeyboardProbe {
             runMatrixSuite()
         case "fka_on":
             runFkaOnSuite()
-        default:
+        case "full":
             runFullSuite()
+        default:
+            failures.append("unknown TETHERKIT_SB_PROBE mode \(mode)")
+            finish()
         }
     }
 
@@ -236,6 +245,20 @@ enum KeyboardProbe {
                                     let down2 = observe("downAfterButton")
                                     if down2 == tab2 {
                                         failures.append("down arrow did not step page while button was focused")
+                                    }
+                                    // Round-5 review backlog (O4): the checks above are
+                                    // inequality-only, so a double-step that lands on the
+                                    // WRONG page still passes them. Assert the exact successor
+                                    // the same way matrix mode does, computed from the page two
+                                    // Tabs left the selection on (Tabs never move the selection).
+                                    let pages = SidebarPage.allCases
+                                    if let tabIndex = pages.firstIndex(where: { $0.rawValue == tab2 }) {
+                                        let expectedNext = pages[(tabIndex + 1) % pages.count].rawValue
+                                        if down2 != expectedNext {
+                                            failures.append("down arrow after two Tabs expected exact successor \(expectedNext), got \(down2)")
+                                        }
+                                    } else {
+                                        failures.append("tab2 selection \(tab2) is not a known sidebar page")
                                     }
                                     sendKey(keyCode: KeyCode.upArrow, characters: upArrowGlyph)
                                     after(0.3) {
