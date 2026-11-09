@@ -681,19 +681,16 @@ TX 就从 4.8 回到了 87 Mbps。
     `AXUIElementCreateApplication` 遍历 + `performAction` + AppStorage
     键读回即可闭环复现。真人 VO/FKA 复核（2026-11-07）：方向键与
     `AXPress` 激活正常；Space/Return 确认为**真实缺陷**（真人按压同样
-    无效果，合成事件伪影的怀疑被排除）。现在已修：被聚焦的行自己收不到
-    按键事件，事件总会落到侧栏容器；容器收到 Space/Return 时自进程读
-    AX 焦点元素（`SelfAccessibility`，免权限）解析出是哪一行再
-    `select()`。A/B 隔离证明该容器路径是唯一生效的激活机制（去掉它
-    Space 就死）。已排除的两条路（勿重复施法）：① 行按钮各自
+    无效果，合成事件伪影的怀疑被排除）。（注：早期曾探索由侧栏容器拦截
+    Space/Return 并调用 `activateFocusedRow`，该方案在 Round 11 已被完全重构为：
+    行自身声明 `.accessibilityAction(.default)` 直写，窗口拦截 Return 认领 + 行级
+    `.onKeyPress(.return)` 兜底换页）。已排除的两条路（勿重复施法）：① 行按钮各自
     `.focusable()` 会把键盘事件拦进焦点引擎，容器的方向键处理器反而
     收不到，方向键直接失灵；② `@FocusState` 程序化聚焦是静默 no-op，
     AX 读回焦点为空，「指环随选区」走不通。另一个机器级事实：FKA
     开启后方向键被系统焦点引擎接管（「移动焦点」键），任何应用内
-    处理器都拦不住 —— 无 FKA 时容器方向键直切不受影响。键盘行为按
-    行标题匹配自限分流（round 6 起 `model.fullKeyboardAccess` 门已
-    移除，理由见下），实现见 `SidebarShell.activateFocusedRow` 与
-    `SelfAccessibility`；
+    处理器都拦不住 —— 无 FKA 时容器方向键直切不受影响。实现见 `SidebarShell.rowSelect`、
+    `SidebarRow` 与 `SelfAccessibility`；
     跳拍/直写的公共出口在 `ButtonTurn.write`，LogCard 的层级筛选与
     清空按钮同用一条路（点击筛选/清空不再带激活事务的插值）。
     Round 6（三路系统级调研后定型真机激活管线）：real FKA 的 Space
@@ -709,8 +706,9 @@ TX 就从 4.8 回到了 87 Mbps。
     异步块，直写是不依赖轮次判定的唯一写法；② Return / 小键盘
     Enter 在 `SidebarMainWindow.performKeyEquivalent` 拦（AppKit 键
     等价相位先于 firstResponder 派发，且免增加/卸载监听的生命周期
-    管理），条件是自进程 AX 焦点解析出行标题且 field editor 未激活，
-    否则原样放行；③ 容器 `.onKeyPress` Space/Return 保留为兜底。同时
+    管理），条件是系统级 AX 焦点解析出行标题且 field editor 未激活，
+    否则原样放行；③ 聚焦行自身の `.onKeyPress(.return)` 保留为兜底（Round 11 定型；
+    容器仅处理方向键）。同时
     移除了 `model.fullKeyboardAccess` 门（AppModel 的轮询与属性一并
     回退）：`NSApp.isFullKeyboardAccessEnabled` 读的是旧偏好
     `AppleKeyboardUIMode`（Keyboard ▸ 键盘导航），不是辅助功能面板的
@@ -727,7 +725,7 @@ TX 就从 4.8 回到了 87 Mbps。
     Enabled", "com.apple.universalaccess")`（
     `SelfAccessibility.isFullKeyboardAccessOn`，每次现读）；实测机
     上 `AppleKeyboardUIMode=2`（键盘导航开）与面板开关关长期并存，
-    所以 Space/Return 两条按键管线（容器 `.onKeyPress` 与窗口
+    所以 Space/Return 两条按键管线（聚焦行 `.onKeyPress` 与窗口
     `performKeyEquivalent`）都改挂这个真值为门 —— 面板开关关掉时
     行上的 AX 焦点只是「上次浏览残留」（点行或 Tab 摸过后赖着
     不走），裸 Space/Return 会静默重激活那一行（真机症状：哪里按
@@ -754,12 +752,11 @@ TX 就从 4.8 回到了 87 Mbps。
     UA-off 下裸下/上方向键即换页（含环绕回卷）、裸 Space/Return
     与「Tab 残留焦点 + Space/Return」全 inert、非选中行 AXPress
     照切、植入 NSTextView 与分段控件持焦时三键全放行、⌘ 和弦
-    穿透；forced-UA-on（DEBUG 覆写真值）下容器 Space 按焦点行切
+    穿透；forced-UA-on（DEBUG 覆写真值）下行激活按焦点行切
     换、Return 在焦点行上正确认领切换、文字视图安全；合成方向键
     在 forced-UA 下仍经容器直切属无头混成态（真实 FKA-on 下 HID
-    已吃掉 NSEvent，不会发生），不是缺陷。探针脚手架（AxProbe
-    .swift、fake-helper 钩子、DEBUG fkaOverride 与按键计数）随验
-    证一并拆除。
+    已吃掉 NSEvent，不会发生），不是缺陷。探针脚手架中 AxProbe.swift
+    已在 r7 验证后拆除；DEBUG fkaOverride 与按键计数作为回归守卫保留。
     Round 8（焦点应答、Tab 归属与选择器收官）：
     ① 进程内挪 AX 焦点的唯一受支持通道是 SwiftUI 状态包装：
     `.focused`／`.accessibilityFocused` 逐行绑定、
@@ -767,17 +764,11 @@ TX 就从 4.8 回到了 87 Mbps。
     `kAXFocusedUIElementChanged`）；从外部对自己的
     `kAXFocusedUIElement` 做 `AXUIElementSetAttributeValue` 是
     确认过的 no-op（err=0、焦点仍 nil，探针实证）。
-    ② 轮询重渲染会使系统应答掉成 nil；恢复逻辑必须同步跑在更新环
-    （`.onChange(of: model.status.monotonicNanos)`），`.task(id:)`
-    的 sleep 在合成 run-loop 泵底下不复苏（探针实证：轮询循环在
-    泵窗内 6 拍即死、恢复永不触发）；恢复按**系统应答**自读判定
-    （自进程免权限）—— 按 SwiftUI 侧旧值布防的守卫在系统掉 nil
-    后永不重振（R8H 连续 16 个采样全 nil 的教训）；活应答按行标
-    题回填（早期探索曾记 `lastKnownRing`，后续在 round 11 已清理），掉空按它原位回锚、不往选区吸；探针
-    自身的 `makeFirstResponder(nil)` 也会清掉应答 —— 判 churn 前
-    先证 pre-answer，R8G 的「churn 掉焦点」结论实为探针自伤。
-    ③ Forced-UA 的合成 Space 经容器管线以 `activateFocusedRow`
-    着落，探针机器证明「激励落点 = 环行」；真实 HID 仍属硬件
+    ② （探索历史 / superseded）：Round 8 曾尝试在轮询重渲染后通过
+    `.onChange(of: model.status.monotonicNanos)` 与 involvement gate 进行
+    自读系统应答自愈。该方案在 Round 11 原生架构中已完全停用（移除相关自愈机制，
+    焦点完全由 SwiftUI 原生引擎与窗口方向键自愈承载）。
+    ③ 行 AXPress 由 `.accessibilityAction(.default)` 承载，探针机器证明「激励落点 = 焦点行」；真实 HID 仍属硬件
     清单（round 7 定型的 universalaccessd 分工不变）。
     ④ segmented Picker 在键盘导航（`AppleKeyboardUIMode=2`）与
     真 FKA 下按键无响应（r8-B），`.menu` 弹出式是键盘可操作的
@@ -787,12 +778,10 @@ TX 就从 4.8 回到了 87 Mbps。
     窗口差分（layer>0、自 pid）取证，AXMenu 计数会被菜单栏基线
     污染；对 `AXPopUpButton` 写 value 是幽灵成功（err=0、
     `valueSettable=false`、值不变）。
-    ⑤ FKA-off 的 Tab 归属用 `.focusable(false)` 请出行（探针
-    实证：Tab 落工具栏控件永不落行、Space/Return inert、
-    axpress 照切），VoiceOver 走 AX 树与 `.accessibilityAction`
-    不受影响。⑥ `ButtonTurn` 移入 TetherKitUIModel（可执行目
+    ⑤ FKA-off 的 Tab 归属：r8 曾用 `.focusable(false)`，后在 r9/r11 重构。
+    ⑥ `ButtonTurn` 移入 TetherKitUIModel（可执行目
     标不能被 `swift test` import），激活逃逸的 commit 语义有
-    4 条单测（TetherKitUIModelTests/ButtonTurnTests）。
+    6 条单测（TetherKitUIModelTests/ButtonTurnTests）。
     Round 9（真机复检推翻 r8 的 FKA-off Tab 契约）：
     ① 键盘导航下 Tab 循环原不打进侧栏（行 `.focusable(false)`），
     只要任何控件持有焦点，窗口方向键认领的「焦点为空/窗口自身」前置
@@ -827,7 +816,7 @@ TX 就从 4.8 回到了 87 Mbps。
     ③ Return 认领与行级后背：窗口 `performKeyEquivalent` 在第一响应者非 field editor 时，
     尝试自进程系统级 AX 焦点解析（需 TCC 信任）；若未信任或未解析出行，事件穿透至聚焦行自身
     `.onKeyPress(.return)` 兜底换页。
-    ④ 焦点显式高亮：选中行获焦且窗口处于活跃态（`controlActiveState == .key`）时展示 accent
+    ④ 焦点显式高亮：行获焦（任意行）且窗口处于活跃态（`controlActiveState == .key`）时展示 accent
     描边与浅灰底，窗口失焦切至后台时描边自动隐去。选区跟随方向键同步移动。
 
 
