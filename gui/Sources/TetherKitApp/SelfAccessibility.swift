@@ -112,10 +112,11 @@ enum SelfAccessibility {
         guard AXUIElementCopyAttributeValue(app,
                                             kAXFocusedUIElementAttribute as CFString,
                                             &ref) == .success,
-              ref != nil else {
+              let value = ref,
+              CFGetTypeID(value) == AXUIElementGetTypeID() else {
             return nil
         }
-        return ref as! AXUIElement
+        return (value as! AXUIElement)
     }
 #endif
 
@@ -153,13 +154,15 @@ enum SelfAccessibility {
         let result = AXUIElementCopyAttributeValue(systemWide,
                                                    kAXFocusedUIElementAttribute as CFString,
                                                    &ref)
-        guard result == .success, ref != nil else {
+        guard result == .success,
+              let value = ref,
+              CFGetTypeID(value) == AXUIElementGetTypeID() else {
 #if DEBUG
             print("PROBE [syswide-read] error=\(result.rawValue)")
 #endif
             return nil
         }
-        let element = ref as! AXUIElement
+        let element = value as! AXUIElement
         var pid: Int32 = 0
         AXUIElementGetPid(element, &pid)
         guard pid == ProcessInfo.processInfo.processIdentifier else {

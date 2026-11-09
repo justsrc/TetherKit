@@ -35,10 +35,10 @@ import TetherKitUIModel
 ///         contract (no stale-row actuation)
 ///       - bare Return is inert                       → FKA-off
 ///         contract
-///       - bare Tab changes nothing in the sidebar    → the self-driven
-///         ring is REMOVED (round 11): the system key-view loop cannot
-///         reach the rows, so Tab must leave the selection alone
-///       - a second Tab is equally inert              → no state
+///       - bare Tab moves focus, not selection        → the self-driven
+///         ring is REMOVED (round 11): Tab navigates between sidebar
+///         and content buttons without mutating page selection
+///       - a second Tab is equally inert on selection → no state
 ///
 /// Exits 0 on PASS (or walk completion), 1 on FAIL, 3 on the 20 s
 /// watchdog, 4 if event synthesis failed. Armed once, from

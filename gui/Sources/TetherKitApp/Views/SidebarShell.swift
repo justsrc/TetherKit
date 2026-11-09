@@ -113,16 +113,17 @@ struct SidebarShell: View {
     /// activation showed up through the focus engine, and the AXPress
     /// path (which enters via `selectDirect`, never here). With the
     /// Accessibility pane's FKA toggle off, a key-driven turn is
-    /// dropped by its event type: the FKA-off keyboard surface of the
-    /// sidebar is the bare arrows only (window claim, round 7
-    /// contract; the system key-view loop never reaches these rows —
-    /// round 10 probed every row style), so key-driven activation must
-    /// stay inert while mouse clicks work.
+    /// dropped: the FKA-off keyboard surface of the sidebar is the
+    /// bare arrows only (window claim; the system key-view loop moves
+    /// focus across controls but must not activate rows without FKA).
+    /// Key-driven activation must stay inert while mouse clicks work.
     ///
-    /// `NSApp.currentEvent` is read ONLY here, only behind the FKA-off
-    /// gate, only as a negative signal: in out-of-process
-    /// accessibility turns it can hold a stale event (AGENTS.md
-    /// pitfall 24 round 6), so it must never gate actuation positively.
+    /// In this view, `NSApp.currentEvent` is read only behind the FKA-off
+    /// gate with a strict mouse allow-list: out-of-process accessibility
+    /// turns (e.g. AXPress) can leave a stale event from an earlier user
+    /// interaction, so key-driven activation is dropped. (Note:
+    /// `ButtonTurn.write` reads `currentEvent` independently to decide
+    /// the runloop hop).
     private func rowSelect(_ page: SidebarPage) {
         if SelfAccessibility.isFullKeyboardAccessOn {
             select(page)

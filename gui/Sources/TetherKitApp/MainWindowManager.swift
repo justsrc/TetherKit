@@ -37,7 +37,9 @@ private final class SidebarMainWindow: NSWindow {
         // through to normal shortcut handling for everything below.
         // (Arrows carry macOS's `.function` device-independent bit
         // even with no keys held — that bit is deliberately NOT
-        // banned; the ban is an explicit set, probed r7.)
+        // banned; the ban is an explicit set, probed r7. Note: .capsLock
+        // is included so that engaged Caps Lock defers navigation to
+        // standard system handling rather than trapping bare navigation).
         let isActivationKey = event.keyCode == KeyCode.returnKey
             || event.keyCode == KeyCode.keypadEnter
         let isArrow = event.keyCode == KeyCode.downArrow
@@ -95,9 +97,7 @@ private final class SidebarMainWindow: NSWindow {
                   + "desc=\(claimDescription ?? "nil")")
         } else {
             print("PROBE [return-claim] sys-wide matched nothing "
-                  + "(role=\(SelfAccessibility.systemWideFocusedRole() ?? "nil") "
-                  + "title=\(SelfAccessibility.systemWideFocusedTitle() ?? "nil") "
-                  + "desc=\(claimDescription ?? "nil")) "
+                  + "(desc=\(claimDescription ?? "nil")) "
                   + "- key passes through to row backstop")
         }
 #endif
