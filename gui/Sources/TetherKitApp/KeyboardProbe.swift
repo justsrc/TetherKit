@@ -35,10 +35,13 @@ import TetherKitUIModel
 ///         contract (no stale-row actuation)
 ///       - bare Return is inert                       → FKA-off
 ///         contract
-///       - bare Tab moves focus, not selection        → the self-driven
-///         ring is REMOVED (round 11): Tab navigates between sidebar
-///         and content buttons without mutating page selection
+///       - bare Tab leaves the selection unchanged    → the self-driven
+///         ring is REMOVED (round 11); the suite asserts selection
+///         invariance only — Tab landings are sampled and printed
+///         (role/title/frame), never asserted
 ///       - a second Tab is equally inert on selection → no state
+///       - a Down from content focus steps the page   → round 11 full-state arrows
+///       - an Up then steps back                      → reverse round trip
 ///
 /// Exits 0 on PASS (or walk completion), 1 on FAIL, 3 on the 20 s
 /// watchdog, 4 if event synthesis failed. Armed once, from
@@ -234,7 +237,14 @@ enum KeyboardProbe {
                                     if down2 == tab2 {
                                         failures.append("down arrow did not step page while button was focused")
                                     }
-                                    finish()
+                                    sendKey(keyCode: KeyCode.upArrow, characters: upArrowGlyph)
+                                    after(0.3) {
+                                        let afterUp = observe("upAfterButton")
+                                        if afterUp != afterDown {
+                                            failures.append("up arrow did not step back (expected \(afterDown), got \(afterUp))")
+                                        }
+                                        finish()
+                                    }
                                 }
                             }
                         }
