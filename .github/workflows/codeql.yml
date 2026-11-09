@@ -20,7 +20,8 @@
 # pull_request trigger restricted to workflow edits (paths:
 # ['.github/workflows/**']): running a many-minute C++ build on every PR push
 # isn't worth it, but workflow changes self-verify before landing. dependabot.yml
-# and .github/scripts/ edits never reach the analyzer; Dependabot's weekly
+# and .github/scripts/ edits never match this filter; note it only gates
+# pull_request runs, pushes to main still analyze them. Dependabot's weekly
 # grouped action-bump PR deliberately rides along because it edits workflow
 # files. The concurrency group below is event-scoped (the tests.yml doctrine):
 # push-to-main, the Monday cron and pull_request runs sit in different groups
@@ -49,7 +50,8 @@ permissions:
 # a push to main from canceling the in-flight Monday cron, and pull_request
 # runs live in their own groups. Within one event, cancel-in-progress is safe:
 # a superseded commit's alerts are simply replaced by the newer run's SARIF,
-# and macOS minutes bill at 10x.
+# and macOS minutes are free for public repos — canceling is about squashed
+# queue latency, not cost.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
