@@ -707,7 +707,7 @@ TX 就从 4.8 回到了 87 Mbps。
     Enter 在 `SidebarMainWindow.performKeyEquivalent` 拦（AppKit 键
     等价相位先于 firstResponder 派发，且免增加/卸载监听的生命周期
     管理），条件是系统级 AX 焦点解析出行标题且 field editor 未激活，
-    否则原样放行；③ 聚焦行自身の `.onKeyPress(.return)` 保留为兜底（Round 11 定型；
+    否则原样放行；③ 聚焦行自身的 `.onKeyPress(.return)` 保留为兜底（Round 11 定型；
     容器仅处理方向键）。同时
     移除了 `model.fullKeyboardAccess` 门（AppModel 的轮询与属性一并
     回退）：`NSApp.isFullKeyboardAccessEnabled` 读的是旧偏好
@@ -730,8 +730,8 @@ TX 就从 4.8 回到了 87 Mbps。
     行上的 AX 焦点只是「上次浏览残留」（点行或 Tab 摸过后赖着
     不走），裸 Space/Return 会静默重激活那一行（真机症状：哪里按
     都跳到管理页），必须保持 inert。行的 AXPress 路径**不设门**
-    （VoiceOver 无关此开关）。② 键盘导航（`AppleKeyboardUIMode=2`）
-    下方向键到不了 SwiftUI 容器：AppKit 键导航在 firstResponder
+    （VoiceOver 无关此开关）。② （探索历史 / superseded —— 现行方向键契约以 Round 11 ② 为准）：
+    键盘导航（`AppleKeyboardUIMode=2`）下方向键到不了 SwiftUI 容器：AppKit 键导航在 firstResponder
     派发之前吃掉它们（真机症状：先点一下侧栏方向键才活）。修在
     `SidebarMainWindow.performKeyEquivalent`（先于 firstResponder
     相位）认领裸方向键 125/126：条件是 FKA-off + first responder
@@ -744,8 +744,8 @@ TX 就从 4.8 回到了 87 Mbps。
     `.onKeyPress` 不会二次步进。③ ⚠️ 修饰键判据陷阱：方向键
     keyDown 一贯带 `.function` 位（NSModifierFlags 设备无关的硬件
     键标记，无实体修饰键按下时也在），把 `deviceIndependentFlags
-    Mask` 整位掩码当和弦禁令会静默拒掉所有裸方向键（探针计数
-    证据：键进了 `performKeyEquivalent`、箭头分支却没跑）；和弦
+    Mask` 整位掩码当和弦禁令会静默拒掉所有裸方向键（`TETHERKIT_FKA_OVERRIDE`
+    覆写 + PROBE 打印证据：键进了 `performKeyEquivalent`、箭头分支却没跑）；和弦
     禁令必须是显式集合 `[.capsLock, .shift, .control, .option,
     .command]`。④ 无头验证矩阵（注入 `NSApp.sendEvent`，绕不过
     真实 HID tap，故 real-FKA-on 的 Space/方向键终判仍在真机）：
@@ -756,7 +756,7 @@ TX 就从 4.8 回到了 87 Mbps。
     换、Return 在焦点行上正确认领切换、文字视图安全；合成方向键
     在 forced-UA 下仍经容器直切属无头混成态（真实 FKA-on 下 HID
     已吃掉 NSEvent，不会发生），不是缺陷。探针脚手架中 AxProbe.swift
-    已在 r7 验证后拆除；DEBUG fkaOverride 与按键计数作为回归守卫保留。
+    已在 r7 验证后拆除；DEBUG fkaOverride 作为回归守卫保留。
     Round 8（焦点应答、Tab 归属与选择器收官）：
     ① 进程内挪 AX 焦点的唯一受支持通道是 SwiftUI 状态包装：
     `.focused`／`.accessibilityFocused` 逐行绑定、
@@ -790,7 +790,8 @@ TX 就从 4.8 回到了 87 Mbps。
     从此作废，未来探针矩阵先改期望；FKA-off 的 inert 不再靠修饰链、
     改靠激活动作分流：FKA-off 门内按 `NSApp.currentEvent` 类型区分，
     键盘驱动的原生激活（现场 keyDown）丢弃、鼠标事件放行。⚠️
-    `currentEvent` 只在这一个位置、只作否定信号 —— AXPress 轮会残留
+    `currentEvent` 的读取有两处（此门与 `ButtonTurn.write` 的跳拍
+    判定），均只作否定/分流信号 —— AXPress 轮会残留
     旧事件（本坑 round 6），别拿它做正向判据。
     ② Return 真机失败补记：窗口 `performKeyEquivalent` 认领的 AX
     自读在合成探针下能解析出行，用户真机 FKA 下解析不出 → Return
@@ -813,6 +814,8 @@ TX 就从 4.8 回到了 87 Mbps。
     ② 方向键活化：`handleArrowKey` 守卫改为仅在 `isFirstResponderEditableText`
     为真时放行文本编辑（移动光标），按钮/卡片/滚动区获焦时方向键随时直步换页，
     换页自愈焦点，用户绝不被卡在当前页。容器 `.onKeyPress` 保留上下方向键作为兜底。
+    FKA-on 时方向键由系统焦点引擎接管（HID 层的「移动焦点」键），窗口认领
+    与容器兜底都收不到事件，方向键移动的是 key 焦点本身 —— 预期行为，不是缺陷。
     ③ Return 认领与行级后背：窗口 `performKeyEquivalent` 在第一响应者非 field editor 时，
     尝试自进程系统级 AX 焦点解析（需 TCC 信任）；若未信任或未解析出行，事件穿透至聚焦行自身
     `.onKeyPress(.return)` 兜底换页。

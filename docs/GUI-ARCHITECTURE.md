@@ -373,8 +373,11 @@ helper 缺失或版本不匹配时，界面给一个「安装 / 更新特权组�
 Transaction / transitions 两篇）—— 唯一「完全不插值」的环境是带 nil 动画的
 下一拍事务，即第 2 条。
 
-**不变式**：改侧栏选中的新代码路径**必须走 `select()`**（保持跳出激活拍），
+**不变式**：视图侧改侧栏选中的新代码路径**必须走 `select()`**（保持跳出激活拍），
 不许在激活事务内直接写 `storedPage` —— 每多一个换页入口，这条都得跟着保持。
+唯一例外是窗口认领路径（`SidebarMainWindow` 的方向键与 Return 认领）：窗口层
+拿不到 shell 的模型，经 `ButtonTurn.write` 直写存储键，且刻意不复锚 AX 焦点
+（不调 `syncAXFocus`）—— 同为跳拍写，与该不变式语义一致。
 窗口侧：delegate 的 `windowDidBecomeMain` / `windowDidResize` 幂等重新钉
 min/max —— 实测 macOS 26 窗口展示后不久会把 min/max **重置为未设**，伴随一次
 +32pt 的 chrome settle（调用栈 `_setFrameCommon:display:fromServer:`）；
@@ -410,7 +413,8 @@ round 7）、自进程系统级 AX 焦点解析出行标题、field editor 未�
 驱动的换筛选/清空不再带激活事务的插值。
 
 **焦点应答同步与自愈探索（round 8，自愈逻辑已在 round 11 superseded）**：行的键盘参与按辅助功能面板真值
-门控（`.focusable(SelfAccessibility.isFullKeyboardAccessOn)`）；
+门控（round 11 定型：每行声明
+`.focusable(SelfAccessibility.isFullKeyboardAccessOn || isSelected)`，容器不再挂 focusable）；
 `.focused`／`.accessibilityFocused` 双引擎逐行绑定，键盘引擎落点
 经 `onChange(of: focusedRow)` 同步为 AX 应答 —— 这是进程内挪 AX
 焦点的唯一受支持通道，外部写 `kAXFocusedUIElement` 是 no-op（坑
@@ -434,8 +438,9 @@ TetherKitUIModel，commit 语义有单测）。
 再少一处，AX 身份更稳；r8 探针矩阵的期望项「Tab 永不落行」从此作
 废，未来矩阵先改期望）；行 Button 动作统一走 `rowSelect`，FKA-off
 时按 `NSApp.currentEvent` 的类型分流 —— 键盘驱动的原生激活（现场
-keyDown）丢弃、鼠标事件放行（`currentEvent` 只在这一个位置、只作
-否定信号用：AXPress 轮会残留旧事件，见坑 24 round 6）；窗口方向键
+keyDown）丢弃、鼠标事件放行（`currentEvent` 的读取有两处 —— 此处与
+`ButtonTurn.write` 的跳拍判定 —— 都只作否定/分流信号用：AXPress 轮
+会残留旧事件，见坑 24 round 6）；窗口方向键
 认领在第一响应者非文本输入框时步进页面。Return 补行级后背：真机 FKA 下窗口认领依赖的 AX 自读解析不出
 行（合成探针全过 —— 无头环境绕不开 HID 层，这一环只能真机验），
 聚焦行自己挂 `.onKeyPress(.return)`（FKA-on 门，直调 `rowSelect`，
