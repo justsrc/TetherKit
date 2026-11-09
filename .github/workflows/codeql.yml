@@ -10,10 +10,10 @@
 # Free for public repos. Must run on macOS: CMakeLists fatals on non-Apple
 # platforms.
 #
-# No pull_request trigger, on purpose: alerts on main are the wanted hard
-# signal, and running a many-minute C++ build-and-analyze per push of a PR is
-# not worth it. No concurrency block either: canceling would throw away the
-# whole analysis.
+# pull_request trigger restricted to workflow edits (paths: ['.github/**']):
+# running a many-minute C++ build on every PR push isn't worth it, but workflow
+# changes self-verify before landing. No concurrency block: canceling would throw
+# away the whole analysis.
 
 name: CodeQL
 
@@ -23,6 +23,9 @@ on:
     - cron: "30 6 * * 1"
   push:
     branches: [main]
+  pull_request:
+    paths:
+      - ".github/**"
   workflow_dispatch:
 
 permissions:
@@ -50,7 +53,15 @@ jobs:
         run: |
           # Tests and benchmarks stay enabled: everything compiles, everything
           # lands in the analysis set.
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          #
+          # CodeQL's macOS tracer forces traced child processes onto the x86_64
+          # slice under Rosetta (observed: build defaulted to x86_64; run 42513807606).
+          # Explicitly set CMAKE_OSX_ARCHITECTURES=arm64 so AppleClang outputs arm64
+          # objects matching Homebrew's arm64 libusb; arch -arm64 builds under the
+          # tracer break tracing.
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_OSX_ARCHITECTURES=arm64
           cmake --build build -j"$(sysctl -n hw.ncpu)"
 
       - uses: github/codeql-action/analyze@v4
