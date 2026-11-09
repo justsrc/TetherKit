@@ -247,7 +247,7 @@ Swift 的 C++ 互操作吞不下，所以 C ABI 这一层不可省。
 | 31 | `chore(release): v0.1.4 —— 中英双语` | ✅ | README 英文版转正为默认（HoRNDIS 搜索意图 SEO）；**升级后用户必须在 App 内更新一次特权组件**（协议号变了） |
 | 32 | `feat(gui): 特权组件与 App 版本不一致时给出更新入口` | ✅ | 比的是**库**版本而不是 Info.plist（`swift run` 没有 bundle）；只取版本号，构建配置不同不算不一致；协议号没变的版本以前完全没有提示 |
 | 33 | `chore(release): v0.1.5 —— 组件版本对不上时可一键更新` | ✅ | 协议号仍是 3，旧组件照常能用；升级后管理行会提示更新，不更新也不会坏 |
-| 34 | `feat(gui): 侧栏五页布局与 AppKit 主窗口（本分支）` | ✅ | 33 个提交：两栏仪表盘改为五页侧栏；主窗口改 AppKit 自管（第 7 节坑 19、20）；sdk 26 门控 chrome（第 7 节坑 19）；页面切换零动画（第 7 节坑 22、23，docs/GUI-ARCHITECTURE.md 4.11） |
+| 34 | `feat(gui): 侧栏五页布局与 AppKit 主窗口（本分支）` | ✅ | 两栏仪表盘改为五页侧栏；主窗口改 AppKit 自管（第 7 节坑 19、20）；sdk 26 门控 chrome（第 7 节坑 19）；页面切换零动画（第 7 节坑 22、23，docs/GUI-ARCHITECTURE.md 4.11）；无障碍按压与键盘导航（第 7 节坑 24；round 6-10 系统调研与自驱环探索，round 11 定型：移除自驱环，原生 Tab 双向贯通，窗口方向键全态切页 + Return 认领与行级后背，ButtonTurn 激活防插值） |
 | 35 | `build(ci): split CI into tests, build, and lint workflows` | ✅ | ci.yml's five jobs moved into tests.yml with their steps and checks unchanged, triggers narrowed to PR + push main + manual (tag pushes covered by the self-sufficient release.yml; the swift-app branch is retired); new build.yml (workflow_dispatch only, runner-image and build-type inputs, .app and shared-library artifacts) and lint.yml (clang-format as a hard gate; clang-tidy advisory, since WarningsAsErrors: '' in .clang-tidy is an existing choice, promote it once the backlog is zero); all actions pinned to the latest major, checkout@v7 / upload-artifact@v7, with the .app uploaded via v7 single-file direct upload so the ditto zip arrives as itself |
 | 36 | `build(ci): add weekly regression, ASan/UBSan, CodeQL, benchmarks, and hardening` | ✅ | tests.yml gains a Monday cron (catches runner-image / new Xcode / latest libusb / xnu ABI drift before the next PR) and an ASan+UBSan job (splits the work with TSan: memory and UB vs concurrency; Sanitizers.cmake only forbids ASan+TSan together); new codeql.yml (github/codeql-action@v4, manual C++ build analysis, push main + cron, a hard complement to advisory lint) and bench.yml (dispatch-only benchmarks, Release without sanitizers, Markdown artifact, hosted-runner noise caveat); dependabot.yml bumps actions weekly in one grouped PR (backs the latest-major convention); tests/lint/build get permissions: contents: read; Xcode selection filters out beta versions |
 | 37 | `build(ci): translate release and tap workflows to English` | ✅ | release.yml and update-tap.yml translated wholesale (comments, step names, error echoes, and the user-facing Release notes heredoc); release.yml's checkout pin bumped v5 -> v7 per the latest-major convention; the two runtime strings the abi-check greps depend on (ReportSkip's root-skip message and the pair-creation MESSAGE in tests/test_net_link.cc) are now English literals, and tests.yml greps the matching strings byte-exactly (MESSAGE prints on success verified empirically against the vendored doctest 2.4.12) |
@@ -666,6 +666,170 @@ TX 就从 4.8 回到了 87 Mbps。
     ⚠️ 反方向「纠偏 frame」不可行：用 `setFrame` 把 frame 从 592 纠回设计
     尺寸 560，settle 会立刻把它再长回 592 并重置 min/max，往复循环直至
     SIGTRAP 崩溃。min/max 幂等重钉就是终态，frame 不要碰。
+
+24. **macOS 26.5 把「无障碍按压轮」内排进异步队列的块全数丢弃。**
+    侧栏五页在 VoiceOver 里失灵：`AXUIElementPerformAction(kAXPressAction)`
+    返回 success，但 `select()` 里 `DispatchQueue.main.async` 的写块正文
+    从来不跑（`Task { @MainActor }` 同死），同轮里只有同步写存活。
+    逐项 bisect（隔离 repro）排除了 `InstantButtonStyle`（孤立复现中四种
+    按钮样式都正常）、`isSelected` trait、`onHover`、`@AppStorage` ——
+    「下一 runloop 拍」这一跳本身就是死因。按压发生时
+    `NSApp.currentEvent == nil` 是唯一可靠的分流信号：`select()` 现按
+    事件类型决定跳不跳拍（鼠标/键盘轮内照旧跳拍；无障碍轮直写）。键盘
+    轮内直写还有第二坑：换页重渲染会把同一按键事件重新派发，一次按键
+    双步进页 —— 故键盘轮也必须跳拍。探针无需任何权限：自进程
+    `AXUIElementCreateApplication` 遍历 + `performAction` + AppStorage
+    键读回即可闭环复现。真人 VO/FKA 复核（2026-11-07）：方向键与
+    `AXPress` 激活正常；Space/Return 确认为**真实缺陷**（真人按压同样
+    无效果，合成事件伪影的怀疑被排除）。现在已修：被聚焦的行自己收不到
+    按键事件，事件总会落到侧栏容器；容器收到 Space/Return 时自进程读
+    AX 焦点元素（`SelfAccessibility`，免权限）解析出是哪一行再
+    `select()`。A/B 隔离证明该容器路径是唯一生效的激活机制（去掉它
+    Space 就死）。已排除的两条路（勿重复施法）：① 行按钮各自
+    `.focusable()` 会把键盘事件拦进焦点引擎，容器的方向键处理器反而
+    收不到，方向键直接失灵；② `@FocusState` 程序化聚焦是静默 no-op，
+    AX 读回焦点为空，「指环随选区」走不通。另一个机器级事实：FKA
+    开启后方向键被系统焦点引擎接管（「移动焦点」键），任何应用内
+    处理器都拦不住 —— 无 FKA 时容器方向键直切不受影响。键盘行为按
+    行标题匹配自限分流（round 6 起 `model.fullKeyboardAccess` 门已
+    移除，理由见下），实现见 `SidebarShell.activateFocusedRow` 与
+    `SelfAccessibility`；
+    跳拍/直写的公共出口在 `ButtonTurn.write`，LogCard 的层级筛选与
+    清空按钮同用一条路（点击筛选/清空不再带激活事务的插值）。
+    Round 6（三路系统级调研后定型真机激活管线）：real FKA 的 Space
+    根本不会以 NSEvent 到达应用 —— universalaccessd 在 HID 层的
+    CGEventTap 拦截 Space 与方向键，Space 转成进程外
+    `AXUIElementPerformAction` 投到焦点元素，Return 却原样通过；
+    合成探针把 NSEvent 注入 `NSApp.sendEvent`，完全绕过该 tap ——
+    这就是「无头全过、真机全死」的分歧根源。三条对应管线：
+    ① 行 AXButton 显式挂 `.accessibilityAction(.default)`（Space 的
+    AXPress 落点），写入走新增的 `ButtonTurn.writeDirect` —— 进程外
+    AX 轮次里 AppKit 不清 `NSApp.currentEvent`，上一把点击的残留
+    事件会骗 `write` 跳拍，而 26.5 会丢弃无障碍轮次里调度的所有
+    异步块，直写是不依赖轮次判定的唯一写法；② Return / 小键盘
+    Enter 在 `SidebarMainWindow.performKeyEquivalent` 拦（AppKit 键
+    等价相位先于 firstResponder 派发，且免增加/卸载监听的生命周期
+    管理），条件是自进程 AX 焦点解析出行标题且 field editor 未激活，
+    否则原样放行；③ 容器 `.onKeyPress` Space/Return 保留为兜底。同时
+    移除了 `model.fullKeyboardAccess` 门（AppModel 的轮询与属性一并
+    回退）：`NSApp.isFullKeyboardAccessEnabled` 读的是旧偏好
+    `AppleKeyboardUIMode`（Keyboard ▸ 键盘导航），不是辅助功能面板的
+    FKA 开关，拿它当门会对只开后者的用户静默死路；AX 焦点匹配自身
+    就是自限的。已否/缓的路线：`.keyboardShortcut` 是窗口级全局
+    等价物，多行同挂只有第一个生效且会劫持文本输入（否）；
+    行 `.accessibilityRole` 重塑为 radio 组或可解锁 FKA 的 Tab
+    遍历，但会动 AX 结构（按标题匹配的解析与探针都依赖它），暂不
+    做；NSEvent 本地监视器被窗口子类取代（后者免安装/卸载）；
+    `InstantButtonStyle` 改回 `Button(configuration)` 有方向键失灵
+    回归风险（r5 已实测），不动。
+    Round 7（真机 FKA-off 两处回归 + 无头探针矩阵终结）：① 辅助功
+    能面板的 FKA 真值是 `CFPreferencesCopyAppValue("keyboardAccess
+    Enabled", "com.apple.universalaccess")`（
+    `SelfAccessibility.isFullKeyboardAccessOn`，每次现读）；实测机
+    上 `AppleKeyboardUIMode=2`（键盘导航开）与面板开关关长期并存，
+    所以 Space/Return 两条按键管线（容器 `.onKeyPress` 与窗口
+    `performKeyEquivalent`）都改挂这个真值为门 —— 面板开关关掉时
+    行上的 AX 焦点只是「上次浏览残留」（点行或 Tab 摸过后赖着
+    不走），裸 Space/Return 会静默重激活那一行（真机症状：哪里按
+    都跳到管理页），必须保持 inert。行的 AXPress 路径**不设门**
+    （VoiceOver 无关此开关）。② 键盘导航（`AppleKeyboardUIMode=2`）
+    下方向键到不了 SwiftUI 容器：AppKit 键导航在 firstResponder
+    派发之前吃掉它们（真机症状：先点一下侧栏方向键才活）。修在
+    `SidebarMainWindow.performKeyEquivalent`（先于 firstResponder
+    相位）认领裸方向键 125/126：条件是 FKA-off + first responder
+    为「空」—— nil（SwiftUI 窗口常态，`NSHostingView
+    .acceptsFirstResponder == false` 探针实测；因此前一轮的
+    `initialFirstResponder` 与 present 里的重断言全是死代码，
+    已删）或本窗口/contentView 自身；文字视图（日志页与表单编辑
+    器）、分段控件等真实控件持有焦点时照旧放行。步进与
+    `SidebarShell.stepSelection` 同为环绕；认领返回 handled，容器
+    `.onKeyPress` 不会二次步进。③ ⚠️ 修饰键判据陷阱：方向键
+    keyDown 一贯带 `.function` 位（NSModifierFlags 设备无关的硬件
+    键标记，无实体修饰键按下时也在），把 `deviceIndependentFlags
+    Mask` 整位掩码当和弦禁令会静默拒掉所有裸方向键（探针计数
+    证据：键进了 `performKeyEquivalent`、箭头分支却没跑）；和弦
+    禁令必须是显式集合 `[.capsLock, .shift, .control, .option,
+    .command]`。④ 无头验证矩阵（注入 `NSApp.sendEvent`，绕不过
+    真实 HID tap，故 real-FKA-on 的 Space/方向键终判仍在真机）：
+    UA-off 下裸下/上方向键即换页（含环绕回卷）、裸 Space/Return
+    与「Tab 残留焦点 + Space/Return」全 inert、非选中行 AXPress
+    照切、植入 NSTextView 与分段控件持焦时三键全放行、⌘ 和弦
+    穿透；forced-UA-on（DEBUG 覆写真值）下容器 Space 按焦点行切
+    换、Return 在焦点行上正确认领切换、文字视图安全；合成方向键
+    在 forced-UA 下仍经容器直切属无头混成态（真实 FKA-on 下 HID
+    已吃掉 NSEvent，不会发生），不是缺陷。探针脚手架（AxProbe
+    .swift、fake-helper 钩子、DEBUG fkaOverride 与按键计数）随验
+    证一并拆除。
+    Round 8（焦点应答、Tab 归属与选择器收官）：
+    ① 进程内挪 AX 焦点的唯一受支持通道是 SwiftUI 状态包装：
+    `.focused`／`.accessibilityFocused` 逐行绑定、
+    `onChange(of: focusedRow)` 粘合（写后者发
+    `kAXFocusedUIElementChanged`）；从外部对自己的
+    `kAXFocusedUIElement` 做 `AXUIElementSetAttributeValue` 是
+    确认过的 no-op（err=0、焦点仍 nil，探针实证）。
+    ② 轮询重渲染会使系统应答掉成 nil；恢复逻辑必须同步跑在更新环
+    （`.onChange(of: model.status.monotonicNanos)`），`.task(id:)`
+    的 sleep 在合成 run-loop 泵底下不复苏（探针实证：轮询循环在
+    泵窗内 6 拍即死、恢复永不触发）；恢复按**系统应答**自读判定
+    （自进程免权限）—— 按 SwiftUI 侧旧值布防的守卫在系统掉 nil
+    后永不重振（R8H 连续 16 个采样全 nil 的教训）；活应答按行标
+    题回填（早期探索曾记 `lastKnownRing`，后续在 round 11 已清理），掉空按它原位回锚、不往选区吸；探针
+    自身的 `makeFirstResponder(nil)` 也会清掉应答 —— 判 churn 前
+    先证 pre-answer，R8G 的「churn 掉焦点」结论实为探针自伤。
+    ③ Forced-UA 的合成 Space 经容器管线以 `activateFocusedRow`
+    着落，探针机器证明「激励落点 = 环行」；真实 HID 仍属硬件
+    清单（round 7 定型的 universalaccessd 分工不变）。
+    ④ segmented Picker 在键盘导航（`AppleKeyboardUIMode=2`）与
+    真 FKA 下按键无响应（r8-B），`.menu` 弹出式是键盘可操作的
+    正统替代；弹出的菜单跑 `NSEventTrackingRunLoopMode`，
+    `NSApp.sendEvent`／firstResponder／本地事件监视器都够不着，
+    头头环境无法合成开菜单/提交 —— 菜单存在性用 CGWindowList
+    窗口差分（layer>0、自 pid）取证，AXMenu 计数会被菜单栏基线
+    污染；对 `AXPopUpButton` 写 value 是幽灵成功（err=0、
+    `valueSettable=false`、值不变）。
+    ⑤ FKA-off 的 Tab 归属用 `.focusable(false)` 请出行（探针
+    实证：Tab 落工具栏控件永不落行、Space/Return inert、
+    axpress 照切），VoiceOver 走 AX 树与 `.accessibilityAction`
+    不受影响。⑥ `ButtonTurn` 移入 TetherKitUIModel（可执行目
+    标不能被 `swift test` import），激活逃逸的 commit 语义有
+    4 条单测（TetherKitUIModelTests/ButtonTurnTests）。
+    Round 9（真机复检推翻 r8 的 FKA-off Tab 契约）：
+    ① 键盘导航下 Tab 循环原不打进侧栏（行 `.focusable(false)`），
+    只要任何控件持有焦点，窗口方向键认领的「焦点为空/窗口自身」前置
+    失效 → Tab 摸不到侧栏且方向键搁浅（用户真机）。契约反转：行
+    `.focusable(true)` 改常量 —— r8 探针矩阵的期望项「Tab 永不落行」
+    从此作废，未来探针矩阵先改期望；FKA-off 的 inert 不再靠修饰链、
+    改靠激活动作分流：FKA-off 门内按 `NSApp.currentEvent` 类型区分，
+    键盘驱动的原生激活（现场 keyDown）丢弃、鼠标事件放行。⚠️
+    `currentEvent` 只在这一个位置、只作否定信号 —— AXPress 轮会残留
+    旧事件（本坑 round 6），别拿它做正向判据。
+    ② Return 真机失败补记：窗口 `performKeyEquivalent` 认领的 AX
+    自读在合成探针下能解析出行，用户真机 FKA 下解析不出 → Return
+    静默穿透。补聚焦行自身的 `.onKeyPress(.return)`（FKA-on 门，
+    直调 `rowSelect`），零 AX-read 依赖 —— 无头环境绕不开 HID 层，
+    这条链在真机断在哪一环只有真机能验；两级认领先到先消费，重复最
+    坏是幂等换页。小键盘 Enter（keycode 76）仍只有窗口认领覆盖
+    （SwiftUI `KeyPress.Key` 无小键盘变体）。
+    Round 10（自驱键盘环探索，已在 Round 11 废弃 / superseded）：
+    ⚠️ 注意：Round 10 曾探索在 AppKit 窗口层认领裸 Tab、在
+    `AppModel.sidebarRingRow` 上维护自驱键盘环，并用 `SidebarFocusBridge`
+    供探针取样。该设计在 Round 11 证实为过度设计且阻断正常焦序，已被完全移除，
+    代码中已无 `sidebarRingRow` 等残留，勿再引入。
+    Round 11（最终架构：原生焦点循环贯通与方向键全态活化）：
+    ① 根因查明：此前探针未进侧栏的死穴是 `rows` 容器上绑定的
+    `.focusable(SelfAccessibility.isFullKeyboardAccessOn)`
+    （FKA-off 下将整组判定为不可聚焦）；容器去 focusable、仅选中行
+    在 FKA-off 下声明 `.focusable(isSelected)`（FKA-on 下各行均可聚焦）。
+    Tab 键直接形成「侧栏选中行 ↔ 内容各按钮」的双向原生 Tab 循环。
+    ② 方向键活化：`handleArrowKey` 守卫改为仅在 `isFirstResponderEditableText`
+    为真时放行文本编辑（移动光标），按钮/卡片/滚动区获焦时方向键随时直步换页，
+    换页自愈焦点，用户绝不被卡在当前页。容器 `.onKeyPress` 保留上下方向键作为兜底。
+    ③ Return 认领与行级后背：窗口 `performKeyEquivalent` 在第一响应者非 field editor 时，
+    尝试自进程系统级 AX 焦点解析（需 TCC 信任）；若未信任或未解析出行，事件穿透至聚焦行自身
+    `.onKeyPress(.return)` 兜底换页。
+    ④ 焦点显式高亮：选中行获焦且窗口处于活跃态（`controlActiveState == .key`）时展示 accent
+    描边与浅灰底，窗口失焦切至后台时描边自动隐去。选区跟随方向键同步移动。
+
 
 ---
 

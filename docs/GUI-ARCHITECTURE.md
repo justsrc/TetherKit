@@ -381,6 +381,88 @@ min/max —— 实测 macOS 26 窗口展示后不久会把 min/max **重置为�
 `styleMask` 从不含 `.resizable`（min/max 只防程序化改动），幂等写法同时防
 `windowDidResize` 自递归。
 
+**无障碍按压（VoiceOver 的 AXPress）**：按压轮内 `NSApp.currentEvent == nil`，
+且 macOS 26.5 会把该轮内排进 `DispatchQueue.main.async` /
+`Task { @MainActor }` 的块**全部丢弃**（正文不跑），同步写则存活。所以
+`select()` 按 `NSApp.currentEvent` 的事件类型分流：鼠标/键盘轮内维持
+「跳出拍再写」的本节铁律，无障碍按压轮直接同步写。键盘轮内直写还有第二个
+坑：换页重渲染会把同一按键事件重新派发，一次按键双步进页。完整排查记录
+见 AGENTS.md 第 7 节坑 24。
+
+**键盘（激活管线，round 6）**：real FKA 的 Space 与方向键被
+universalaccessd 在 HID 层拦截（合成的 NSEvent 到不了那层），Space
+转成对焦点行的进程外 AXPress —— 落到行
+`.accessibilityAction(.default)`，并由 `ButtonTurn.writeDirect`
+直写（进程外 AX 轮次里残留的 `NSApp.currentEvent` 会骗跳拍，被
+26.5 丢弃）；Return 原样通过，在 `SidebarMainWindow`
+的 `performKeyEquivalent` 拦截（条件：辅助功能面板 FKA 开
+（`SelfAccessibility.isFullKeyboardAccessOn`，真值勘误见坑 24
+round 7）、自进程系统级 AX 焦点解析出行标题、field editor 未激活），
+未匹配时穿透至聚焦行自身的 `.onKeyPress(.return)` 兜底。
+`NSApp.isFullKeyboardAccessEnabled` 读的是旧偏好
+`AppleKeyboardUIMode`（键盘导航），不是辅助功能面板的 FKA 开关，
+面板开关关掉时行上残留的 AX 焦点会让裸 Space/Return 静默跳页
+（round 7 真机回归）。方向键：侧栏在 `performKeyEquivalent`
+先行认领裸方向键直切页面（条件 FKA-off、第一响应者非文本输入框；
+`.function` 位不算和弦，禁令须是显式修饰键集合），认领后容器
+不再二次步进；容器保留方向键 `.onKeyPress` 作为冒泡兜底；FKA-on 时方向键归 HID 层。其余细节：
+`ButtonTurn.write`，LogCard 的层级筛选与清空按钮走同一条路，点击
+驱动的换筛选/清空不再带激活事务的插值。
+
+**焦点应答同步与自愈（round 8）**：行的键盘参与按辅助功能面板真值
+门控（`.focusable(SelfAccessibility.isFullKeyboardAccessOn)`）；
+`.focused`／`.accessibilityFocused` 双引擎逐行绑定，键盘引擎落点
+经 `onChange(of: focusedRow)` 同步为 AX 应答 —— 这是进程内挪 AX
+焦点的唯一受支持通道，外部写 `kAXFocusedUIElement` 是 no-op（坑
+24 round 8 ①）。轮询重渲染可能撤销系统应答：恢复逻辑同步跑在
+`.onChange(of: model.status.monotonicNanos)`（异步 sleep 在合成
+泵底下不复苏，坑 24 round 8 ②），自读系统应答（早期探索曾尝试
+`lastKnownRing`，后续在 round 11 已清理）、应答掉空时按它原位回锚、不往选区吸；按绑定状
+态布防的守卫在系统已掉 nil 后永不重振，必须以系统应答为地真。
+侧栏从未参与过键盘流时不恢复（involvement gate）—— 免得与用户
+点进日志筛选框的瞬时 nil 竞态。FKA-off 契约收窄为**仅方向键**：
+行 `.focusable(false)` 请出 Tab 环（探针实证 Tab 落工具栏控件、
+Space/Return inert、axpress 照切），VoiceOver 行走 AX 树与
+`.accessibilityAction` 不受影响。层级筛选从 segmented 改
+`.menu`：segmented 在键盘导航与真 FKA 下按键无响应，`.menu` 的
+弹出菜单是键盘可操作的正统替代；弹出菜单运行在
+`NSEventTrackingRunLoopMode`，无头环境无法合成开合/提交（硬件
+清单项），菜单存在性以 CGWindowList 差分取证（坑 24 round 8
+④）；筛选绑定改走 `ButtonTurn.routed`（`ButtonTurn` 一并移入
+TetherKitUIModel，commit 语义有单测）。
+
+**Tab 重入侧栏与 Return 的行级后背（round 9，真机复检）**：用户真机
+复检推翻 r8 的 FKA-off「仅方向键」契约 —— 键盘导航下 Tab 永远摸不到
+侧栏（行被 `.focusable(false)` 请出 Tab 环），且只要有控件持有焦点，
+窗口对方向键的认领前置失效、方向键搁浅。契约改为：**Tab 在两种模式
+下都可达侧栏；Space/Return 在 FKA-off 里对行保持 inert；方向键从行
+焦点继续切页**。三处落地：行 `.focusable(true)` 常量化（条件修饰链
+再少一处，AX 身份更稳；r8 探针矩阵的期望项「Tab 永不落行」从此作
+废，未来矩阵先改期望）；行 Button 动作统一走 `rowSelect`，FKA-off
+时按 `NSApp.currentEvent` 的类型分流 —— 键盘驱动的原生激活（现场
+keyDown）丢弃、鼠标事件放行（`currentEvent` 只在这一个位置、只作
+否定信号用：AXPress 轮会残留旧事件，见坑 24 round 6）；窗口方向键
+认领新增第三条件 —— 自进程 AX 应答解析为某一行时也认领
+（round 9 早期曾使用 `fromAXFocusAnswer()` 自读，round 11 已被 `fromSystemWideFocusedDescription` 替换）。Return 补行级后背：真机 FKA 下窗口认领依赖的 AX 自读解析不出
+行（合成探针全过 —— 无头环境绕不开 HID 层，这一环只能真机验），
+聚焦行自己挂 `.onKeyPress(.return)`（FKA-on 门，直调 `rowSelect`，
+零 AX-read 依赖）；小键盘 Enter（keycode 76）仍只有窗口认领覆盖
+（SwiftUI `KeyPress.Key` 无小键盘变体)。真机复检清单随之更新：
+FKA-off —— Tab 触达侧栏行、Space/Return inert、行焦点下方向键切页；
+FKA-on —— Tab 后 Return 也换页。
+
+**自驱键盘环探索（round 10，已在 round 11 废弃 / superseded）**：round 9 的「Tab 两种模式
+可达」在早期探索中曾误判 FKA-off 下侧栏行不可达，round 10 尝试了由 AppKit 截获
+裸 Tab、在 `AppModel.sidebarRingRow` 上维护自驱键盘环的方案。但该方案存在 AppKit
+截获容易侵占内容按钮焦序、且引入复杂状态机的问题。**该自驱键盘环方案已在 round 11 被完整移除
+并废弃**（`sidebarRingRow`、`SidebarFocusBridge` 均已删除），最终定型为 round 11 的纯原生架构。
+
+**原生焦点环与全态方向键（round 11，最终定型架构）**：
+1. **Tab 循环双向贯通**：r10 尝试的 AppKit 层自驱截获 Tab 会侵占内容按钮的自然焦序，而纯 SwiftUI 下之前侧栏被跳过的根因是 `rows` 容器上绑定的 `.focusable(SelfAccessibility.isFullKeyboardAccessOn)` 在 FKA-off 时将侧栏整组阻断。移除容器 focusable，选中行在 FKA-off 下使用 `.focusable(isSelected)`（FKA-on 下各行均可聚焦），Tab 形成「侧栏选中项 ↔ 内容各按钮」的双向可达循环，Tab 遍寻内容各按钮后平滑回至侧栏。
+2. **方向键全态切页**：原 `handleArrowKey` 守卫要求 `firstResponder == nil || firstResponder === contentView`，一旦用户按下 Tab 导致内容按钮（如 `SwiftUIAppKitButton` / `KeyViewProxy`）获焦，方向键即被误拦。改以 `!isFirstResponderEditableText` 为放行条件：只要第一响应者不是文本输入框（需保留光标移动），无论焦点在侧栏还是内容按钮，上下方向键均随时步进选区换页，换页后焦点重置自愈，用户绝不被卡在当前页。容器 `.onKeyPress` 保留上下方向键作为冒泡兜底。
+3. **Return 认领与行级后背**：FKA-on 下，窗口 `performKeyEquivalent` 在第一响应者不是 field editor 时，尝试读取系统级 FKA 焦点轨道（`SelfAccessibility.systemWideFocusedDescription()`，受 TCC 辅助功能权限控制）；若无辅助功能权限或未匹配到行，事件自然放行至聚焦行自身的 `.onKeyPress(.return)` 兜底执行 `rowSelect`。
+4. **视觉反馈与窗口失焦**：行获焦且窗口处于活跃态（`controlActiveState == .key`）时展示 1pt accent 描边与浅灰底，窗口切至后台时描边自动隐去；选区跟随方向键同步移动。
+
 **验证（无头，不靠肉眼）**：`NSEvent` mouseDown/mouseUp +
 `NSWindow.sendEvent` 合成点击走真实响应链（无需 Accessibility / 录屏权限）；
 对自己进程可用 `AXUIElement` 读按钮几何自检命中（自家进程无 TCC 弹窗），命中
