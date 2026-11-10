@@ -79,8 +79,8 @@ class Error {
   /// "outer cause: inner cause" chain.
   /// Usage: `return std::unexpected(std::move(e).WithContext(Tr(Msg::kNetOpenBpfFailed)));`
   ///
-  /// The separator varies with the language (Chinese uses a full-width colon, English
-  /// uses ": "), so it cannot be hardcoded here.
+  /// The separator comes from detail::ContextSeparator() rather than a literal: it is
+  /// ": " today, and a future language picks its own punctuation there.
   [[nodiscard]] Error WithContext(std::string_view outer) && {
     context_ = std::string{outer} + std::string{detail::ContextSeparator()} + context_;
     return std::move(*this);

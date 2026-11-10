@@ -13,12 +13,12 @@ import SwiftUI
 //
 // Invocation (debug launch arguments):
 //
-//     ./TetherKit -SelfCapture /tmp/out.png -TetherKitLanguagePreference chinese
+//     ./TetherKit -SelfCapture /tmp/out.png -TetherKitLanguagePreference english
 //
 //   * -SelfCapture <path>: after the window settles, capture it to PNG
 //     and terminate.
 //   * Language is forced through the argument domain of UserDefaults
-//     (-TetherKitLanguagePreference <chinese|english>); the argument
+//     (-TetherKitLanguagePreference <system|english>); the argument
 //     domain outranks normal storage.
 //
 // A few dozen lines here buy the "edit UI, auto-capture, view PNG"

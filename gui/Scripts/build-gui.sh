@@ -42,7 +42,7 @@ for argument in "$@"; do
   case "${argument}" in
     --debug) SWIFT_CONFIGURATION="debug" ;;
     --swift-build-flags=*) IFS=' ' read -r -a SWIFT_BUILD_FLAGS <<< "${argument#*=}" ;;
-    -h|--help) sed -n '2,16p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help) sed -n '2,23p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "unknown option: ${argument}" >&2; exit 2 ;;
   esac
 done

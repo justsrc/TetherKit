@@ -37,8 +37,8 @@
          TetherKitIPC/Localization.swift for why they do not go through
          .lproj), so this **does not** affect what is actually displayed:
          its purpose is to let "System Settings, General, Language and
-         Region, Applications" list TetherKit and offer these two
-         options. The in-app language menu is independent of this entry;
+         Region, Applications" list TetherKit and offer the languages
+         below. The in-app language menu is independent of this entry;
          both work. The first entry also serves as the
          CFBundleDevelopmentRegion. -->
     <key>CFBundleDevelopmentRegion</key>
@@ -46,7 +46,6 @@
     <key>CFBundleLocalizations</key>
     <array>
         <string>en</string>
-        <string>zh-Hans</string>
     </array>
 
     <!-- Swift's Observation and ContentUnavailableView need macOS 14.

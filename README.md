@@ -20,7 +20,7 @@ connect, configure IP in three clicks — plus a command-line tool, `tetherkit-c
   writing raw Ethernet frames directly.
 - **No kernel code**: pure user-space C++23. No kext, no DriverKit, no need to disable SIP.
 
-> ⚠️ **Status**: all modules are implemented; 210 test cases (10,408 assertions) pass
+> ⚠️ **Status**: all modules are implemented; 210 test cases (10,391 assertions) pass
 > under both a normal build and a ThreadSanitizer build. End-to-end throughput,
 > measured against a real Android phone: **~326 Mbps RX / ~240–300 Mbps TX, zero
 > retransmits in both directions** (USB 2.0 high-speed; theoretical ceiling 426 Mbps).

@@ -124,8 +124,8 @@ public enum L10n {
     }
 
     /// The raw text of a message in the given language. Tests use it to check
-    /// specific tables; the per-language dispatch is the one function a new
-    /// language changes (the tuple gains its member).
+    /// specific tables; this is the one function a new language changes (the
+    /// single string becomes a per-language table again).
     public static func text(_ key: L10nKey, in language: Language) -> String {
         key.localizations
     }

@@ -402,8 +402,8 @@ extension L10nKey {
             return "Cannot reach the privileged helper: %@"
         case .helperReplyUnparsable:
             return "The helper's reply could not be parsed; the versions may not match"
-        // Both of these two messages end with "use the terminal instead", so the two
-        // sentences are merged -- Chinese clauses need no space, English ones do, and a join would get one side wrong.
+        // Both of these two messages end with "use the terminal instead", so they
+        // share one row instead of repeating the same closing clause.
         case .installerNoPayload:
             return "This copy of TetherKit carries no installer payload (likely a dev build). "
                     + "Run this in a terminal: sudo ./gui/Scripts/install-helper.sh"
