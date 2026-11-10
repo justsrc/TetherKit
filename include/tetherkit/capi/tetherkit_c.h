@@ -100,34 +100,48 @@ typedef struct tk_error {
 } tk_error_t;
 
 // =============================================================================
-// 界面语言
+// Interface language
 //
-// 库自己产生的全部文字 —— 错误消息、日志行、事件文本 —— 都按这里设定的语言
-// 渲染。宿主（GUI）负责把用户的选择推进来；命令行自己按环境变量与 --lang 决定。
+// Every string the library produces on its own -- error messages, log lines,
+// event text -- renders in the language set here. The host (the GUI) pushes
+// the user's selection in; the command line decides from environment
+// variables and --lang on its own.
 //
-// **进程级的单一状态**，不是每个会话一份：日志与错误从多个线程产生，做成
-// 线程局部只会让同一次会话的输出出现两种语言。
+// One process-wide state, not one per session: logs and errors come from
+// multiple threads, and per-thread state would split a single session's
+// output across languages.
 // =============================================================================
 
+// Language tags the shared library understands. English is the only language
+// shipped today. When a language is added (see the checklist at the top of
+// messages.def), this enum gains a value; old callers compiled against the
+// narrower enum keep working because unknown values are ignored at set
+// and degrade to English output by design.
 typedef enum tk_language {
   TK_LANGUAGE_ENGLISH = 0,
-  TK_LANGUAGE_CHINESE = 1,
 } tk_language_t;
 
-/// 设置界面语言。任意线程可调，随时可调。
+/// Sets the interface language. Any thread, any time.
 ///
-/// 立即生效，但**已经排队的日志与事件不会重新渲染** —— 它们在产生的那一刻就
-/// 已经是字符串了。GUI 应在启动时尽早调用，之后只在用户切换语言时再调。
-/// `language` 越界时忽略本次调用。
+/// Takes effect immediately for new strings, but log lines and events that
+/// are already queued do not re-render -- they were materialized as strings
+/// when they were produced. The GUI should call this once early at startup
+/// and then only when the user switches the language.
+///
+/// A `language` value outside tk_language_t is ignored by design, so a
+/// caller built against an older (or future) enumeration keeps working and
+/// simply stays in English.
 TK_API void tk_set_language(int32_t language);
 
-/// 读当前界面语言（tk_language_t）。
+/// Reads the current interface language as a tk_language_t value.
 TK_API int32_t tk_get_language(void);
 
-/// 按环境变量推断语言，依次看 TETHERKIT_LANG、LC_ALL、LC_MESSAGES、LANG。
+/// Infers the language from environment variables, checking TETHERKIT_LANG,
+/// LC_ALL, LC_MESSAGES, and LANG in that order.
 ///
-/// **只做推断，不改变当前设置。** GUI 通常用不上它（macOS 的语言偏好该问
-/// NSLocale），它是给命令行宿主和第三方绑定准备的。
+/// Infers only; does not change the current setting. The GUI normally does
+/// not need it (macOS language preference belongs to NSLocale); it exists
+/// for command-line hosts and third-party bindings.
 TK_API int32_t tk_detect_system_language(void);
 
 // =============================================================================

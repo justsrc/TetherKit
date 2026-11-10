@@ -325,9 +325,9 @@ TEST_CASE("设备主动发 KEEPALIVE_MSG 时主机必须回 KEEPALIVE_CMPLT") {
   CHECK_MESSAGE(found, "主机没有回复设备发起的 KEEPALIVE");
 }
 
-TEST_CASE("面向连接设备的消息被明确拒绝") {
-  // 下面断言错误消息的中文措辞，先把语言钉死。
-  const tetherkit::testing::ScopedLanguage guard{tetherkit::Language::kChinese};
+TEST_CASE("messages aimed at connection-oriented devices are explicitly rejected") {
+  // The error message wording is asserted below; pin the language.
+  const tetherkit::testing::ScopedLanguage guard{tetherkit::Language::kEnglish};
   MockControlChannel channel;
   channel.SetRequestHandler([](std::span<const std::byte> request, MockControlChannel& mock) {
     if (LoadLe32(request.data() + kMessageTypeOffset) == ToRaw(MessageType::kInitialize)) {
@@ -344,11 +344,12 @@ TEST_CASE("面向连接设备的消息被明确拒绝") {
 
   const auto status = machine.Start();
   REQUIRE_FALSE(status.has_value());
-  // 错误信息必须明确指出是面向连接设备，而不是含糊的「未知消息」。
-  CHECK(status.error().ToString().find("面向连接") != std::string::npos);
+  // The message must explicitly name connection-oriented devices rather
+  // than the vague "unknown message".
+  CHECK(status.error().ToString().find("connection-oriented") != std::string::npos);
 }
 
-TEST_CASE("保活正常时不报错，且设备活跃期间不发无谓保活") {
+TEST_CASE("keepalive success reports no error and sends none while the device is active") {
   MockControlChannel channel;
   channel.SetRequestHandler(MakeWellBehavedDevice(kDeviceMac));
   RecordingObserver observer;
@@ -363,7 +364,7 @@ TEST_CASE("保活正常时不报错，且设备活跃期间不发无谓保活") 
   CHECK(channel.CountSent(MessageType::kKeepAlive) == 0);
 }
 
-TEST_CASE("保活到期时发 KEEPALIVE 并在成功后清零失败计数") {
+TEST_CASE("keepalive expiry sends KEEPALIVE and clears the failure count after success") {
   MockControlChannel channel;
   channel.SetRequestHandler(MakeWellBehavedDevice(kDeviceMac));
   RecordingObserver observer;
@@ -378,9 +379,9 @@ TEST_CASE("保活到期时发 KEEPALIVE 并在成功后清零失败计数") {
   CHECK(observer.fatal_errors.empty());
 }
 
-TEST_CASE("连续保活失败达到阈值后通报致命错误") {
-  // 下面断言致命错误里的中文措辞，先把语言钉死。
-  const tetherkit::testing::ScopedLanguage guard{tetherkit::Language::kChinese};
+TEST_CASE("reaching the keepalive failure threshold reports a fatal error") {
+  // The fatal error wording is asserted below; pin the language.
+  const tetherkit::testing::ScopedLanguage guard{tetherkit::Language::kEnglish};
   MockControlChannel channel;
   // 设备只回 INITIALIZE / QUERY / SET，对 KEEPALIVE 一律不回 → 每次都超时。
   channel.SetRequestHandler([](std::span<const std::byte> request, MockControlChannel& mock) {
@@ -406,7 +407,7 @@ TEST_CASE("连续保活失败达到阈值后通报致命错误") {
   const auto third = machine.Poll();
   CHECK_FALSE(third.has_value());
   REQUIRE(observer.fatal_errors.size() == 1);
-  CHECK(observer.fatal_errors[0].find("保活") != std::string::npos);
+  CHECK(observer.fatal_errors[0].find("keep-alive") != std::string::npos);
 }
 
 TEST_CASE("软复位：AddressingReset 非零时必须重放包过滤") {

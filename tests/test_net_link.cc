@@ -223,17 +223,16 @@ TEST_CASE("BPF 记录头的大小陷阱：sizeof 是 20 但 bh_hdrlen 是 18") {
   CHECK(BPF_WORDALIGN(14 + kBpfHeaderMinBytes) - 14 == kBpfHeaderMinBytes);
 }
 
-TEST_CASE("feth 创建期 sysctl 清单非空且都有说明") {
+TEST_CASE("feth creation-time sysctl list is non-empty and each entry has a reason") {
   CHECK(std::size(kRequiredFethSysctls) > 0);
   for (const RequiredFethSysctl& entry : kRequiredFethSysctls) {
     CHECK(entry.name != nullptr);
-    // why 存的是文案标识，两种语言都必须真的有译文（漏译会渲染成空串，
-    // 于是 sysctl 报错里那句「原因：」后面什么都没有）。
-    for (const auto language : {tetherkit::Language::kChinese, tetherkit::Language::kEnglish}) {
-      const std::string_view why = tetherkit::TextIn(language, entry.why);
-      // 说明必须是人话，不能只有一个词。
-      CHECK(why.size() > 10);
-    }
+    // why holds a message identifier; the shipped language must really have
+    // text for it (a missing row would render as an empty string and leave
+    // "reason:" empty in sysctl errors).
+    const std::string_view why = tetherkit::TextIn(tetherkit::Language::kEnglish, entry.why);
+    // The reason must be a real sentence, not one word.
+    CHECK(why.size() > 10);
   }
 }
 

@@ -477,9 +477,9 @@ TEST_CASE("USB 提交失败被记为 I/O 错误，桥接层继续运行") {
   bridge.Stop();
 }
 
-TEST_CASE("统计行渲染出速率与丢包") {
-  // 统计行是面向用户的文案，下面按中文断言，先把语言钉死。
-  const tetherkit::testing::ScopedLanguage guard{tetherkit::Language::kChinese};
+TEST_CASE("stats line renders rates and drops") {
+  // The stats line is user-facing text; pin the language before asserting.
+  const tetherkit::testing::ScopedLanguage guard{tetherkit::Language::kEnglish};
   MockDataChannel channel;
   LoopbackLink link(LoopbackConfig{.sent_capacity = 4096});
   Bridge bridge(channel, link, TestConfig());
@@ -496,7 +496,7 @@ TEST_CASE("统计行渲染出速率与丢包") {
   CHECK(line.find("TX") != std::string::npos);
   CHECK(line.find("pps") != std::string::npos);
   CHECK(line.find("Mbps") != std::string::npos);
-  CHECK(line.find("队列深度") != std::string::npos);
+  CHECK(line.find("queue depth") != std::string::npos);
 
   bridge.Stop();
 }

@@ -155,20 +155,22 @@ void FillDeviceInfo(const tetherkit::usb::DeviceCandidate& candidate,
 
 namespace {
 
-/// tk_language_t → C++ 侧的 Language。越界返回 nullopt，让调用方忽略这次设置。
+/// tk_language_t → C++ Language. Unknown values return nullopt, which makes
+/// the set call a no-op: a caller still passing a removed language id (the
+/// old Chinese value 1) keeps working and simply stays in English.
 [[nodiscard]] std::optional<tetherkit::Language> ToLanguage(std::int32_t value) noexcept {
   switch (value) {
     case TK_LANGUAGE_ENGLISH:
       return tetherkit::Language::kEnglish;
-    case TK_LANGUAGE_CHINESE:
-      return tetherkit::Language::kChinese;
     default:
       return std::nullopt;
   }
 }
 
-[[nodiscard]] std::int32_t FromLanguage(tetherkit::Language language) noexcept {
-  return language == tetherkit::Language::kChinese ? TK_LANGUAGE_CHINESE : TK_LANGUAGE_ENGLISH;
+[[nodiscard]] std::int32_t FromLanguage(tetherkit::Language /*language*/) noexcept {
+  // English is the only language shipped today; the parameter is kept so the
+  // signature survives a second language unchanged.
+  return TK_LANGUAGE_ENGLISH;
 }
 
 }  // namespace
