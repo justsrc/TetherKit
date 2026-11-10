@@ -1,15 +1,19 @@
-// 执行系统工具（ipconfig / route）并收集输出。
+// Runs a system tool (ipconfig / route) and collects its output.
 //
-// ★ 为什么不用 system() / popen() ★
-//   那两个都会经过 /bin/sh。网卡名、IP 地址这些参数虽然我们都校验过，但只要
-//   经过 shell，防线就依赖「校验有没有漏」这一条；用 posix_spawn 直接传 argv
-//   数组，shell 元字符从原理上就没有解释它们的地方。
+//  Why not system() / popen()
+//   Both of those go through /bin/sh. The arguments -- interface names, IP
+//   addresses -- are all validated by us, but as long as they pass through a
+//   shell the whole defense rests on "the validation has no hole"; passing
+//   the argv array straight to posix_spawn means shell metacharacters have
+//   nowhere to be interpreted in the first place.
 //
-// ★ 为什么用外部工具而不是自己发 ioctl ★
-//   `ipconfig set` 走的是 IPConfiguration 的正规注册路径，由它建立的服务会被
-//   IPMonitor 采纳（DNS 生效、默认路由装上）；而自己 SIOCAIFADDR 配出来的地址
-//   configd 完全不认。这一条是 docs/GUI-SPIKE.md 第 3.2 / 6.3 节实测确认的，
-//   不能为了「少一次 fork」倒退回裸 ioctl。
+//  Why external tools instead of issuing the ioctls ourselves
+//   `ipconfig set` goes through IPConfiguration's proper registration path,
+//   and the service it creates is adopted by IPMonitor (DNS takes effect,
+//   the default route gets installed); an address configured by our own
+//   SIOCAIFADDR is not recognized by configd at all. This was confirmed by
+//   measurement in docs/GUI-SPIKE.md sections 3.2 / 6.3, so it must not be
+//   reverted to bare ioctls just to save one fork.
 #pragma once
 
 #include <initializer_list>
@@ -23,27 +27,32 @@ namespace tetherkit::capi {
 
 struct ProcessResult {
   int exit_code = 0;
-  /// 子进程的 stdout 与 stderr 合并后的内容。
+  /// The child's stdout and stderr merged together.
   ///
-  /// 合并是刻意的：这些工具的报错有的走 stdout 有的走 stderr，分开收集只会让
-  /// 「失败了但我们没拿到原因」这种情况更常见。
+  /// The merge is deliberate: some of these tools report errors on stdout and
+  /// some on stderr, and collecting them separately only makes "it failed
+  /// and we never got the reason" more likely.
   std::string output;
 
   [[nodiscard]] bool Succeeded() const noexcept { return exit_code == 0; }
 };
 
-/// 执行一个可执行文件并等它结束。
+/// Runs an executable and waits for it to finish.
 ///
-/// @param executable 绝对路径。必须是绝对路径 —— 依赖 PATH 会让行为随调用者的
-///                   环境变化，而 helper 是 launchd 拉起的，PATH 与终端里不同。
-/// @param arguments  不含 argv[0]，函数内部会补上。
+/// @param executable Absolute path. It must be an absolute path -- relying on
+///                   PATH makes the behavior depend on the caller's
+///                   environment, and the helper is launched by launchd,
+///                   whose PATH differs from the one in a terminal.
+/// @param arguments  Without argv[0]; the function appends it.
 ///
-/// 返回错误仅表示「没能把进程跑起来或没等到它结束」；进程跑起来但返回非零，是
-/// 成功返回一个 exit_code != 0 的 ProcessResult —— 调用方要自己判断。
+/// An error return means only "could not start the process, or did not wait
+/// for it to finish"; a process that starts and exits non-zero is a success
+/// that returns a ProcessResult with exit_code != 0 -- the caller has to
+/// judge that itself.
 [[nodiscard]] Result<ProcessResult> RunTool(std::string_view executable,
                                             std::initializer_list<std::string_view> arguments);
 
-/// 供动态构造参数列表的重载。
+/// The overload for a dynamically built argument list.
 [[nodiscard]] Result<ProcessResult> RunTool(std::string_view executable,
                                             const std::vector<std::string>& arguments);
 

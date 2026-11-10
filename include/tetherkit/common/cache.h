@@ -1,25 +1,27 @@
-// 缓存相关的编译期常量。
+// Compile-time constants related to caching.
 #pragma once
 
 #include <cstddef>
 
 namespace tetherkit {
 
-/// 缓存行大小。硬编码 128。
+/// Cache line size. Hardcoded to 128.
 ///
-/// 为什么是 128：Apple Silicon 的 `sysctl hw.cachelinesize` 报 **128**。
-/// 按习惯性的 64 对齐的话，生产者与消费者的索引仍可能落在同一条 128 字节
-/// 缓存行上，false sharing 依然存在 —— 实测跨核弹跳会让无锁队列的每条目成本
-/// 从个位数纳秒涨到 60+ 纳秒。
+/// Why 128: Apple Silicon reports **128** for `sysctl hw.cachelinesize`.
+/// Aligning to the usual 64 bytes means the producer and consumer indices can still land
+/// on the same 128-byte cache line, so false sharing remains -- measured cross-core
+/// bouncing raises the per-entry cost of the lock-free queue from single-digit nanoseconds
+/// to 60+ nanoseconds.
 ///
-/// 为什么**不用** `std::hardware_destructive_interference_size`：
-/// 它在 Apple libc++ 上确实存在（在 `<new>` 里，`__cpp_lib_hardware_interference_size`
-/// = 201703），但报的是 **256**（constructive 报 64），与真实的 128 不符。
-/// 用它会把所有填充翻倍，白白浪费一倍的缓存与内存，还会引入跨 TU 的 ABI 警告。
-/// 实测硬件值才是对的，所以硬编码。
+/// Why **not** `std::hardware_destructive_interference_size`:
+/// It does exist in Apple libc++ (in `<new>`, `__cpp_lib_hardware_interference_size`
+/// = 201703), but it reports **256** (constructive reports 64), which does not match the
+/// real 128. Using it doubles every padding, wastes twice the cache and memory, and
+/// introduces cross-TU ABI warnings.
+/// The measured hardware value is the right one, so it is hardcoded.
 inline constexpr std::size_t kCacheLineSize = 128;
 
-/// 让成员独占一条缓存行的对齐说明符。
+/// Alignment specifier that gives a member its own cache line.
 #define TETHERKIT_CACHE_ALIGNED alignas(::tetherkit::kCacheLineSize)
 
 }  // namespace tetherkit

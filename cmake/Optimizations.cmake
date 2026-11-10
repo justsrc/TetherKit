@@ -1,26 +1,31 @@
-# Optimizations.cmake —— 数据路径优化选项
+# Optimizations.cmake -- data path optimization options.
 #
-# 提供 INTERFACE 目标 tetherkit_optimizations。
+# Provides the INTERFACE target tetherkit_optimizations.
 #
-# 设计取舍：
-#  * 默认不加 -march/-mcpu：Apple Silicon 的 baseline（armv8.4-a for M1）已经包含
-#    我们需要的一切（LSE 原子指令、NEON），额外的 -mcpu=native 收益很小却让产物
-#    绑定到具体芯片代次。需要时用 -DTETHERKIT_NATIVE_ARCH=ON 打开。
-#  * 不用 -O3：本项目热路径以 memcpy 与系统调用为主，-O3 的激进循环展开与向量化
-#    对此几乎无收益，反而增大代码体积、恶化 I-cache 命中。-O2（RelWithDebInfo 默认）
-#    是更优选择。
-#  * -fno-plt / -fvisibility=hidden 减少间接跳转与符号表体积。
+# Design trade-offs:
+#  * No -march/-mcpu by default: the Apple Silicon baseline (armv8.4-a for M1)
+#    already covers everything we need (LSE atomic instructions, NEON); the
+#    extra benefit of -mcpu=native is marginal while tying the binary to a
+#    specific chip generation. Turn it on with -DTETHERKIT_NATIVE_ARCH=ON
+#    when needed.
+#  * No -O3: the hot paths here are dominated by memcpy and syscalls, where
+#    -O3's aggressive loop unrolling and vectorization add almost nothing while
+#    growing code size and hurting I-cache hit rates. -O2 (RelWithDebInfo's
+#    default) is the better choice.
+#  * -fno-plt / -fvisibility=hidden trim indirect jumps and symbol table size.
 
 add_library(tetherkit_optimizations INTERFACE)
 
 target_compile_options(
   tetherkit_optimizations
   INTERFACE
-    # 内部符号默认隐藏：本项目不导出稳定 ABI，可让优化器更自由地内联。
+    # Hide internal symbols by default: this project exports no stable ABI,
+    # and hidden symbols leave the optimizer freer to inline.
     -fvisibility=hidden
     -fvisibility-inlines-hidden
-    # 严格别名对我们手写的线格式解析是危险的（大量 reinterpret_cast），关掉。
-    # 换来的代价很小：热路径的实际瓶颈是系统调用而非别名分析。
+    # Strict aliasing is dangerous for our handwritten wire-format parsing
+    # (heavy reinterpret_cast use), so turn it off. The cost is negligible:
+    # the hot paths' real bottleneck is syscalls, not alias analysis.
     -fno-strict-aliasing)
 
 if(TETHERKIT_NATIVE_ARCH)
@@ -29,7 +34,7 @@ if(TETHERKIT_NATIVE_ARCH)
   if(TK_HAS_MCPU_NATIVE)
     target_compile_options(tetherkit_optimizations INTERFACE -mcpu=native)
   else()
-    message(WARNING "编译器不支持 -mcpu=native，已跳过本机微架构优化。")
+    message(WARNING "The compiler does not support -mcpu=native; microarchitecture optimization skipped.")
   endif()
 endif()
 
@@ -40,6 +45,6 @@ if(TETHERKIT_ENABLE_LTO)
     set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE ON PARENT_SCOPE)
     set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELWITHDEBINFO ON PARENT_SCOPE)
   else()
-    message(WARNING "不支持 LTO，已跳过：${TK_IPO_MSG}")
+    message(WARNING "LTO not supported, skipped: ${TK_IPO_MSG}")
   endif()
 endif()

@@ -1,8 +1,9 @@
-# tk_common —— 基础设施层
+# tk_common -- the infrastructure layer
 #
-# 不依赖任何上层模块，也不依赖 libusb / 网络系统调用。唯一的外部依赖是
-# libusb 的头文件（error.cc 需要 libusb_error_name 来翻译错误码），因此
-# 以 PRIVATE 方式链接，不把 libusb 传播给 tk_common 的使用者。
+# Depends on no higher-level module, nor on libusb / network syscalls. Its only
+# external dependency is libusb's headers (error.cc needs libusb_error_name to
+# translate error codes), so it is linked PRIVATEly and libusb is not propagated
+# to tk_common's consumers.
 
 add_library(
   tk_common STATIC

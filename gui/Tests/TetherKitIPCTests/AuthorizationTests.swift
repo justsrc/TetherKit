@@ -3,27 +3,31 @@ import XCTest
 
 @testable import TetherKitIPC
 
-/// 授权凭据生命周期的回归测试。
+/// Regression tests for the authorization credential lifecycle.
 ///
-/// ★ 这里钉住的是一个真实踩过的坑 ★
-///   `AuthorizationMakeExternalForm` 产出的 32 字节**不是凭据本身**，只是指向
-///   securityd 里那份授权的一把钥匙。App 侧一旦提前把 AuthorizationRef 释放
-///   （尤其是带 `.destroyRights`），helper 还原时就会失败 —— 而失败信息只有一个
-///   `-60005`，从代码上完全看不出「是被自己提前销毁的」。
+/// This pins down a real pitfall that was hit:
+///   The 32 bytes produced by `AuthorizationMakeExternalForm` are not the
+///   credential itself, only a key pointing at that authorization inside
+///   securityd. If the App side releases the AuthorizationRef early (especially
+///   with `.destroyRights`), the helper's restore will fail -- and the failure
+///   message is just `-60005`, with nothing in the code indicating "it was
+///   destroyed by us ahead of time".
 ///
-///   这些用例**不会弹授权框**：只调 `AuthorizationCreate`（建立空的授权会话），
-///   不调 `AuthorizationCopyRights`，所以不需要任何用户交互，可以放进 CI。
+///   These cases never show an authorization dialog: they only call
+///   `AuthorizationCreate` (to establish an empty authorization session), never
+///   `AuthorizationCopyRights`, so they need no user interaction and can run in
+///   CI.
 final class AuthorizationTests: XCTestCase {
-    /// 把 AuthorizationRef 外部化。
+    /// Externalize an AuthorizationRef.
     private func externalForm(of authorization: AuthorizationRef) throws -> Data {
         var external = AuthorizationExternalForm()
         let status = AuthorizationMakeExternalForm(authorization, &external)
         try XCTSkipUnless(status == errAuthorizationSuccess,
-                          "AuthorizationMakeExternalForm 失败（\(status)），跳过")
+                          "AuthorizationMakeExternalForm failed (\(status)), skipping")
         return withUnsafeBytes(of: &external) { Data($0) }
     }
 
-    /// 模拟 helper 侧的还原，返回状态码。
+    /// Simulate the helper-side restore and return the status code.
     private func restore(_ data: Data) -> OSStatus {
         var external = AuthorizationExternalForm()
         _ = withUnsafeMutableBytes(of: &external) { destination in
@@ -37,7 +41,8 @@ final class AuthorizationTests: XCTestCase {
         return status
     }
 
-    /// 令牌活着时，另一侧能还原出来。这是正常路径。
+    /// While the token is alive, the other side can restore it. This is the
+    /// normal path.
     func testExternalFormRestorableWhileTokenAlive() throws {
         var authorization: AuthorizationRef?
         XCTAssertEqual(AuthorizationCreate(nil, nil, [], &authorization), errAuthorizationSuccess)
@@ -47,15 +52,17 @@ final class AuthorizationTests: XCTestCase {
                                        externalForm: try externalForm(of: reference))
 
         XCTAssertEqual(restore(token.externalForm), errAuthorizationSuccess,
-                       "令牌还活着的时候，helper 侧必须能还原出凭据")
+                       "while the token is alive, the helper side must be able to restore the credential")
 
         withExtendedLifetime(token) {}
     }
 
-    /// 令牌被释放后就还原不出来了 —— 这正是当初 -60005 的成因。
+    /// Once the token is released, it can no longer be restored -- this was
+    /// exactly the cause of -60005.
     ///
-    /// 反过来说：这条用例一旦变红，说明「提前释放也没事」，那 AuthorizationToken
-    /// 这一整层就没有存在意义了，应该先搞清楚系统行为变了什么再动它。
+    /// Conversely, if this case ever turns red, it means "early release is fine
+    /// now", and the entire AuthorizationToken layer has no reason to exist; the
+    /// system behavior change should be understood before touching it.
     func testExternalFormUnusableAfterTokenReleased() throws {
         var authorization: AuthorizationRef?
         XCTAssertEqual(AuthorizationCreate(nil, nil, [], &authorization), errAuthorizationSuccess)
@@ -66,9 +73,9 @@ final class AuthorizationTests: XCTestCase {
             let token = AuthorizationToken(authorization: reference,
                                            externalForm: try externalForm(of: reference))
             capturedForm = token.externalForm
-        }  // token 在这里析构，连同权利一起销毁
+        }  // token deinit runs here, destroying the rights with it
 
         XCTAssertEqual(restore(capturedForm), errAuthorizationDenied,
-                       "令牌释放后外部形式必须失效；当初就是它导致了 -60005")
+                       "the external form must be invalid after the token is released; this was the cause of -60005")
     }
 }

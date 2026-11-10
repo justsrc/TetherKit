@@ -3,13 +3,15 @@ import TetherKitCore
 import TetherKitIPC
 import TetherKitUIModel
 
-/// 上网方式配置：DHCP 或静态 IP。
+/// Network access mode configuration: DHCP or a static IP.
 ///
-/// ★ 「当前生效」一栏为什么单独存在 ★
-///   它显示的是**从系统回读**的状态，不是我们下发的值。两者可能不同 ——
-///   最典型的是静态模式下的 DNS：IPConfiguration 只在 DHCP 模式发布 DNS，
-///   静态模式我们只能尽力而为地补一个键，能不能被系统采纳取决于 IPMonitor。
-///   与其向用户承诺一个可能不成立的结果，不如把真实状态摆出来。
+/// Why the "currently effective" row exists on its own:
+///   It shows the state **read back from the system**, not the value we
+///   pushed. The two can differ -- the most typical case is DNS in static
+///   mode: IPConfiguration only publishes DNS in DHCP mode, and in static
+///   mode all we can do is add a key on a best-effort basis; whether the
+///   system adopts it depends on IPMonitor. Rather than promise the user
+///   a result that may not hold, show the real state.
 ///
 /// This card lives on the "Network" page with the full content width
 /// to itself. The two-column grid works on a full-width page: a single
@@ -18,17 +20,21 @@ import TetherKitUIModel
 struct NetworkCard: View {
     @Bindable var model: AppModel
 
-    /// 网卡还没创建时整块禁用 —— 没有网卡可配，让用户填完再报错是最糟的顺序。
+    /// The whole block is disabled while the interface does not exist yet
+    /// -- with no interface to configure, making the user fill in the form
+    /// and only then report an error is the worst possible order.
     private var interfaceReady: Bool { !model.status.systemInterface.isEmpty }
 
     private var canAddDNS: Bool {
-        // 上限与 C ABI 的 TK_DNS_MAX 一致，多填的会被丢弃，不如直接不让加。
+        // The cap matches TK_DNS_MAX in the C ABI; extra entries would
+        // be dropped, so it is better not to allow adding them at all.
         model.networkConfiguration.dnsServers.count < 4
     }
 
-    /// 静态 DNS 的悬停说明。它属于「什么时候需要在意」级别的信息，
-    /// 不值得常驻一行。
-    /// 计算属性而非 `static let`：后者只求值一次，切换语言后就不再更新了。
+    /// The tooltip for static DNS. It is "when do I need to care" level
+    /// information and does not deserve a permanent row.
+    /// A computed property rather than `static let`: the latter is
+    /// evaluated only once and stops updating after a language switch.
     private static var dnsHint: String { L(.dnsEffectivenessTooltip) }
 
     var body: some View {
@@ -138,7 +144,9 @@ struct NetworkCard: View {
                     dnsField(at: 0)
                 }
             }
-            // 第 2 条起的 DNS 各占一行的右格，左格空着 —— 和上面的 DNS 对齐。
+            // From the 2nd entry on, each DNS row occupies the right
+            // cell of a row and the left cell stays empty -- so they line
+            // up with the DNS field above.
             ForEach(Array(model.networkConfiguration.dnsServers.indices.dropFirst()),
                     id: \.self) { index in
                 GridRow {
@@ -149,7 +157,8 @@ struct NetworkCard: View {
         }
     }
 
-    /// 一条 DNS：输入格 + 删除，最后一条再带一个「添加」。
+    /// One DNS entry: the input field plus a delete button, and the last
+    /// entry also carries an "add" button.
     private func dnsField(at index: Int) -> some View {
         HStack(spacing: Design.Spacing.tight) {
             AddressField(label: index == 0 ? "DNS" : "",
@@ -179,7 +188,8 @@ struct NetworkCard: View {
         .help(Self.dnsHint)
     }
 
-    /// 一条 DNS 都没有时占住格子的「添加」。
+    /// The "add" that occupies the cell when there is no DNS entry at
+    /// all.
     private var emptyDNSCell: some View {
         HStack(spacing: Design.Spacing.tight) {
             Text("DNS")
@@ -237,13 +247,17 @@ struct NetworkCard: View {
     }
 }
 
-/// 一个带即时校验反馈的紧凑地址输入框：标签在左，校验图标叠在输入框内侧
-/// （两列布局里每一点宽度都金贵）。
+/// A compact address input field with immediate validation feedback: the
+/// label on the left, the validation icon overlaid on the inside edge of
+/// the field (in a two-column layout every pixel of width is precious).
 ///
-/// 校验放在输入时而不是提交时：地址填错是最常见的操作失误，等点了「应用」再报错
-/// 会让用户来回猜是哪一格错了。
+/// Validation happens while typing rather than on submit: a mistyped
+/// address is the most common mistake, and reporting it only after
+/// pressing "Apply" makes the user guess back and forth which field is
+/// wrong.
 private struct AddressField: View {
-    /// 标签列宽。回读区的标签也用它，两块的竖向对齐线才是同一条。
+    /// The label column width. The readback area uses it too, so the
+    /// vertical alignment line of the two blocks is the same one.
     static let labelWidth: CGFloat = 56
 
     let label: String
@@ -262,7 +276,8 @@ private struct AddressField: View {
                 .textFieldStyle(.roundedBorder)
                 .font(.system(.callout, design: .monospaced))
                 .overlay(alignment: .trailing) {
-                    // 空输入不标红：还没填完不算错。
+                    // An empty input is not marked red: an unfinished
+                    // entry is not a mistake yet.
                     if !text.isEmpty {
                         Image(systemName: isValid ? "checkmark.circle.fill"
                                                   : "exclamationmark.circle.fill")
@@ -276,7 +291,7 @@ private struct AddressField: View {
     }
 }
 
-/// 从系统回读的真实生效状态。
+/// The real effective state, read back from the system.
 private struct EffectiveStateView: View {
     let state: NetworkState
     let interface: String
@@ -299,8 +314,11 @@ private struct EffectiveStateView: View {
             }
 
             if state.hasAddress {
-                // 两列四格而不是四行：这是纯展示区，紧凑优先。放不下的值
-                // （多条 DNS）中截显示，悬停能看全，也能选中复制。
+                // Two columns of four cells rather than four rows: this
+                // is a pure display area, compactness first. Values that
+                // do not fit (multiple DNS entries) are shown truncated,
+                // and the tooltip shows the whole thing and allows
+                // selecting and copying it.
                 Grid(alignment: .leading,
                      horizontalSpacing: Design.Spacing.medium,
                      verticalSpacing: Design.Spacing.tight) {

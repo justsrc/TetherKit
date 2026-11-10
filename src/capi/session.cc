@@ -1,7 +1,8 @@
-// 会话的 C ABI：生命周期、状态快照、事件轮询。
+// The C ABI of the session: lifecycle, status snapshot, event polling.
 //
-// 这一层几乎没有逻辑，只做三件事：POD 配置 → RuntimeConfig、RuntimeSnapshot →
-// POD 状态、RuntimeEvent → 环形队列。真正的编排全在 core::Runtime 里。
+// This layer holds almost no logic; it does three things: POD config ->
+// RuntimeConfig, RuntimeSnapshot -> POD status, RuntimeEvent -> ring queue.
+// The real orchestration lives in core::Runtime.
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -31,11 +32,13 @@ using tetherkit::core::RunState;
 using tetherkit::core::RuntimeEvent;
 
 // ---------------------------------------------------------------------------
-// 枚举值对齐检查
+// Enum value alignment check
 //
-// C 侧的枚举是照 C++ 侧抄的数值，两边靠「顺序恰好一致」直接强转。这种耦合一旦
-// 有人在中间插入一个枚举值就会静默错位（界面显示错状态，且没有任何报错），
-// 所以在编译期把它焊死。
+// The C-side enums copy the numeric values of the C++ side and rely on a
+// direct cast plus "the order happens to match". That coupling goes silently
+// wrong the moment someone inserts an enum value in the middle (the UI shows
+// the wrong status, and nothing reports an error), so it is nailed down at
+// compile time.
 // ---------------------------------------------------------------------------
 static_assert(static_cast<int>(RunState::kIdle) == TK_RUN_IDLE);
 static_assert(static_cast<int>(RunState::kStarting) == TK_RUN_STARTING);
@@ -58,16 +61,19 @@ static_assert(static_cast<int>(RuntimeEvent::Kind::kDeviceReset) == TK_EVENT_DEV
 static_assert(static_cast<int>(RuntimeEvent::Kind::kFatal) == TK_EVENT_FATAL);
 static_assert(static_cast<int>(RuntimeEvent::Kind::kRunState) == TK_EVENT_RUN_STATE);
 
-/// 事件环形缓冲。
+/// The event ring buffer.
 ///
-/// 容量 128 的依据：事件只在状态迁移时产生，一次完整的启动序列约 10 条。128
-/// 足以覆盖「设备反复插拔 + 链路抖动」这类连续事件，而 GUI 每 500 ms 就会取空。
-/// 满了丢最旧 —— 事件只用于做动画和提示，权威状态在快照里，漏几条不影响正确性。
+/// Why a capacity of 128: events are only produced on state transitions, and a
+/// full startup sequence is about 10 of them. 128 is enough to cover bursts
+/// like "the device is plugged and unplugged repeatedly plus link flapping",
+/// and the GUI drains it every 500 ms. The oldest is dropped when it fills --
+/// events only drive animations and notifications, the authoritative state is
+/// in the snapshot, and missing a few does not affect correctness.
 constexpr std::size_t kEventRingCapacity = 128;
 
 class EventRing final : public tetherkit::core::RuntimeEventSink {
  public:
-  /// 由控制线程调用。
+  /// Called by the control thread.
   void OnRuntimeEvent(const RuntimeEvent& event) noexcept override {
     const std::lock_guard<std::mutex> guard(mutex_);
     if (count_ == kEventRingCapacity) {
@@ -83,7 +89,7 @@ class EventRing final : public tetherkit::core::RuntimeEventSink {
     ++count_;
   }
 
-  /// 由宿主线程调用。
+  /// Called by the host thread.
   std::size_t Drain(tk_event_t* out_events, std::size_t capacity) noexcept {
     const std::lock_guard<std::mutex> guard(mutex_);
     std::size_t taken = 0;
@@ -105,10 +111,12 @@ class EventRing final : public tetherkit::core::RuntimeEventSink {
   std::size_t count_ = 0;
 };
 
-/// 取值，0 视作「用库的默认值」。
+/// Reads a value, treating 0 as "use the library default".
 ///
-/// 对调优旋钮宽容而不是报错：GUI 可能只关心 MTU，把其余字段留空，硬要求它们
-/// 非零只会逼调用方复制一遍默认值 —— 而复制出来的常量迟早和库里的不同步。
+/// Being lenient about the tuning knobs instead of erroring out: the GUI may
+/// only care about the MTU and leave the rest at zero, and demanding non-zero
+/// values would only force the caller to copy the defaults -- and copied
+/// constants drift out of sync with the library sooner or later.
 [[nodiscard]] std::uint32_t OrDefault(std::uint32_t value, std::uint32_t fallback) noexcept {
   return value != 0 ? value : fallback;
 }
@@ -143,12 +151,14 @@ class EventRing final : public tetherkit::core::RuntimeEventSink {
 
 }  // namespace
 
-// 会话对象。
+// The session object.
 //
-// ★ 成员声明顺序即销毁顺序的倒序，这里不能乱调 ★
-//   events 必须声明在 runtime **之前**，这样销毁时 runtime 先走 —— 它的析构
-//   会 join 控制线程，而控制线程直到最后一刻都可能往 events 里塞事件。
-//   反过来就是 use-after-free。
+//  The declaration order of the members is the reverse of the destruction
+//   order, and it must not be rearranged
+//   events has to be declared **before** runtime, so that runtime is destroyed
+//   first -- its destructor joins the control thread, and the control thread
+//   may push events into events until the very last moment.
+//   The other way around is a use-after-free.
 struct tk_session {
   EventRing events;
   std::unique_ptr<tetherkit::core::Runtime> runtime;
@@ -177,8 +187,10 @@ tk_session_t* tk_session_create(const tk_session_config_t* config, tk_error_t* o
     return nullptr;
   }
 
-  // 会话是唯一会创建 feth 的入口，登记回调在这里装上就够 —— 免 root 的那组
-  // 接口（版本、枚举、预检）因此保持零副作用，不会去碰 /var/run。
+  // The session is the only entry point that creates an feth, so installing
+  // the registry callback here is enough -- the root-free group of entry
+  // points (version, enumeration, preflight) therefore stays free of side
+  // effects and never touches /var/run.
   tetherkit::capi::InstallInterfaceRegistry();
 
   auto session = std::unique_ptr<tk_session>(new (std::nothrow) tk_session());
@@ -205,8 +217,9 @@ tk_result_t tk_session_start(tk_session_t* session, tk_error_t* out_error) {
 
   if (const auto status = session->runtime->Start(); !status) {
     FillError(out_error, status.error());
-    // 唯一会同步失败的是 root 检查（见 Runtime::Start），单独给个专门的码，
-    // GUI 好据此弹「需要授权」而不是笼统的「启动失败」。
+    // The only synchronous failure is the root check (see Runtime::Start), so
+    // it gets a dedicated code -- that lets the GUI pop up "authorization
+    // required" instead of a generic "start failed".
     return tetherkit::net::IsRunningAsRoot() ? TK_ERR_FAILED : TK_ERR_PERMISSION;
   }
   return TK_OK;
@@ -221,7 +234,8 @@ tk_result_t tk_session_stop(tk_session_t* session) {
 }
 
 void tk_session_destroy(tk_session_t* session) {
-  // Runtime 的析构会 Stop()（幂等），所以这里直接 delete 就够。
+  // The Runtime destructor calls Stop() (idempotent), so a plain delete is
+  // enough here.
   delete session;  // NOLINT(cppcoreguidelines-owning-memory)
 }
 
@@ -243,8 +257,10 @@ tk_result_t tk_session_status_get(tk_session_t* session, tk_session_status_t* ou
   CopyText(out_status->vendor_description, snapshot.device_info.vendor_description);
   CopyText(out_status->device_description, snapshot.device_description);
 
-  // 用 permanent 而非 current：RNDIS 语义下设备就是这块网卡，对端的 ARP 表与
-  // DHCP 租约都按永久地址建立，界面上显示它才对得上用户在路由器里看到的条目。
+  // The permanent address rather than the current one: under RNDIS semantics
+  // the device *is* this interface, and the peer's ARP table and DHCP lease
+  // are both built from the permanent address, so showing it in the UI is
+  // what matches what the user sees on the router.
   static_assert(sizeof(out_status->device_mac) ==
                 std::tuple_size_v<tetherkit::rndis::MacAddress>);
   std::ranges::copy(snapshot.device_info.permanent_address, std::begin(out_status->device_mac));
@@ -262,8 +278,10 @@ tk_result_t tk_session_status_get(tk_session_t* session, tk_session_status_t* ou
   out_status->link_kernel_drops = snapshot.bridge.link_kernel_drops;
   out_status->tx_backpressure = snapshot.bridge.tx_backpressure_events;
 
-  // 用库这边的单调时钟给快照打时间戳，而不是让宿主用自己的时钟做差：
-  // 两次拉取之间的真实间隔会被调度拉长，用宿主的定时器周期当分母会把速率算高。
+  // The snapshot is timestamped with the library's monotonic clock rather
+  // than letting the host difference its own clock readings: scheduling
+  // stretches the real interval between two fetches, and using the host's
+  // timer period as the denominator overstates the rate.
   out_status->monotonic_nanos = static_cast<std::int64_t>(tetherkit::MonotonicNanos());
 
   CopyText(out_status->fatal, snapshot.fatal_message);

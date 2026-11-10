@@ -1,7 +1,8 @@
-# tk_core —— 数据路径桥接与运行时编排
+# tk_core -- data-path bridging and runtime orchestration
 #
-# 把 tk_usb 的 RNDIS 数据通道与 tk_net 的链路后端对接起来，并管理数据路径线程。
-# 它是唯一同时依赖 usb / net / rndis 三个模块的层。
+# Wires tk_usb's RNDIS data channel to tk_net's link backend and manages the
+# data-path threads. It is the only layer that depends on all three of
+# usb / net / rndis at once.
 
 add_library(
   tk_core STATIC

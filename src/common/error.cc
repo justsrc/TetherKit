@@ -9,13 +9,15 @@
 namespace tetherkit {
 namespace {
 
-/// 线程安全的 strerror。
+/// Thread-safe strerror.
 ///
-/// 不能用 std::strerror：它返回指向静态缓冲的指针，多线程同时调用会互相覆盖
-/// （clang-tidy 的 concurrency-mt-unsafe 就在提示这点）。
+/// std::strerror cannot be used: it returns a pointer to a static buffer, and
+/// concurrent calls from multiple threads overwrite each other (clang-tidy's
+/// concurrency-mt-unsafe exists precisely to flag this).
 std::string SafeStrerror(int err) {
   std::array<char, 128> buffer{};
-  // Darwin 提供 XSI 版 strerror_r，返回 int：0 成功，ERANGE 表示缓冲太小。
+  // Darwin provides the XSI variant of strerror_r, which returns int:
+  // 0 on success, ERANGE when the buffer is too small.
   if (::strerror_r(err, buffer.data(), buffer.size()) != 0) {
     return std::format("errno {}", err);
   }
@@ -40,9 +42,11 @@ std::string Error::ToString() const {
     }
 
     case ErrorDomain::kRndis: {
-      // RNDIS_STATUS_* 到名字的映射只存在于 tk_rndis（rndis/protocol.cc），
-      // tk_common 不允许依赖上层模块，因此这里只输出原始数值 ——
-      // 状态码的符号名由 rndis 层在构造 Error 时拼进 context 串。
+      // The RNDIS_STATUS_* to name mapping only lives in tk_rndis
+      // (rndis/protocol.cc); tk_common is not allowed to depend on upper
+      // modules, so this just prints the raw numeric value --
+      // the rndis layer bakes the status code's symbolic name into the
+      // context string when it constructs the Error.
       return std::format("{} [RNDIS_STATUS: {:#010x}]", context_,
                          static_cast<std::uint32_t>(code_));
     }

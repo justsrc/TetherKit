@@ -2,28 +2,37 @@ import Darwin
 import TetherKitIPC
 import Foundation
 
-/// 「App 内一键安装 / 卸载」的执行入口：本二进制以 `--install` 或 `--uninstall`
-/// 参数被 AEWP 拉起时接管进程，把自己所在载荷目录里对应的脚本以真 root 跑一遍。
+/// Execution entry for "one-click install / uninstall from the App": when this
+/// binary is launched by AEWP with `--install` or `--uninstall`, it takes over
+/// the process and runs the corresponding script from its own payload directory
+/// as real root.
 ///
-/// ★ 为什么需要这个模式，而不是让 App 直接 AEWP 安装脚本 ★
+/// Why this mode is needed instead of having the App run the install script
+/// through AEWP directly:
 ///
-///   AEWP 的 setuid 载体（security_authtrampoline）给子进程的凭据是
-///   euid=0 / ruid=调用者。而 bash 在 euid ≠ ruid 且未带 -p 时会把 euid 降回
-///   ruid —— 这是防 setuid 脚本的老规矩，zsh、dash 同理。于是脚本开头的
-///   root 检查必然报「需要 root 权限」。**真机踩过，不是理论推演。**
+///   AEWP's setuid carrier (security_authtrampoline) gives the child process
+///   credentials euid=0 / ruid=caller. bash drops euid back to ruid when
+///   euid != ruid and -p is not set -- an old rule against setuid scripts, and
+///   zsh/dash behave the same. The root check at the top of the script then
+///   inevitably reports "root required". Confirmed on a real machine, not a
+///   theoretical deduction.
 ///
-///   二进制不受这条规矩管。这里以 euid=0 起步，setuid(0) 把 ruid/suid 一并
-///   归零，得到与 sudo 完全相同的凭据；随后 exec 的脚本连同它的全部子进程
-///   （cp、chown、launchctl）都不再有任何凭据歧义。
+///   Binaries are not subject to that rule. Starting here with euid=0, setuid(0)
+///   zeroes ruid/suid as well, yielding credentials identical to sudo; the
+///   script exec'd afterward, together with all its child processes (cp, chown,
+///   launchctl), then has no credential ambiguity.
 ///
-/// ★ 三个细节 ★
-///   * stderr 并进 stdout：AEWP 只给一根连 stdout 的管道，脚本的 die 全走
-///     stderr，不合流 App 那边就看不到失败原因。放在最前面，连 setuid 失败
-///     的报错也要能到达管道。
-///   * setgid 必须在 setuid **之前** —— 反过来 euid 已经不是 0，setgid 会失败。
-///   * 脚本路径取自本可执行文件所在目录：载荷是平铺的，拷到哪都成立。
-///     装进 /Library/PrivilegedHelperTools 的那份旁边没有脚本，会得到明确
-///     报错而不是误装。
+/// Three details:
+///   * stderr is merged into stdout: AEWP provides only a pipe connected to
+///     stdout, and the script's die paths go to stderr; without merging, the App
+///     side cannot see the failure reason. Do this first so that even a setuid
+///     failure reaches the pipe.
+///   * setgid must come before setuid -- the other way around, euid is no longer
+///     0 and setgid will fail.
+///   * The script path is taken from this executable's directory: the payload is
+///     flat, so it works wherever it is copied. The copy installed in
+///     /Library/PrivilegedHelperTools has no scripts beside it and will produce
+///     a clear error instead of a mis-install.
 func runInstallerModeIfRequested() {
     let scriptName: String
     switch CommandLine.arguments.dropFirst().first {
@@ -49,7 +58,7 @@ func runInstallerModeIfRequested() {
         exit(1)
     }
 
-    // execv 不返回；返回即失败。
+    // execv does not return; returning means failure.
     var argv: [UnsafeMutablePointer<CChar>?] = [strdup("/bin/bash"), strdup(script), nil]
     execv("/bin/bash", &argv)
     perror("execv /bin/bash")

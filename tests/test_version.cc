@@ -1,18 +1,18 @@
-// 版本信息的冒烟测试：确认 CMake 的版本注入链路是通的。
+// Smoke tests for the version info: confirms the CMake version-injection
+// pipeline is wired up.
 #include <doctest.h>
 
 #include "tetherkit/version.h"
 
 TEST_SUITE("version") {
+  TEST_CASE("Version number is not all zeros") {
+    const auto v = tetherkit::GetVersion();
+    CHECK((v.major != 0 || v.minor != 0 || v.patch != 0));
+  }
 
-TEST_CASE("版本号非全零") {
-  const auto v = tetherkit::GetVersion();
-  CHECK((v.major != 0 || v.minor != 0 || v.patch != 0));
-}
-
-TEST_CASE("版本串包含项目名") {
-  const std::string_view s = tetherkit::GetVersionString();
-  CHECK(s.find("TetherKit") != std::string_view::npos);
-}
+  TEST_CASE("Version string contains the project name") {
+    const std::string_view s = tetherkit::GetVersionString();
+    CHECK(s.find("TetherKit") != std::string_view::npos);
+  }
 
 }  // TEST_SUITE("version")

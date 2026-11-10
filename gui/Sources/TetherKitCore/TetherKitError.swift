@@ -2,10 +2,10 @@ import CTetherKit
 import TetherKitIPC
 import Foundation
 
-/// 来自 C ABI 的错误。
+/// Error from the C ABI.
 ///
-/// `message` 已经是可以直接展示给用户的中文（库那边就是按这个标准写的），
-/// 界面不需要再翻译一次。
+/// `message` is already text that can be shown directly to the user (the library
+/// writes it to that standard), so the UI does not need to translate it again.
 public struct TetherKitError: LocalizedError, Sendable {
     public enum Domain: Int32, Sendable {
         case generic = 0
@@ -21,7 +21,8 @@ public struct TetherKitError: LocalizedError, Sendable {
 
     public var errorDescription: String? { message }
 
-    /// 是否是「缺少权限」—— 界面据此决定弹授权还是报错。
+    /// Whether this is "permission denied" -- the UI uses this to decide between
+    /// requesting authorization and reporting an error.
     public var isPermissionDenied: Bool { result == TK_ERR_PERMISSION.rawValue }
 
     init(result: Int32, error: tk_error_t) {
@@ -29,8 +30,10 @@ public struct TetherKitError: LocalizedError, Sendable {
         self.domain = Domain(rawValue: error.domain) ?? .generic
         self.code = error.code
         let text = String(fixedCArray: error.message)
-        // C 侧在参数校验失败的分支上未必填了消息（比如纯空指针检查），
-        // 这时给一句兜底的，总比界面上出现一个空的错误框强。
+        // The C side does not always fill in a message on argument-validation
+        // failure paths (for example, a plain null-pointer check), so provide a
+        // backstop message here -- better than showing an empty error box in the
+        // UI.
         self.message = text.isEmpty ? L(.libraryGenericFailure, Int(result)) : text
     }
 
@@ -42,7 +45,7 @@ public struct TetherKitError: LocalizedError, Sendable {
     }
 }
 
-/// 把 C 的返回码 + 错误结构体翻译成 Swift 的抛出。
+/// Translate a C result code + error struct into a Swift throw.
 func check(_ result: tk_result_t, _ error: tk_error_t) throws {
     guard result != TK_OK else { return }
     throw TetherKitError(result: result.rawValue, error: error)

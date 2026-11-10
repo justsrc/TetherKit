@@ -1,15 +1,19 @@
 import SwiftUI
 import TetherKitIPC
 
-/// 界面的设计语言。
+/// The design language of the UI.
 ///
-/// 集中定义间距、圆角、颜色与几个复用容器，目的只有一个：**让每一处的视觉决定
-/// 只做一次**。散落在各个 View 里的魔数会在加新面板时慢慢走形，而这类走形没有
-/// 任何自动化手段能发现。
+/// Spacing, corner radii, colors and a few reusable containers are defined
+/// in one place for a single purpose: **make every visual decision
+/// exactly once**. Magic numbers scattered across the views slowly drift
+/// apart as new panels are added, and no automated means can detect that
+/// kind of drift.
 enum Design {
-    // MARK: - 尺寸
+    // MARK: - Sizes
 
-    /// 间距阶梯。按 4 的倍数递进 —— 与系统控件的内部留白同源，混排时不会错位。
+    /// The spacing ladder. It progresses in multiples of 4 -- the same
+    /// origin as the internal padding of system controls, so mixed layouts
+    /// do not misalign.
     enum Spacing {
         static let tight: CGFloat = 6
         static let small: CGFloat = 10
@@ -18,7 +22,7 @@ enum Design {
         static let gutter: CGFloat = 12
         static let medium: CGFloat = 16
         static let large: CGFloat = 24
-        /// 卡片内边距。
+        /// The card padding.
         static let section: CGFloat = 16
     }
 
@@ -37,10 +41,11 @@ enum Design {
         static let height: CGFloat = 560
     }
 
-    // MARK: - 状态色
+    // MARK: - State colors
 
-    /// 会话状态对应的强调色。整个界面的色彩都由它驱动 —— 用户扫一眼颜色就知道
-    /// 现在是什么情况，不需要读文字。
+    /// The accent color for a session state. The whole UI is driven by it
+    /// -- a glance at the color tells the user what is going on, without
+    /// reading any text.
     static func accent(for state: RunState) -> Color {
         switch state {
         case .idle, .stopped: return .secondary
@@ -61,7 +66,7 @@ enum Design {
         }
     }
 
-    /// 状态圆环里的 SF Symbol。
+    /// The SF Symbol inside the status ring.
     static func statusSymbol(for status: SessionStatus) -> String {
         switch status.runState {
         case .idle, .stopped: return "bolt.horizontal"
@@ -81,13 +86,15 @@ enum Design {
     }
 }
 
-// MARK: - 复用容器
+// MARK: - Reusable containers
 
-/// 卡片容器。所有内容面板都用它包一层，保证圆角、留白、描边一致。
+/// The card container. Every content panel wraps itself in one, so the
+/// corner radius, the padding and the border stay consistent.
 struct Card<Content: View>: View {
     var title: String?
     var systemImage: String?
-    /// 标题右侧的附属视图（刷新按钮、状态徽标等）。
+    /// The accessory view to the right of the title (a refresh button, a
+    /// status badge, and the like).
     var accessory: AnyView?
     @ViewBuilder var content: () -> Content
 
@@ -119,8 +126,10 @@ struct Card<Content: View>: View {
         }
         .padding(Design.Spacing.section)
         .frame(maxWidth: .infinity, alignment: .leading)
-        // 用 material 而不是纯色：它会跟随浅色/深色外观与桌面背景，
-        // 是 macOS 上「现代」最省力也最不容易做错的一步。
+        // Use material rather than a flat color: it follows the
+        // light/dark appearance and the desktop background, which is the
+        // least-effort and least error-prone way to look "modern" on
+        // macOS.
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Design.Radius.card))
         .overlay(
             RoundedRectangle(cornerRadius: Design.Radius.card)
@@ -128,7 +137,7 @@ struct Card<Content: View>: View {
     }
 }
 
-/// 一格指标：上面是说明，下面是值。
+/// One metric tile: the caption on top, the value below.
 struct MetricTile: View {
     let caption: String
     let value: String
@@ -148,7 +157,8 @@ struct MetricTile: View {
             .foregroundStyle(.secondary)
 
             Text(value)
-                // 等宽数字：数值跳动时字符不会左右抖动。
+                // Monospaced digits: the characters do not jitter
+                // sideways when the value changes.
                 .font(.system(.title3, design: .rounded).weight(.medium))
                 .monospacedDigit()
                 .foregroundStyle(tint)
@@ -159,7 +169,8 @@ struct MetricTile: View {
     }
 }
 
-/// 小圆点徽标，用于「链路已连通 / 已断开」这类二元状态。
+/// A small dot badge, for binary states such as "link is up / link is
+/// down".
 struct StatusBadge: View {
     let text: String
     let color: Color
@@ -179,14 +190,17 @@ struct StatusBadge: View {
     }
 }
 
-// MARK: - 格式化
+// MARK: - Formatting
 
-/// 界面上所有数值的格式化都走这里，避免同一个量在不同面板显示成不同样子。
+/// Every number the UI shows is formatted here, so the same quantity
+/// never looks different in two panels.
 enum Format {
-    /// 速率。自动在 bit/s、Kbps、Mbps、Gbps 之间选单位。
+    /// A bit rate. The unit is picked automatically among bit/s, Kbps, Mbps
+    /// and Gbps.
     ///
-    /// 用 bit 而不是 byte：网络吞吐的行业惯例是 bit，和用户在路由器、
-    /// 运营商那里看到的口径一致。
+    /// Bits rather than bytes: the industry convention for network
+    /// throughput is bits, which matches what the user sees on a router or
+    /// at an ISP.
     static func bitrate(_ bitsPerSecond: Double) -> String {
         let units: [(threshold: Double, suffix: String, divisor: Double)] = [
             (1_000_000_000, "Gbps", 1_000_000_000),
@@ -199,27 +213,31 @@ enum Format {
         return String(format: "%.0f bps", max(0, bitsPerSecond))
     }
 
-    /// 累计字节数。
+    /// A cumulative byte count.
     static func bytes(_ value: UInt64) -> String {
-        // ByteCountFormatter 把 0 渲染成 "Zero KB"（它的本地化行为），
-        // 在一排数字里显得格外突兀，单独处理掉。
+        // ByteCountFormatter renders 0 as "Zero KB" (its localized
+        // behavior), which stands out badly in a row of numbers, so 0 is
+        // handled separately.
         guard value > 0 else { return "0 B" }
         let formatter = ByteCountFormatter()
         formatter.countStyle = .binary
         return formatter.string(fromByteCount: Int64(clamping: value))
     }
 
-    /// 大整数加千分位，便于读「12,345,678 帧」。
+    /// Large integers get thousands separators, so "12,345,678 frames" is
+    /// easy to read.
     static func count(_ value: UInt64) -> String {
         let formatter = NumberFormatter()
         formatter.numberStyle = .decimal
         return formatter.string(from: NSNumber(value: value)) ?? "\(value)"
     }
 
-    /// 菜单栏用的紧凑速率（如 "12.3M"、"999K"）。
+    /// The compact bit rate for the menu bar (for example "12.3M", "999K").
     ///
-    /// 菜单栏寸土寸金：单位压成单字母，1 Kbps 以下一律显示 "0K" ——
-    /// 那点流量在「瞟一眼菜单栏」的语境里就等于没有。
+    /// The menu bar has very little room: the unit is squeezed to a single
+    /// letter, and anything below 1 Kbps always shows as "0K" -- in the
+    /// "glance at the menu bar" context that much traffic simply does not
+    /// exist.
     static func compactBitrate(_ bitsPerSecond: Double) -> String {
         let value = max(0, bitsPerSecond)
         if value >= 1_000_000_000 { return String(format: "%.1fG", value / 1_000_000_000) }
@@ -244,7 +262,7 @@ enum Format {
         timeFormatter.string(from: date)
     }
 
-    /// 把秒数渲染成 "1:02:03" / "2:03"。
+    /// Render a number of seconds as "1:02:03" / "2:03".
     static func duration(_ seconds: TimeInterval) -> String {
         let total = Int(max(0, seconds))
         let hours = total / 3600

@@ -1,8 +1,9 @@
-# benchmarks —— 性能基准
+# benchmarks -- performance benchmarks
 #
-# 不引入 google/benchmark：本项目只需要「每帧纳秒数 / pps / Gbps」这三类指标，
-# 自带的轻量 harness（见 benchmarks/harness.h）足够，且能直接输出 Markdown
-# 汇总表写进 docs/BENCHMARKS.md，省掉一层解析。
+# google/benchmark is not introduced: this project only needs three kinds of metrics --
+# "nanoseconds per frame / pps / Gbps". The lightweight harness bundled here (see
+# benchmarks/harness.h) is sufficient and can directly output a Markdown summary table to
+# docs/BENCHMARKS.md, saving a parsing layer.
 
 add_executable(
   tetherkit_bench
@@ -12,6 +13,6 @@ add_executable(
   bench_rndis.cc
   harness.cc)
 
-# tk_core PUBLIC 链接了其余全部模块（基准要用到 rndis 编解码与 net loopback）。
+# tk_core PUBLIC-links all other modules (the benchmarks need the RNDIS codec and net loopback).
 target_link_libraries(tetherkit_bench PRIVATE tetherkit_base tk_version tk_core)
 target_include_directories(tetherkit_bench PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")

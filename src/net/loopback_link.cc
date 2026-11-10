@@ -50,7 +50,8 @@ Result<ReadBatch> LoopbackLink::ReadFrames() {
     inbound_.erase(inbound_.begin(), inbound_.begin() + static_cast<std::ptrdiff_t>(take));
   }
 
-  // 视图必须在下一次 ReadFrames 之前有效，所以数据留在 read_storage_ 里。
+  // The views must stay valid until the next ReadFrames, so the data lives on
+  // in read_storage_.
   for (const std::vector<std::byte>& frame : read_storage_) {
     read_views_.push_back(
         FrameView{.data = frame.data(), .length = static_cast<std::uint32_t>(frame.size())});
@@ -74,7 +75,8 @@ Result<WriteResult> LoopbackLink::WriteFrames(FrameBatch frames) {
       continue;
     }
     if (sent_.size() >= config_.sent_capacity) {
-      // 与真实 BPF 一致：写不下就停，让调用方从 frames_written 看出没写完。
+      // Same contract as real BPF: stop when the write cannot fit, and let the
+      // caller infer the shortfall from frames_written.
       break;
     }
     sent_.emplace_back(frame.data, frame.data + frame.length);

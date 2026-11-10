@@ -20,21 +20,23 @@
 namespace tetherkit::net {
 namespace {
 
-/// 遍历 /dev/bpf%d 的上限。
+/// The upper limit for scanning /dev/bpf%d.
 ///
-/// 内核在打开当前最后一个节点时会按需再造一个（bpfopen 里
-/// `if (minor(dev) == nbpfilter - 1) bpf_make_dev_t(...)`），上限由 sysctl
-/// debug.bpf_maxdevices 控制（本机 256）。这里取 256 与之对齐。
+/// The kernel recreates a node on demand when the current last node is opened
+/// (`if (minor(dev) == nbpfilter - 1) bpf_make_dev_t(...)` inside bpfopen);
+/// the ceiling is controlled by the sysctl debug.bpf_maxdevices (256 on this
+/// machine). This constant takes 256 to match.
 constexpr int kMaxBpfDeviceIndex = 256;
 
-/// 批量写时一次 write() 的字节上限。
+/// The per-write() byte ceiling for batched writes.
 ///
-/// 内核允许的绝对上限是 BPF_WRITE_MAX = 16 MiB，但没必要用那么大：
-/// 256 KiB 已能装下上百个满帧，单次系统调用的固定开销早就被摊薄了，
-/// 而更大的组装缓冲只会恶化 L2 缓存命中。
+/// The kernel's absolute ceiling is BPF_WRITE_MAX = 16 MiB, but that large is
+/// unnecessary: 256 KiB already fits over a hundred full frames and the fixed
+/// per-syscall overhead has long since been amortized, while a bigger assembly
+/// buffer only hurts L2 cache hits.
 constexpr std::size_t kMaxBatchWriteBytes = std::size_t{256} * 1024;
 
-/// 一次 ioctl，失败时把 errno 与调用名包进 Error。
+/// One ioctl; on failure wraps errno and the call name into an Error.
 [[nodiscard]] Status CallIoctl(int fd, unsigned long request, void* argument,
                                std::string_view what) {
   if (::ioctl(fd, request, argument) < 0) {
@@ -43,11 +45,13 @@ constexpr std::size_t kMaxBatchWriteBytes = std::size_t{256} * 1024;
   return Ok();
 }
 
-/// 尝试一个**可选**的 ioctl：失败不算错误，只返回是否成功。
+/// Attempts an **optional** ioctl: a failure is not an error, just a false
+/// return.
 [[nodiscard]] bool TryOptionalIoctl(int fd, unsigned long request, void* argument,
                                     std::string_view what) {
   if (::ioctl(fd, request, argument) < 0) {
-    // ENOTTY / EINVAL 表示当前 macOS 版本不支持这个私有 ioctl，属于预期情况。
+    // ENOTTY / EINVAL means this macOS version does not know the private ioctl,
+    // an expected case.
     TETHERKIT_DEBUG_TR(Msg::kNetOptionalIoctlUnavailable, what, errno);
     return false;
   }
@@ -82,11 +86,12 @@ Result<std::unique_ptr<BpfLink>> BpfLink::Open(std::string_view interface_name,
   link->max_frame_bytes_ = config.max_frame_bytes;
 
   // ---------------------------------------------------------------------------
-  // 1. 打开 /dev/bpf%d
+  // 1. Open /dev/bpf%d
   //
-  // macOS **没有** /dev/bpf 克隆节点（实测 ls /dev/bpf → No such file），
-  // 必须逐个编号尝试：EBUSY 表示该 minor 已被别的进程占用，试下一个；
-  // ENOENT 表示已到内核当前造出的节点上限。
+  // macOS has **no** /dev/bpf clone node (measured: ls /dev/bpf -> No such
+  // file), so the numbered nodes must be tried one by one: EBUSY means someone
+  // else holds that minor, try the next; ENOENT means the kernel-made node
+  // ceiling has been reached.
   // ---------------------------------------------------------------------------
   int last_errno = 0;
   for (int index = 0; index < kMaxBpfDeviceIndex; ++index) {
@@ -99,16 +104,16 @@ Result<std::unique_ptr<BpfLink>> BpfLink::Open(std::string_view interface_name,
     }
     last_errno = errno;
     if (last_errno == EBUSY) {
-      continue;  // 被别的抓包程序占了，换下一个
+      continue;  // held by another capture program, try the next
     }
     if (last_errno == ENOENT) {
-      break;  // 已经到上限，不会再有更大编号的节点
+      break;  // ceiling reached; there will be no node with a higher number
     }
     if (last_errno == EACCES || last_errno == EPERM) {
       return std::unexpected(
           Error::FromErrno(last_errno, Tr(Msg::kNetBpfOpenDenied, path)));
     }
-    // 其它 errno：继续试下一个编号，最后统一报错。
+    // Any other errno: keep trying the next number, report at the end.
   }
 
   if (link->fd_ < 0) {
@@ -117,11 +122,12 @@ Result<std::unique_ptr<BpfLink>> BpfLink::Open(std::string_view interface_name,
   }
 
   // ---------------------------------------------------------------------------
-  // 2. BIOCSBLEN —— **必须在 BIOCSETIF 之前**
+  // 2. BIOCSBLEN -- **must come before BIOCSETIF**
   //
-  // bpf.c 里：`if (d->bd_bif != 0 || (d->bd_flags & BPF_DETACHING)) return EINVAL`。
-  // 而且超限时**不报错**，静默截到 BPF_BUFSIZE_CAP 并通过 _IOWR 把实际生效值
-  // 写回参数 —— 所以后面每次 read() 都必须用这个写回值当长度。
+  // In bpf.c: `if (d->bd_bif != 0 || (d->bd_flags & BPF_DETACHING)) return
+  // EINVAL`. And an over-limit value does **not** error; it is silently clamped
+  // to BPF_BUFSIZE_CAP and the effective value is written back through _IOWR --
+  // so every read() below must use this written-back value as the length.
   // ---------------------------------------------------------------------------
   auto buffer_bytes = static_cast<unsigned int>(config.kernel_buffer_bytes);
   TETHERKIT_RETURN_IF_ERROR(
@@ -132,21 +138,25 @@ Result<std::unique_ptr<BpfLink>> BpfLink::Open(std::string_view interface_name,
   }
 
   // ---------------------------------------------------------------------------
-  // 3. BIOCSHDRCMPLT = 1 —— **强制**，且必须在 BIOCSBATCHWRITE 之前
+  // 3. BIOCSHDRCMPLT = 1 -- **mandatory**, and must come before BIOCSBATCHWRITE
   //
-  // hdrcmplt=0 时 bpfwrite 会剥掉前 14 字节重建帧头（源 MAC 被驱动改写）；
-  // =1 才走 DLIL_OUTPUT_FLAGS_RAW 原样透传。批量写还硬性要求它是 1。
+  // With hdrcmplt=0, bpfwrite strips the first 14 bytes and rebuilds the frame
+  // header (the source MAC gets rewritten by the driver); =1 takes the
+  // DLIL_OUTPUT_FLAGS_RAW pass-through path instead. Batched writes
+  // additionally hard-require it to be 1.
   //
-  // ⚠️ 而且在 feth 上后果比「帧头被改写」严重得多：**不设这个 ioctl，write()
-  // 直接返回 ENXIO**（if_fake 的输出路径处理不了 AF_UNSPEC 那条重建分支）。
-  // 对照实验见 AGENTS.md 第 7 节第 14 条。排查 ENXIO 时别去怀疑接口名。
+  //  And on feth the consequence is far worse than "the header gets
+  // rewritten": **without this ioctl, write() fails outright with ENXIO**
+  // (if_fake's output path cannot handle the AF_UNSPEC rebuild branch).
+  // Controlled experiment in AGENTS.md section 7, item 14. When debugging
+  // ENXIO, do not suspect the interface name.
   // ---------------------------------------------------------------------------
   int header_complete = 1;
   TETHERKIT_RETURN_IF_ERROR(
       CallIoctl(link->fd_, BIOCSHDRCMPLT, &header_complete, "ioctl(BIOCSHDRCMPLT)"));
 
   // ---------------------------------------------------------------------------
-  // 4. BIOCSETIF —— 绑定到接口
+  // 4. BIOCSETIF -- bind to the interface
   // ---------------------------------------------------------------------------
   ::ifreq bind_request{};
   std::memcpy(bind_request.ifr_name, interface_name.data(), interface_name.size());
@@ -163,10 +173,11 @@ Result<std::unique_ptr<BpfLink>> BpfLink::Open(std::string_view interface_name,
   }
 
   // ---------------------------------------------------------------------------
-  // 5. BIOCGDLT —— 校验数据链路类型
+  // 5. BIOCGDLT -- validate the data-link type
   //
-  // feth 的 bpfattach 用的是 DLT_EN10MB，所以这里一定是 1；校验它是为了防止
-  // 有人误把 BPF 绑到别的接口类型上，那样帧格式假设就全错了。
+  // feth's bpfattach uses DLT_EN10MB, so this is always 1; the check guards
+  // against someone accidentally binding BPF to some other interface type,
+  // where every frame-format assumption would be wrong.
   // ---------------------------------------------------------------------------
   unsigned int data_link_type = 0;
   TETHERKIT_RETURN_IF_ERROR(
@@ -177,31 +188,35 @@ Result<std::unique_ptr<BpfLink>> BpfLink::Open(std::string_view interface_name,
   }
 
   // ---------------------------------------------------------------------------
-  // 6. BIOCIMMEDIATE = 1 —— 立即投递
+  // 6. BIOCIMMEDIATE = 1 -- immediate delivery
   //
-  // 不开的话 read() 只在缓冲**填满**时才返回；用 4 MiB 缓冲的话延迟灾难性地高。
-  // 开了之后每来一包就唤醒，read() 醒来时一次性交付期间累积的全部包 ——
-  // 低速低延迟、高速自动大批量，行为类似 NAPI。
+  // Without it, read() returns only when the buffer **fills up**; with a 4 MiB
+  // buffer the latency would be catastrophically high. With it, the reader
+  // wakes on every packet and each wake delivers everything that piled up in
+  // the meantime -- low traffic gives low latency, high traffic gives large
+  // batches automatically, NAPI-like behavior.
   // ---------------------------------------------------------------------------
   unsigned int immediate = 1;
   TETHERKIT_RETURN_IF_ERROR(
       CallIoctl(link->fd_, BIOCIMMEDIATE, &immediate, "ioctl(BIOCIMMEDIATE)"));
 
   // ---------------------------------------------------------------------------
-  // 7. BIOCSSEESENT = 0 —— 只抓 input 方向
+  // 7. BIOCSSEESENT = 0 -- capture the input direction only
   //
-  // 这一步是**防回环的关键**：我们 write 进去的帧在本接口上是 output 方向，
-  // SEESENT=0 会把它们滤掉，只留下主机从 peer 侧发来的 input 帧。
+  // This step is **the anti-loopback key**: the frames we write appear on this
+  // interface in the output direction, and SEESENT=0 filters them out, leaving
+  // only the input frames the host sends from the peer side.
   // ---------------------------------------------------------------------------
   unsigned int see_sent = 0;
   TETHERKIT_RETURN_IF_ERROR(
       CallIoctl(link->fd_, BIOCSSEESENT, &see_sent, "ioctl(BIOCSSEESENT)"));
 
   // ---------------------------------------------------------------------------
-  // 8. BIOCSRTIMEOUT —— 读超时，用于响应停机
+  // 8. BIOCSRTIMEOUT -- read timeout, used to answer shutdown
   //
-  // 内核存的是 tvtohz(tv) - 1 个 tick，本机 hz=100 → 分辨率 10 ms；
-  // 传 {0,0} 会变成**永久阻塞**，因此这里必须传非零值。
+  // The kernel stores tvtohz(tv) - 1 ticks; on this machine hz=100 -> a 10 ms
+  // resolution. Passing {0,0} becomes **a permanent block**, so a non-zero
+  // value is mandatory here.
   // ---------------------------------------------------------------------------
   ::timeval read_timeout{};
   read_timeout.tv_sec = config.read_timeout_millis / 1000;
@@ -210,12 +225,15 @@ Result<std::unique_ptr<BpfLink>> BpfLink::Open(std::string_view interface_name,
   TETHERKIT_RETURN_IF_ERROR(
       CallIoctl(link->fd_, BIOCSRTIMEOUT, &read_timeout, "ioctl(BIOCSRTIMEOUT)"));
 
-  // 刻意**不设** BIOCPROMISC：feth 的 feth_output_common 无条件把帧投给 peer
-  // 并 tap，不做任何 MAC 过滤，能否读到只由方向决定。设 promisc 只会多一个
-  // IFF_PROMISC 引用计数和一个内核事件，纯属浪费。
+  // BIOCPROMISC is deliberately **not** set: feth's feth_output_common hands
+  // every frame to the peer and taps it unconditionally, with no MAC filtering
+  // whatsoever -- whether a frame is readable depends only on direction. Setting
+  // promisc would only add one IFF_PROMISC reference count and one kernel
+  // event; pure waste.
 
   // ---------------------------------------------------------------------------
-  // 9. 可选优化：批量写与关闭时间戳（都做特性探测）
+  // 9. Optional optimizations: batched writes and disabled timestamps
+  // (both feature-probed)
   // ---------------------------------------------------------------------------
   if (config.try_batch_write) {
     int enable = 1;
@@ -229,7 +247,7 @@ Result<std::unique_ptr<BpfLink>> BpfLink::Open(std::string_view interface_name,
   }
 
   // ---------------------------------------------------------------------------
-  // 10. 分配缓冲
+  // 10. Allocate buffers
   // ---------------------------------------------------------------------------
   link->read_buffer_.resize(link->kernel_buffer_bytes_);
   link->read_frames_.reserve(config.max_frames_per_batch);
@@ -258,38 +276,44 @@ Result<BpfLink::KernelStats> BpfLink::QueryKernelStats() const {
 Result<ReadBatch> BpfLink::ReadFrames() {
   read_frames_.clear();
 
-  // 所有提前返回都必须带上 last_kernel_drops_ 而不是默认的 0：kernel_drops 是
-  // **累计**计数，消费方拿相邻两次做差分。空闲时读超时每 200 ms 就走一次这里，
-  // 报 0 会把已发生的丢包「清零」，下一个有流量的采样又把全量当成新增重报，
-  // 中间那个采样的差分还会在无符号数上下溢。
+  // Every early return must carry last_kernel_drops_ rather than the default 0:
+  // kernel_drops is a **cumulative** count, and consumers take differences
+  // between adjacent samples. When idle, the read timeout comes through here
+  // every 200 ms; reporting 0 would "zero out" drops that already happened, the
+  // next sample with traffic would re-report the full count as new drops, and
+  // the interim sample's difference would underflow on the unsigned type.
   if (interrupted_.load(std::memory_order_acquire)) {
     return ReadBatch{.kernel_drops = last_kernel_drops_};
   }
 
-  // read() 的长度**必须精确等于**内核的 bd_bufsize，否则 bpfread 一开头就
-  // `if (uio_resid(uio) != d->bd_bufsize) return EINVAL`。
+  // The read() length **must exactly equal** the kernel's bd_bufsize, otherwise
+  // bpfread fails at the top with `if (uio_resid(uio) != d->bd_bufsize) return
+  // EINVAL`.
   const ssize_t received = ::read(fd_, read_buffer_.data(), read_buffer_.size());
   if (received < 0) {
     if (errno == EINTR || errno == EAGAIN) {
-      // 被信号打断或超时无数据，交给调用方继续循环
+      // Interrupted by a signal or timed out with no data; let the caller keep
+      // looping.
       return ReadBatch{.kernel_drops = last_kernel_drops_};
     }
     return std::unexpected(Error::FromErrno(0, Tr(Msg::kNetBpfReadFailed, device_path_)));
   }
   if (received == 0) {
-    return ReadBatch{.kernel_drops = last_kernel_drops_};  // 读超时到期且期间无包
+    return ReadBatch{.kernel_drops = last_kernel_drops_};  // read timeout elapsed with no packets
   }
 
   // ---------------------------------------------------------------------------
-  // 遍历 BPF 记录
+  // Walk the BPF records
   //
-  // 记录布局：[bpf_hdr（bh_hdrlen 字节，含对齐填充）][帧数据（bh_caplen 字节）]
-  // 下一条记录的偏移 = BPF_WORDALIGN(bh_hdrlen + bh_caplen)。
+  // Record layout: [bpf_hdr (bh_hdrlen bytes, incl. alignment padding)]
+  //                [frame data (bh_caplen bytes)]
+  // Next record's offset = BPF_WORDALIGN(bh_hdrlen + bh_caplen).
   //
-  // ★ 必须用记录里的 bh_hdrlen，不能用 sizeof(struct bpf_hdr)。★
-  //   LP64 下 sizeof 是 20（18 字节内容 + 2 字节编译器填充），而内核对
-  //   DLT_EN10MB 写入的 bh_hdrlen 是 18（SIZEOF_BPF_HDR=18，
-  //   bif_hdrlen = BPF_WORDALIGN(14 + 18) - 14 = 18）。用 20 会立刻错位。
+  //  The record's bh_hdrlen must be used, never sizeof(struct bpf_hdr).
+  //   On LP64, sizeof is 20 (18 bytes of content + 2 bytes of compiler
+  //   padding), while the kernel writes bh_hdrlen = 18 for DLT_EN10MB
+  //   (SIZEOF_BPF_HDR=18, bif_hdrlen = BPF_WORDALIGN(14 + 18) - 14 = 18).
+  //   Using 20 goes out of step immediately.
   // ---------------------------------------------------------------------------
   const auto total = static_cast<std::size_t>(received);
   std::size_t offset = 0;
@@ -297,7 +321,8 @@ Result<ReadBatch> BpfLink::ReadFrames() {
   while (offset + kBpfHeaderMinBytes <= total) {
     const std::byte* record = read_buffer_.data() + offset;
 
-    // 逐字段读取而非结构体映射：记录起始只保证 4 字节对齐。
+    // Field-by-field reads instead of a struct map: a record's start is only
+    // guaranteed 4-byte aligned.
     const std::uint32_t capture_length = LoadLe32(record + offsetof(::bpf_hdr, bh_caplen));
     const std::uint32_t original_length = LoadLe32(record + offsetof(::bpf_hdr, bh_datalen));
     const std::uint32_t header_length = LoadLe16(record + offsetof(::bpf_hdr, bh_hdrlen));
@@ -309,13 +334,16 @@ Result<ReadBatch> BpfLink::ReadFrames() {
 
     const std::size_t record_bytes = static_cast<std::size_t>(header_length) + capture_length;
     if (offset + record_bytes > total) [[unlikely]] {
-      // 记录被截断：正常情况下不该发生（内核不会写出跨越缓冲末尾的记录）。
+      // Record truncated: should never happen in normal operation (the kernel
+      // does not write records that straddle the buffer end).
       TETHERKIT_WARN_TR(Msg::kNetBpfRecordOutOfBounds, offset, record_bytes, total);
       break;
     }
 
-    // 只有完整捕获的帧才转发。capture < original 说明装了过滤器且截断了，
-    // 转发一个残帧到 USB 只会让对端困惑。我们不装过滤器，所以这里不该触发。
+    // Only fully captured frames are forwarded. capture < original means a
+    // filter is installed and truncated the frame; forwarding a partial frame
+    // to USB would only confuse the peer. We install no filter, so this branch
+    // should not trigger.
     if (capture_length == original_length && capture_length >= kMinEthernetFrameBytes &&
         capture_length <= max_frame_bytes_) [[likely]] {
       read_frames_.push_back(FrameView{.data = record + header_length, .length = capture_length});
@@ -327,15 +355,18 @@ Result<ReadBatch> BpfLink::ReadFrames() {
     offset += BPF_WORDALIGN(record_bytes);
 
     if (read_frames_.size() >= read_frames_.capacity()) {
-      // 帧数组满了。剩余记录本次不处理 —— 数据仍在内核缓冲里？不，已经 copyout
-      // 了，会丢。因此 max_frames_per_batch 必须配得足够大。这里出警告而非静默。
+      // The frame array is full. The remaining records are skipped this round
+      // -- is the data still in the kernel buffer? No: it has already been
+      // copyout-ed and would be lost. max_frames_per_batch must therefore be
+      // sized generously enough. Warn here rather than fail silently.
       TETHERKIT_WARN_TR(Msg::kNetBpfBatchFrameLimit, read_frames_.capacity(), total - offset);
       break;
     }
   }
 
-  // BIOCGSTATS 偶发失败时沿用上次的累计值 —— 报 0 会让消费方的差分下溢，
-  // 见 last_kernel_drops_ 的说明。
+  // When BIOCGSTATS fails sporadically, keep the previous cumulative value --
+  // reporting 0 would make the consumer's difference underflow; see the note
+  // on last_kernel_drops_.
   if (const auto stats = QueryKernelStats()) {
     last_kernel_drops_ = stats->dropped;
   }
@@ -364,8 +395,9 @@ Result<WriteResult> BpfLink::WriteFramesIndividually(FrameBatch frames) {
       if (errno == EINTR) {
         continue;
       }
-      // ENOBUFS 是暂时性的（接口发送队列满），不该当致命错误；调用方看
-      // frames_written < frames.size() 就知道有没写完。
+      // ENOBUFS is transient (the interface's send queue is full) and must not
+      // be treated as fatal; the caller sees frames_written < frames.size()
+      // and knows not everything was written.
       if (errno == ENOBUFS || errno == EAGAIN) {
         break;
       }
@@ -379,22 +411,24 @@ Result<WriteResult> BpfLink::WriteFramesIndividually(FrameBatch frames) {
 }
 
 Result<WriteResult> BpfLink::WriteFramesBatched(FrameBatch frames) {
-  // 批量写的缓冲布局与读取**完全对称**：连续的
-  //   [bpf_hdr（bh_hdrlen 字节）][帧数据（bh_caplen 字节）]
-  // 每条按 BPF_WORDALIGN(bh_hdrlen + bh_caplen) 对齐。
+  // The batched-write buffer layout is **fully symmetric** with the read side:
+  // consecutive
+  //   [bpf_hdr (bh_hdrlen bytes)][frame data (bh_caplen bytes)]
+  // records, each aligned to BPF_WORDALIGN(bh_hdrlen + bh_caplen).
   //
-  // 内核校验：bh_hdrlen >= 18、bh_caplen == bh_datalen、bh_hdrlen <= 剩余长度。
-  // 时间戳字段被忽略，不必填。
+  // Kernel checks: bh_hdrlen >= 18, bh_caplen == bh_datalen, bh_hdrlen <=
+  // remaining length. The timestamp field is ignored and need not be filled in.
   //
-  // 这里 bh_hdrlen 取 18（kBpfHeaderMinBytes）而不是 sizeof(struct bpf_hdr)=20：
-  // 两者都合法（超过 18 的部分被内核跳过），但 18 是最紧凑的打包，
-  // 也与内核在读方向写出的值一致。
+  // Here bh_hdrlen takes 18 (kBpfHeaderMinBytes) rather than sizeof(struct
+  // bpf_hdr)=20: both are legal (the kernel skips anything past 18), but 18 is
+  // the most compact packing and matches the value the kernel writes on the
+  // read side.
   WriteResult result;
   std::size_t cursor = 0;
   std::uint32_t pending_frames = 0;
   std::uint64_t pending_bytes = 0;
 
-  // 把已组装的内容一次性写出。
+  // Write out whatever has been assembled, in one shot.
   const auto flush = [&]() -> Status {
     if (cursor == 0) {
       return Ok();
@@ -402,7 +436,8 @@ Result<WriteResult> BpfLink::WriteFramesBatched(FrameBatch frames) {
     const ssize_t written = ::write(fd_, write_buffer_.data(), cursor);
     if (written < 0) {
       if (errno == ENOBUFS || errno == EAGAIN || errno == EINTR) {
-        // 暂时性失败：这一批没发出去，如实反映在返回值里。
+        // Transient failure: this batch went nowhere, mirrored faithfully in
+        // the return value.
         cursor = 0;
         pending_frames = 0;
         pending_bytes = 0;
@@ -430,14 +465,15 @@ Result<WriteResult> BpfLink::WriteFramesBatched(FrameBatch frames) {
     if (cursor + aligned_bytes > write_buffer_.size()) {
       TETHERKIT_RETURN_IF_ERROR(flush());
       if (aligned_bytes > write_buffer_.size()) [[unlikely]] {
-        // 单帧就超过整个组装缓冲：配置错误，跳过并计数。
+        // A single frame exceeds the whole assembly buffer: a configuration
+        // error; skip and count.
         ++result.frames_skipped;
         continue;
       }
     }
 
     std::byte* record = write_buffer_.data() + cursor;
-    // 时间戳字段内核忽略，清零即可。
+    // The kernel ignores the timestamp field; zeroing it is enough.
     std::memset(record, 0, kBpfHeaderMinBytes);
     StoreLe32(record + offsetof(::bpf_hdr, bh_caplen), frame.length);
     StoreLe32(record + offsetof(::bpf_hdr, bh_datalen), frame.length);
@@ -445,7 +481,8 @@ Result<WriteResult> BpfLink::WriteFramesBatched(FrameBatch frames) {
               static_cast<std::uint16_t>(kBpfHeaderMinBytes));
     std::memcpy(record + kBpfHeaderMinBytes, frame.data, frame.length);
 
-    // 对齐填充清零，避免把上一批的残留数据交给内核。
+    // Zero the alignment padding too, so leftovers from the previous batch are
+    // never handed to the kernel.
     if (aligned_bytes > record_bytes) {
       std::memset(record + record_bytes, 0, aligned_bytes - record_bytes);
     }

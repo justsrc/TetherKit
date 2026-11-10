@@ -1,25 +1,31 @@
 #!/usr/bin/env bash
 #
-# 安装 tetherkit-helper 并注册 LaunchDaemon。**必须以 root 运行。**
+# Install tetherkit-helper and register the LaunchDaemon. **Must run as root.**
 #
 #   sudo ./gui/Scripts/install-helper.sh
 #
-# 为什么要这一步：创建 feth 虚拟网卡与打开 /dev/bpf* 都需要 root，而 App 本身
-# 以普通用户身份运行。helper 的 root 来自 launchd —— 详见 docs/GUI-ARCHITECTURE.md。
+# Why this step exists: creating the feth virtual interface and opening
+# /dev/bpf* both require root, while the App itself runs as the normal user.
+# The helper's root comes from launchd -- see docs/GUI-ARCHITECTURE.md.
 #
-# App 里的「安装特权组件」按钮跑的也是本脚本：build-gui.sh 把它连同载荷一起
-# 打进 .app 的 Contents/Library/HelperTools/，App 经 AuthorizationExecuteWith-
-# Privileges 以 root 执行那份拷贝（SMAppService 路线在源码分发下不可用 ——
-# 每台机器编出的 cdhash 不同，代码签名绑定必然对不上，见 docs/GUI-SPIKE.md
-# 第 3.3 节）。终端入口保留给无 GUI 的场景和不愿在 App 里输密码的人。
+# The in-app "Install privileged components" button runs this same script:
+# build-gui.sh packs it into the payload under the .app's
+# Contents/Library/HelperTools/, and the App executes that copy as root via
+# AuthorizationExecuteWithPrivileges (the SMAppService route is unavailable
+# for source-distributed builds -- every machine produces a different cdhash,
+# so a code-signature bound to it can never match; see docs/GUI-SPIKE.md
+# section 3.3). The terminal entry point remains for GUI-less scenarios and
+# for people who would rather not enter their password in the App.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
-# 载荷目录按优先级定位：
-#   1. TETHERKIT_HELPER_DIR —— 打包 / CI 想指哪就指哪；
-#   2. 脚本自己所在目录 —— 打进 .app 载荷目录的那份拷贝走这条：载荷就在旁边；
-#   3. 仓库默认产物位置 —— 在仓库里 sudo ./gui/Scripts/install-helper.sh 走这条。
+# Locate the payload directory by priority:
+#   1. TETHERKIT_HELPER_DIR -- packaging / CI can point it wherever it wants;
+#   2. the script's own directory -- the copy packed into the .app payload
+#      takes this branch: the payload sits right next to it;
+#   3. the repo's default artifact location -- running
+#      sudo ./gui/Scripts/install-helper.sh inside the repo takes this one.
 if [[ -n "${TETHERKIT_HELPER_DIR:-}" ]]; then
   SOURCE_DIR="${TETHERKIT_HELPER_DIR}"
 elif [[ -f "${SCRIPT_DIR}/com.tetherkit.helper" ]]; then
@@ -34,73 +40,77 @@ INSTALL_PATH="${TOOLS_DIR}/${LABEL}"
 PLIST_PATH="/Library/LaunchDaemons/${LABEL}.plist"
 
 log() { printf '\033[32m==>\033[0m %s\n' "$1"; }
-die() { printf '\033[31m错误：\033[0m%s\n' "$1" >&2; exit 1; }
+die() { printf '\033[31merror: \033[0m%s\n' "$1" >&2; exit 1; }
 
-[[ "${EUID}" -eq 0 ]] || die "需要 root 权限，请用 sudo 运行本脚本"
-[[ -f "${SOURCE_DIR}/${LABEL}" ]] || die "找不到 ${SOURCE_DIR}/${LABEL}
-  请先构建：./gui/Scripts/build-gui.sh"
+[[ "${EUID}" -eq 0 ]] || die "root privileges required; run this script with sudo"
+[[ -f "${SOURCE_DIR}/${LABEL}" ]] || die "cannot find ${SOURCE_DIR}/${LABEL}
+  build it first: ./gui/Scripts/build-gui.sh"
 
 # ------------------------------------------------------------------------------
-# 先卸载旧的
+# Uninstall the old copy first
 #
-# 顺序很重要：必须先 bootout 再覆盖文件。反过来的话 launchd 还持有旧二进制的
-# 引用，覆盖之后下一次拉起的可能仍是旧的，且没有任何提示。
+# The order matters: bootout must happen before the files are overwritten.
+# The other way around, launchd still holds a reference to the old binary,
+# and after the overwrite the next spawn may silently be the old one.
 # ------------------------------------------------------------------------------
 if launchctl print "system/${LABEL}" >/dev/null 2>&1; then
-  log "卸载已注册的旧版本"
+  log "Uninstalling the registered old version"
   launchctl bootout "system/${LABEL}" 2>/dev/null || true
 fi
 
 # ------------------------------------------------------------------------------
-# 安装文件
+# Install the files
 # ------------------------------------------------------------------------------
-log "安装到 ${INSTALL_PATH}"
+log "Installing to ${INSTALL_PATH}"
 mkdir -p "${TOOLS_DIR}"
 
-# 用 cp -a 而不是 install：libtetherkit 的两个软链必须保留成软链。
-# install 会把它们各拷成独立的真实文件，之后 @rpath 加载到的是哪一份就说不准了。
+# cp -a rather than install: libtetherkit's two symlinks must survive as
+# symlinks. install copies each of them into an independent real file, and
+# after that there is no telling which copy @rpath ends up loading.
 cp -a "${SOURCE_DIR}/${LABEL}" "${INSTALL_PATH}"
 cp -a "${SOURCE_DIR}"/libtetherkit*.dylib "${TOOLS_DIR}/"
 if compgen -G "${SOURCE_DIR}/libusb-*.dylib" >/dev/null; then
   cp -a "${SOURCE_DIR}"/libusb-*.dylib "${TOOLS_DIR}/"
 fi
 
-# LaunchDaemon 对权限有硬性要求：属主必须是 root:wheel，且**不能**对组或其他
-# 用户可写。不满足时 launchd 会拒绝加载，报的是含糊的 "Service cannot load in
-# requested session"。
+# The LaunchDaemon has hard permission requirements: owner must be root:wheel,
+# and it must NOT be group- or other-writable. When that is violated, launchd
+# refuses to load it with the vague "Service cannot load in requested
+# session".
 chown -R root:wheel "${TOOLS_DIR}"
 chmod 755 "${TOOLS_DIR}"
 chmod 544 "${INSTALL_PATH}"
 find "${TOOLS_DIR}" -maxdepth 1 -name '*.dylib' -type f -exec chmod 444 {} +
 
-log "安装 ${PLIST_PATH}"
+log "Installing ${PLIST_PATH}"
 cp "${SOURCE_DIR}/${LABEL}.plist" "${PLIST_PATH}"
 chown root:wheel "${PLIST_PATH}"
 chmod 644 "${PLIST_PATH}"
 
 # ------------------------------------------------------------------------------
-# 注册
+# Register
 # ------------------------------------------------------------------------------
-log "注册 LaunchDaemon"
+log "Registering the LaunchDaemon"
 launchctl bootstrap system "${PLIST_PATH}"
 
-# 声明了 MachServices 的服务是**按需**拉起的，注册完不会立刻有进程 ——
-# 这是正常的，不要以为失败了。校验方式是看服务是否已登记。
+# A service that declares MachServices is spawned on demand: right after
+# registration there is no process yet -- that is normal, not a failure.
+# Validating means checking that the service is registered.
 if launchctl print "system/${LABEL}" >/dev/null 2>&1; then
-  log "完成。TetherKit.app 会自动检测到它，不需要重启 App。"
+  log "Done. TetherKit.app picks it up automatically; restarting the App is unnecessary."
 else
-  die "注册后仍查不到服务，请检查 /var/log/tetherkit-helper.log"
+  die "Service still not found after registration; check /var/log/tetherkit-helper.log"
 fi
 
 cat <<EOF
 
-已安装：
+Installed:
   ${INSTALL_PATH}
   ${PLIST_PATH}
 
-日志：
+Log:
   /var/log/tetherkit-helper.log
 
-卸载：
+Uninstall:
   sudo "${SOURCE_DIR}/uninstall-helper.sh"
 EOF

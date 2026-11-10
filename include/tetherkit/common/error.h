@@ -1,11 +1,13 @@
-// 统一的错误表示与传播工具。
+// Unified error representation and propagation utilities.
 //
-// 分层原则（全项目一致）：
-//   * 初始化路径 / 控制路径 —— 用 Result<T> 传播错误，错误对象携带来源域、
-//     原始错误码与人类可读的上下文串，便于把「libusb 返回 -3」翻译成
-//     「声明 RNDIS 数据接口失败：LIBUSB_ERROR_ACCESS（需要 root）」。
-//   * 数据热路径 —— **绝不**使用本头文件。Result<T> 里的 std::string 会分配堆内存，
-//     在 25k~80k pps 下不可接受。热路径用返回计数 + 原子统计计数器表达失败。
+// Layering rules (consistent across the project):
+//   * Initialization / control path -- propagate errors with Result<T>. The error carries
+//     the source domain, the raw code, and a human-readable context string, so "libusb
+//     returned -3" can be translated into
+//     "failed to claim RNDIS data interface: LIBUSB_ERROR_ACCESS (root required)".
+//   * Data hot path -- **never** use this header. The std::string inside Result<T>
+//     allocates heap memory, which is unacceptable at 25k-80k pps. Hot paths express
+//     failures as return counts plus atomic statistics counters.
 #pragma once
 
 #include <cerrno>
@@ -19,46 +21,50 @@ namespace tetherkit {
 
 namespace detail {
 
-/// 「外层原因 <分隔符> 内层原因」里的那个分隔符，随当前语言变化。
+/// The separator in "outer cause <separator> inner cause", which varies with the current
+/// language.
 ///
-/// 在这里前置声明（实现在 common/i18n.cc）而不是直接 include i18n.h：
-/// error.h 被全项目包含，让它拖上 <format> 与整张文案表不划算。
+/// Forward-declared here (implemented in common/i18n.cc) instead of including i18n.h
+/// directly: error.h is included across the project, and pulling in <format> and the
+/// whole message table would be expensive.
 [[nodiscard]] std::string_view ContextSeparator() noexcept;
 
 }  // namespace detail
 
-/// 错误码的来源域。决定 `code` 字段该怎么翻译成文字。
+/// Source domain of an error code. Determines how the `code` field is translated to text.
 enum class ErrorDomain : std::uint8_t {
-  kGeneric,  ///< 纯逻辑错误，`code` 无意义。
-  kErrno,    ///< POSIX errno（open / ioctl / read / write 等系统调用）。
-  kLibUsb,   ///< libusb 的 enum libusb_error（负值）。
-  kRndis,    ///< RNDIS_STATUS_* 状态码（32 位无符号）。
+  kGeneric,  ///< Pure logic error; `code` is meaningless.
+  kErrno,    ///< POSIX errno (open / ioctl / read / write and other system calls).
+  kLibUsb,   ///< libusb enum libusb_error (negative values).
+  kRndis,    ///< RNDIS_STATUS_* status codes (32-bit unsigned).
 };
 
-/// 一次失败的完整描述。
+/// Complete description of a failure.
 ///
-/// 刻意做成值类型而非异常：本项目的错误绝大多数是「预期内的环境问题」
-/// （没插设备、没有 root、内核驱动占用接口），调用方总要处理，不该靠异常传播。
+/// Deliberately a value type rather than an exception: most errors in this project are
+/// "expected environment problems" (no device plugged in, not running as root, interface
+/// held by a kernel driver). Callers always have to handle them, so they should not
+/// propagate via exceptions.
 class Error {
  public:
   Error() = default;
 
-  /// 纯逻辑错误，只有描述。
+  /// Pure logic error with only a description.
   static Error Generic(std::string context) {
     return Error{ErrorDomain::kGeneric, 0, std::move(context)};
   }
 
-  /// 包装 POSIX errno。`err` 传 0 时自动读取全局 errno。
+  /// Wrap a POSIX errno. When `err` is 0, the global errno is read automatically.
   static Error FromErrno(int err, std::string context) {
     return Error{ErrorDomain::kErrno, err != 0 ? err : errno, std::move(context)};
   }
 
-  /// 包装 libusb 错误码（libusb 的错误码是负值，此处原样保留）。
+  /// Wrap a libusb error code (libusb error codes are negative and kept as-is).
   static Error FromLibUsb(int rc, std::string context) {
     return Error{ErrorDomain::kLibUsb, rc, std::move(context)};
   }
 
-  /// 包装 RNDIS_STATUS_*。
+  /// Wrap RNDIS_STATUS_*.
   static Error FromRndisStatus(std::uint32_t status, std::string context) {
     return Error{ErrorDomain::kRndis, static_cast<std::int64_t>(status), std::move(context)};
   }
@@ -69,16 +75,19 @@ class Error {
 
   [[nodiscard]] std::string_view Context() const noexcept { return context_; }
 
-  /// 在已有错误上追加一层上下文，形成「外层原因：内层原因」的链条。
-  /// 用法：`return std::unexpected(std::move(e).WithContext(Tr(Msg::kNetOpenBpfFailed)));`
+  /// Append a layer of context to an existing error, forming an
+  /// "outer cause: inner cause" chain.
+  /// Usage: `return std::unexpected(std::move(e).WithContext(Tr(Msg::kNetOpenBpfFailed)));`
   ///
-  /// 分隔符随语言变化（中文是全角冒号、英文是 ": "），所以不能写死在这里。
+  /// The separator varies with the language (Chinese uses a full-width colon, English
+  /// uses ": "), so it cannot be hardcoded here.
   [[nodiscard]] Error WithContext(std::string_view outer) && {
     context_ = std::string{outer} + std::string{detail::ContextSeparator()} + context_;
     return std::move(*this);
   }
 
-  /// 渲染成形如 `声明数据接口失败 [libusb: LIBUSB_ERROR_ACCESS(-3)]` 的可读串。
+  /// Render as a human-readable string such as
+  /// `failed to claim data interface [libusb: LIBUSB_ERROR_ACCESS(-3)]`.
   [[nodiscard]] std::string ToString() const;
 
  private:
@@ -90,30 +99,30 @@ class Error {
   ErrorDomain domain_ = ErrorDomain::kGeneric;
 };
 
-/// 可能失败并返回值的操作。
+/// An operation that may fail and return a value.
 template <typename T>
 using Result = std::expected<T, Error>;
 
-/// 可能失败但无返回值的操作。
+/// An operation that may fail but has no return value.
 using Status = std::expected<void, Error>;
 
-/// 成功的 Status 字面量。
+/// Literal for a successful Status.
 inline Status Ok() noexcept {
   return Status{};
 }
 
 namespace detail {
 
-// 用于生成唯一临时变量名，避免宏展开时的变量遮蔽。
+// Generate unique temporary variable names to avoid shadowing during macro expansion.
 #define TETHERKIT_CONCAT_INNER(a, b) a##b
 #define TETHERKIT_CONCAT(a, b) TETHERKIT_CONCAT_INNER(a, b)
 #define TETHERKIT_UNIQUE(base) TETHERKIT_CONCAT(base, __LINE__)
 
 }  // namespace detail
 
-/// 若表达式失败则立即向上传播错误。
+/// Propagate the error upward immediately if the expression fails.
 ///
-/// 用法：`TETHERKIT_RETURN_IF_ERROR(link.Configure(mtu));`
+/// Usage: `TETHERKIT_RETURN_IF_ERROR(link.Configure(mtu));`
 #define TETHERKIT_RETURN_IF_ERROR(expr)                                      \
   do {                                                                       \
     auto TETHERKIT_UNIQUE(tk_status_) = (expr);                              \
@@ -122,11 +131,12 @@ namespace detail {
     }                                                                        \
   } while (false)
 
-/// 取出成功值赋给新变量，失败则向上传播错误。
+/// Assign the success value to a new variable, or propagate the error upward on failure.
 ///
-/// 用法：`TETHERKIT_ASSIGN_OR_RETURN(auto fd, OpenBpfDevice());`
+/// Usage: `TETHERKIT_ASSIGN_OR_RETURN(auto fd, OpenBpfDevice());`
 ///
-/// `decl` 是一条声明而非表达式，不能加括号，故此处豁免 macro-parentheses 检查。
+/// `decl` is a declaration rather than an expression and cannot be parenthesized, so the
+/// macro-parentheses check is suppressed here.
 // NOLINTNEXTLINE(bugprone-macro-parentheses)
 #define TETHERKIT_ASSIGN_OR_RETURN(decl, expr)                              \
   auto TETHERKIT_UNIQUE(tk_result_) = (expr);                               \

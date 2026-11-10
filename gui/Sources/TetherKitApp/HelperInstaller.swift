@@ -2,44 +2,64 @@ import Foundation
 import Security
 import TetherKitIPC
 
-/// 把 .app 内嵌的特权组件载荷安装成 LaunchDaemon，或把装好的卸干净 ——
-/// 「一键安装 / 卸载」按钮背后的全部机制。真正的步骤在载荷里的
-/// install-helper.sh / uninstall-helper.sh，这里只负责两件事：找到、以 root 跑。
+/// Install the privileged helper payload embedded in the .app as a
+/// LaunchDaemon, or uninstall it cleanly again -- the whole mechanism
+/// behind the "one-click install / uninstall" buttons. The real steps
+/// live in the payload's install-helper.sh / uninstall-helper.sh; this
+/// file does only two things: find them, and run them as root.
 ///
-/// ★ 为什么是 AuthorizationExecuteWithPrivileges（AEWP）★
+/// Why AuthorizationExecuteWithPrivileges (AEWP):
 ///
-///   目标只有一个：以 root 跑一遍安装脚本。系统里能做这件事的口子：
+///   There is exactly one goal: run the install script once as root. The
+///   system offers these ways of doing that:
 ///
-///   * SMJobBless / SMAppService —— 靠代码签名 DR 双向绑定，源码分发下每台
-///     机器的 cdhash 都不同，走不通（docs/GUI-SPIKE.md 第 3.3 节）；
-///   * osascript "with administrator privileges" —— 能用，但它自建授权会话，
-///     与 App 缓存的 AuthorizationRef（5 分钟窗口）完全接不上，必然多弹框；
-///   * AEWP —— 参数就是 AuthorizationRef：缓存令牌还有效就一次框都不弹，
-///     权利缺失时由它按 system.privilege.admin 弹标准授权框。与现有信任
-///     模型（AuthorizationRef 复核，见 Authorization.swift）无缝衔接。
+///   * SMJobBless / SMAppService -- they bind the App and the helper
+///     bidirectionally through the code signing DR, and under source
+///     distribution every machine has a different cdhash, so they cannot
+///     work (docs/GUI-SPIKE.md section 3.3);
+///   * osascript "with administrator privileges" -- it works, but it creates
+///     its own authorization session, which cannot connect to the
+///     AuthorizationRef the App caches (a 5 minute window) at all, so it
+///     necessarily pops extra dialogs;
+///   * AEWP -- its parameter is the AuthorizationRef: while the cached
+///     token is still valid it pops no dialog at all, and when the right
+///     is missing it raises the standard authorization dialog under
+///     system.privilege.admin. It fits the existing trust model
+///     (AuthorizationRef re-check, see Authorization.swift) seamlessly.
 ///
-///   AEWP 自 10.7 起标记废弃，但 macOS 26 上实测符号仍可解析、它的 setuid
-///   执行载体 /usr/libexec/security_authtrampoline 也仍在。这里用 dlsym 在
-///   运行时解析而不是直接链接：将来系统真把它移除时，用户看到的是本页降级成
-///   「请用终端安装」，而不是 App 在 dyld 绑定阶段直接起不来。
+///   AEWP has been marked deprecated since 10.7, but on macOS 26 the
+///   symbol still resolves in practice and its setuid carrier
+///   /usr/libexec/security_authtrampoline is still there. It is resolved
+///   here with dlsym at runtime rather than linked directly: if a future
+///   system really removes it, the user sees this page degrade into
+///   "please install from a terminal" instead of the app failing to
+///   start at the dyld binding stage.
 ///
-/// ★ 为什么 AEWP 的对象是 helper 二进制而不是安装脚本 ★
+/// Why the target of AEWP is the helper binary and not the install script:
 ///
-///   AEWP 给子进程的凭据是 euid=0 / ruid=普通用户，而 bash 在 euid ≠ ruid
-///   且未带 -p 时会把 euid 降回 ruid —— 直接 AEWP 脚本，脚本开头的 root 检查
-///   必然失败（真机踩过）。所以这里拉起的是载荷里 helper 二进制的 --install
-///   模式：它先 setuid(0) 把凭据归一化成与 sudo 完全相同的真 root，把 stderr
-///   并进 stdout（AEWP 的管道只接 stdout），再 exec 同目录的 install-helper.sh。
-///   见 TetherKitHelper/InstallerMode.swift。
+///   The credential AEWP gives the child process is euid=0 / ruid=the
+///   ordinary user, and bash drops euid back to ruid when euid != ruid
+///   and -p is not given -- running a script through AEWP directly makes
+///   the root check at the top of that script fail for sure (hit on a
+///   real device). So what gets launched here is the --install mode of
+///   the helper binary in the payload: it first setuid(0)s, normalizing
+///   the credential into exactly the same true root as sudo, merges
+///   stderr into stdout (AEWP's pipe only takes stdout), and then execs
+///   the install-helper.sh in the same directory.
+///   See TetherKitHelper/InstallerMode.swift.
 ///
-/// ★ 为什么成败不看退出码 ★
+/// Why success and failure are not read from the exit code:
 ///
-///   AEWP 既不给子进程 pid 也不给退出码，只有一根连到子进程 stdout 的管道。
-///   所以这里只把「脚本跑完了」和「它说了什么」交出去；真正的成败由调用方
-///   （AppModel）用一次真实的 XPC 往返判定 —— 「能连上匹配版本的 helper」
-///   本来就比任何退出码都更接近事实。输出只在失败时给用户看原因。
+///   AEWP gives neither the child's pid nor its exit code, only a pipe
+///   connected to the child's stdout. So this file hands out only "the
+///   script finished" and "what it said"; the real verdict is reached
+///   by the caller (AppModel) with one real XPC round trip -- "can
+///   connect to a helper of the matching version" is inherently closer
+///   to the truth than any exit code. The output is shown to the user
+///   only on failure, and then only to explain why.
 enum HelperInstaller {
-    /// 要执行的维护动作，对应 helper 二进制的命令行参数与载荷里的脚本。
+    /// The maintenance action to perform, matching the helper binary's
+    /// command line argument and the script in the payload.
     enum Action {
         case install
         case uninstall
@@ -53,12 +73,16 @@ enum HelperInstaller {
     }
 
     enum Failure: LocalizedError {
-        /// 找不到内嵌载荷。典型场景：`swift run` 直接跑的裸可执行文件 ——
-        /// 只有 build-gui.sh 组装出的 .app 才带 Contents/Library/HelperTools。
+        /// The embedded payload cannot be found. Typical case: the bare
+        /// executable run directly by `swift run` -- only the .app
+        /// assembled by build-gui.sh carries
+        /// Contents/Library/HelperTools.
         case payloadMissing
-        /// 运行时解析不到 AEWP（未来某个 macOS 移除了它）。
+        /// AEWP cannot be resolved at runtime (some future macOS removed
+        /// it).
         case executorUnavailable
-        /// AEWP 返回错误（用户取消已单独成 case）。
+        /// AEWP returned an error (a user cancellation is a separate
+        /// case).
         case launchFailed(OSStatus)
         case userCancelled
 
@@ -76,34 +100,42 @@ enum HelperInstaller {
         }
     }
 
-    /// 内嵌载荷目录（平铺放着 helper 二进制、dylib、plist 与安装脚本）。
-    /// 不是从组装好的 .app 里跑起来时为 nil。
+    /// The embedded payload directory (the helper binary, the dylib, the
+    /// plist and the install scripts sit side by side in it).
+    /// nil when not running from an assembled .app.
     static var payloadDirectory: URL? {
         let directory = Bundle.main.bundleURL
             .appendingPathComponent("Contents/Library/HelperTools", isDirectory: true)
-        // 二进制（AEWP 的执行对象）与两个脚本（真正的安装/卸载逻辑）缺一不可。
+        // The binary (AEWP's execution target) and the two scripts (the
+        // actual install/uninstall logic) are all required.
         let required = [helperBinaryName, installScriptName, uninstallScriptName]
             .map { directory.appendingPathComponent($0).path }
         let complete = required.allSatisfy { FileManager.default.isExecutableFile(atPath: $0) }
         return complete ? directory : nil
     }
 
-    /// 进入安装流程前的快速自检：载荷在不在、AEWP 还在不在。
+    /// A quick preflight before entering the install flow: is the payload
+    /// there, is AEWP still there.
     ///
-    /// 单独暴露是为了让调用方在**弹授权框之前**就发现装不了 —— 把用户的密码
-    /// 要来了再说「装不了」是最差的次序。
+    /// It is exposed separately so the caller can find out that the
+    /// install is impossible **before the authorization dialog pops up** --
+    /// asking for the user's password and only then saying "this cannot
+    /// be installed" is the worst possible order.
     static func preflightError() -> Failure? {
         if payloadDirectory == nil { return .payloadMissing }
         if loadExecutor() == nil { return .executorUnavailable }
         return nil
     }
 
-    /// 以 root 执行载荷里的安装 / 卸载脚本，返回其全部输出（stdout 与 stderr
-    /// 合流）。
+    /// Run the install / uninstall script from the payload as root and
+    /// return its whole output (stdout and stderr merged).
     ///
-    /// 会阻塞在「可能弹出的授权框」与「脚本执行」上，所以整体挪到后台队列；
-    /// 返回即代表脚本已经跑完（管道读到 EOF），**不代表动作成功** —— 见类型
-    /// 注释里「为什么成败不看退出码」。
+    /// It blocks on "the authorization dialog that may pop up" and on "the
+    /// script execution", so the whole thing is moved to a background
+    /// queue; returning means the script has run to completion (the pipe
+    /// reached EOF), and it does **not** mean the action succeeded -- see
+    /// "Why success and failure are not read from the exit code" in the
+    /// type notes.
     static func run(_ action: Action, with token: AuthorizationToken) async throws -> String {
         guard let payload = payloadDirectory else { throw Failure.payloadMissing }
         guard let execute = loadExecutor() else { throw Failure.executorUnavailable }
@@ -112,7 +144,9 @@ enum HelperInstaller {
         return try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
                 continuation.resume(with: Result {
-                    // 令牌必须活到 AEWP 返回、脚本跑完之后 —— 授权在它手里。
+                    // The token has to stay alive until AEWP returns and
+                    // the script has run -- the authorization lives in
+                    // it.
                     try withExtendedLifetime(token) {
                         try run(execute, token: token, installer: installer,
                                 flag: action.flag)
@@ -122,15 +156,17 @@ enum HelperInstaller {
         }
     }
 
-    // MARK: - 实现
+    // MARK: - Implementation
 
     private static let installScriptName = "install-helper.sh"
     private static let uninstallScriptName = "uninstall-helper.sh"
-    /// 载荷里 helper 二进制的文件名，与 LaunchDaemon 的 Label 同名。
+    /// The file name of the helper binary in the payload, identical to the
+    /// LaunchDaemon's Label.
     private static let helperBinaryName = HelperConstants.machServiceName
 
-    /// AEWP 的 C 原型。倒数第二个参数是 `char *const *`（NULL 结尾的 argv，
-    /// 不含 argv[0] —— trampoline 会把工具路径填成 argv[0]）。
+    /// The C prototype of AEWP. The second to last parameter is
+    /// `char *const *` (a NULL-terminated argv that does not contain
+    /// argv[0] -- the trampoline fills the tool path into argv[0]).
     private typealias ExecuteFunction = @convention(c) (
         AuthorizationRef,
         UnsafePointer<CChar>,
@@ -140,9 +176,11 @@ enum HelperInstaller {
     ) -> OSStatus
 
     private static func loadExecutor() -> ExecuteFunction? {
-        // RTLD_DEFAULT：Security.framework 已经由本进程链接，符号一定在全局
-        // 命名空间里（若还存在的话）。Darwin 模块没把这个常量导出给 Swift，
-        // 只能按 dlfcn.h 里的定义写死 -2。
+        // RTLD_DEFAULT: Security.framework is already linked by this
+        // process, so the symbol is definitely in the global namespace (if
+        // it still exists at all). The Darwin module does not export this
+        // constant to Swift, so it has to be hardcoded to -2 as defined
+        // in dlfcn.h.
         guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2),
                                  "AuthorizationExecuteWithPrivileges") else { return nil }
         return unsafeBitCast(symbol, to: ExecuteFunction.self)
@@ -152,8 +190,10 @@ enum HelperInstaller {
                             token: AuthorizationToken,
                             installer: String,
                             flag: String) throws -> String {
-        // 执行对象是 helper 二进制的安装/卸载模式，不是脚本 —— 原因见类型
-        // 注释。stderr 合流也由那边做（dup2），这里只管拉起与收输出。
+        // The execution target is the helper binary's install/uninstall
+        // mode, not the script -- the reason is in the type notes. The
+        // stderr merge is done there as well (dup2); here we only launch
+        // it and collect the output.
         var pipe: UnsafeMutablePointer<FILE>?
         let status = token.withReference { reference in
             withArgv([flag]) { argv in
@@ -174,9 +214,11 @@ enum HelperInstaller {
         guard let pipe else { return "" }
         defer { fclose(pipe) }
 
-        // 直接读底层 fd 到 EOF —— EOF 即子进程结束（LaunchDaemon 的 stdio 由
-        // launchd 按 plist 里的 StandardOutPath 单独给，不会继承这根管道，
-        // 所以不存在「孙进程拖着管道不放」的悬挂）。
+        // Read the underlying fd straight to EOF -- EOF means the child
+        // has finished (the LaunchDaemon's stdio is given separately by
+        // launchd through the StandardOutPath in the plist and does not
+        // inherit this pipe, so there is no hang of the "grandchild keeps
+        // the pipe open" kind).
         var output = Data()
         var buffer = [UInt8](repeating: 0, count: 4096)
         let descriptor = fileno(pipe)
@@ -193,7 +235,8 @@ enum HelperInstaller {
         return String(decoding: output, as: UTF8.self)
     }
 
-    /// 把 Swift 字符串数组变成 NULL 结尾的 C argv，喂给 body。
+    /// Turn a Swift string array into a NULL-terminated C argv and feed it
+    /// to body.
     private static func withArgv<T>(
         _ arguments: [String],
         _ body: (UnsafePointer<UnsafeMutablePointer<CChar>?>) -> T
