@@ -110,11 +110,13 @@ private struct AppMenuItems: View {
     }
 }
 
-/// App 菜单里的语言选择。
+/// The language choice in the App menu.
 ///
-/// 每一项都直接写母语名字（「中文」/「English」），不跟随当前界面语言翻译 ——
-/// 语言菜单是给「现在看不懂界面」的人用的，把选项也翻译掉就等于没有出口。
-/// 「跟随系统」是唯一例外：它描述的是行为而非语言，所以随界面走。
+/// Every option shows its native name ("English") and is deliberately not
+/// translated with the interface: the menu exists for the person who cannot
+/// read the interface right now, so the way out must stay readable.
+/// "Follow system" is the one exception: it describes behavior, not a
+/// language, so it follows the interface.
 private struct LanguageMenu: View {
     var model: AppModel
 
@@ -122,7 +124,6 @@ private struct LanguageMenu: View {
         Menu(L(.languageMenuTitle)) {
             Picker(L(.languageLabel), selection: Bindable(model).languagePreference) {
                 Text(L(.languageSystem)).tag(LanguagePreference.system)
-                Text(verbatim: "中文").tag(LanguagePreference.chinese)
                 Text(verbatim: "English").tag(LanguagePreference.english)
             }
             .pickerStyle(.inline)

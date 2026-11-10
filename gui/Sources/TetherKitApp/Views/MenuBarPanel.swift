@@ -142,12 +142,12 @@ struct MenuBarPanel: View {
         }
     }
 
-    /// 语言开关。选项写母语名字，不跟随界面语言翻译 —— 见 LanguageMenu 的说明。
+    /// The language toggle. Options show native names, not translations --
+    /// see LanguageMenu for why.
     private var languageMenu: some View {
         Menu {
             Picker(L(.languageLabel), selection: Bindable(model).languagePreference) {
                 Text(L(.languageSystem)).tag(LanguagePreference.system)
-                Text(verbatim: "中文").tag(LanguagePreference.chinese)
                 Text(verbatim: "English").tag(LanguagePreference.english)
             }
             .pickerStyle(.inline)

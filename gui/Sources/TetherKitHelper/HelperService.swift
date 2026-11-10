@@ -87,10 +87,13 @@ final class HelperService: NSObject, TetherKitHelperProtocol {
     }
 
     func setLanguage(_ rawValue: String, reply: @escaping () -> Void) {
-        // 认不出来就保持原样。宁可继续用上一种语言，也不要因为 App 传了个新值
-        // 就退回默认 —— 那会表现成「切了个语言，helper 的日志反而变回英文」。
+        // An unrecognized value leaves everything untouched on purpose: keep
+        // rendering in the current language instead of falling back to the
+        // default because the App sent something new. An App that still sends
+        // the removed Chinese spelling ("chinese") decodes to nil here, and
+        // the helper simply stays in English.
         if let language = Language(rawValue: rawValue) {
-            L10n.apply(language == .chinese ? .chinese : .english)
+            L10n.apply(.english)
             TetherKitLibrary.setLanguage(language)
         }
         reply()

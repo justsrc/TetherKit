@@ -1,26 +1,36 @@
 import Foundation
 
-// 图形界面与 helper 的全部面向用户文案。
+// All user-facing strings for the GUI and the helper.
 //
-// 加一条：在 `L10nKey` 里加 case，再到下面的 switch 里补中英两版。switch 是
-// 穷尽的，漏了直接编译不过。
+// Adding one: add a case to `L10nKey`, then its text to the `localizations`
+// switch below. The switch is exhaustive, so a missing entry is a compile
+// error.
 //
-// ★ 占位符的规矩 ★
+// How to add a language (the wiring deliberately stays in place with one
+// language, so this is a bounded change, not a re-architecture):
 //
-//   走 `String(format:)`，printf 风格：`%@` 字符串、`%ld` 整数、`%.1f` 浮点。
-//   **两种语言的占位符必须一一对应**（个数、顺序、类型）。译文需要换语序时，
-//   两边都改成带位置的形式（`%1$@`、`%2$ld`）—— 只有一边带位置也是合法的
-//   printf，但那样两个串的参数含义就悄悄错位了。
+//   1. Mirror the C++ side: add the value to the `Language` enum here in the
+//      package, to tk_language_t (include/tetherkit/capi/tetherkit_c.h), and
+//      to the add-a-language checklist at the top of messages.def.
+//   2. Give every row of the `localizations` switch one more labeled argument.
+//   3. Dispatch on the language in L10n.text(_:in:). The helper already
+//      follows the App through the existing setLanguage plumbing.
+//   4. Extend LocalizationTests so every table covers every message: parity
+//      across languages checks placeholder positions and conversions.
 //
-//   调用点传参前统一转成 `Int` / `Double` / `String`：`UInt32` 之类的整型直接
-//   喂给 `%ld` 在 32/64 位上的行为不一致，转一次最省心。
+// Placeholder rules (checked entry by entry by LocalizationTests):
 //
-//   这两条由 TetherKitIPCTests 的 LocalizationTests 逐条核对。
+//   Strings go through `String(format:)`, printf style: `%@` strings, `%ld`
+//   integers, `%.1f` floats. Positions must be contiguous (1...n). Call sites
+//   convert to `Int` / `Double` / `String` before passing: feeding a `UInt32`
+//   to `%ld` behaves inconsistently between 32/64-bit, one explicit
+//   conversion is the safe path. Reorder with positional forms (`%1$@`,
+//   `%2$ld`) when the word order differs.
 
-/// 一条文案的标识。
+/// The identifier of one user-facing message.
 public enum L10nKey: String, CaseIterable, Sendable {
 
-    // MARK: - 通用
+    // MARK: - Common
 
     case ok
     case cancel
@@ -37,22 +47,21 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case notConfigured
     case listSeparator
 
-    // MARK: - 语言设置
+    // MARK: - Language settings
 
     case languageLabel
     case languageSystem
-    case languageChinese
     case languageEnglish
     case languageMenuTitle
 
-    // MARK: - 数据模型（Models.swift）
+    // MARK: - Data model (Models.swift)
 
     case usbDeviceFallbackName
     case ipModeDhcp
     case ipModeManual
     case ipModeNone
 
-    // MARK: - 授权（Authorization.swift）
+    // MARK: - Authorization (Authorization.swift)
 
     case authorizationCancelled
     case authorizationDenied
@@ -61,11 +70,11 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case authorizationRestoreFailed
     case authorizationRightMissing
 
-    // MARK: - 库错误（TetherKitError.swift）
+    // MARK: - Library errors (TetherKitError.swift)
 
     case libraryGenericFailure
 
-    // MARK: - 会话事件（TetherKitSession.swift）
+    // MARK: - Session events (TetherKitSession.swift)
 
     case eventLinkUp
     case eventLinkDown
@@ -73,7 +82,7 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case eventDeviceReset
     case eventNegotiated
 
-    // MARK: - 网络参数校验（NetworkConfigurator.swift）
+    // MARK: - Network validation (NetworkConfigurator.swift)
 
     case invalidIPAddress
     case invalidNetmask
@@ -81,7 +90,7 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case routerRequiredForDefaultRoute
     case invalidDNSServer
 
-    // MARK: - helper 服务（HelperService.swift / main.swift / InstallerMode.swift）
+    // MARK: - Helper service (HelperService.swift / main.swift / InstallerMode.swift)
 
     case helperSessionAlreadyRunning
     case helperSessionStopped
@@ -96,7 +105,7 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case installerUseTerminal
     case installerScriptMissing
 
-    // MARK: - helper 客户端（HelperClient.swift / HelperInstaller.swift）
+    // MARK: - Helper client (HelperClient.swift / HelperInstaller.swift)
 
     case helperConnectFailed
     case helperReplyUnparsable
@@ -104,13 +113,13 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case installerAPIUnavailable
     case installerLaunchFailed
 
-    // MARK: - 检查更新（UpdateChecker.swift）
+    // MARK: - Update check (UpdateChecker.swift)
 
     case updateNoReleases
     case updateHTTPStatus
     case updateBadResponse
 
-    // MARK: - 访达别名（FinderAlias.swift）
+    // MARK: - Finder alias (FinderAlias.swift)
 
     case aliasSkippedNotBundle
     case aliasSkippedAlreadyInApplications
@@ -118,7 +127,7 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case aliasAlreadyPresent
     case aliasCreated
 
-    // MARK: - 连接状态（DesignSystem.swift）
+    // MARK: - Connection status (DesignSystem.swift)
 
     case statusDisconnected
     case statusConnecting
@@ -128,7 +137,7 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case statusStopped
     case statusFailed
 
-    // MARK: - 应用模型（AppModel.swift）
+    // MARK: - App model (AppModel.swift)
 
     case authPromptSession
     case authPromptInstall
@@ -180,7 +189,7 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case sysctlNeedsFixTitle
     case sysctlNeedsFixBody
 
-    // MARK: - 设备卡（DeviceCard.swift）
+    // MARK: - Device card (DeviceCard.swift)
 
     case usbDeviceSectionTitle
     case cannotRescanWhileRunning
@@ -199,7 +208,7 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case compatibilityMode
     case compatibilityModeTooltip
 
-    // MARK: - 日志卡（LogCard.swift）
+    // MARK: - Log card (LogCard.swift)
 
     case logDroppedNotice
     case logLevelLabel
@@ -223,7 +232,7 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case pageManageTitle
     case manageHelperSectionTitle
 
-    // MARK: - 菜单栏面板（MenuBarPanel.swift）
+    // MARK: - Menu bar panel (MenuBarPanel.swift)
 
     case downstreamShort
     case upstreamShort
@@ -234,7 +243,7 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case quit
     case quitTooltip
 
-    // MARK: - 网络卡（NetworkCard.swift）
+    // MARK: - Network card (NetworkCard.swift)
 
     case dnsEffectivenessTooltip
     case ipModeLabel
@@ -254,7 +263,7 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case notEffective
     case noAddressYet
 
-    // MARK: - 状态卡（StatusHeroCard.swift）
+    // MARK: - Status card (StatusHeroCard.swift)
 
     case linkUp
     case linkDown
@@ -265,7 +274,7 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case interfaceCreating
     case connectDisabledHint
 
-    // MARK: - 吞吐卡（ThroughputCard.swift）
+    // MARK: - Throughput card (ThroughputCard.swift)
 
     case throughputLive
     case throughputDownstream
@@ -289,455 +298,388 @@ public enum L10nKey: String, CaseIterable, Sendable {
 
 extension L10nKey {
 
-    /// 一条文案的中英两版。**两边的占位符必须一一对应。**
+    /// The text of the message in the shipped language. Adding a language
+    /// turns this into a multi-element labeled tuple and gives every case one
+    /// more labeled argument; see the checklist at the top of this file.
     // swiftlint:disable:next function_body_length cyclomatic_complexity
-    public var localizations: (chinese: String, english: String) {
+    public var localizations: String {
         switch self {
 
-        // MARK: 通用
+        // MARK: Common
 
-        case .ok: return ("好", "OK")
-        case .cancel: return ("取消", "Cancel")
-        case .copy: return ("复制", "Copy")
-        case .copied: return ("已复制", "Copied")
-        case .add: return ("添加", "Add")
-        case .apply: return ("应用", "Apply")
-        case .connect: return ("连接", "Connect")
-        case .disconnect: return ("断开", "Disconnect")
-        case .uninstall: return ("卸载", "Uninstall")
-        case .ipAddress: return ("IP 地址", "IP address")
-        case .netmask: return ("子网掩码", "Subnet mask")
-        case .router: return ("网关", "Router")
-        case .notConfigured: return ("未配置", "Not configured")
-        case .listSeparator: return ("、", ", ")
+        case .ok: return "OK"
+        case .cancel: return "Cancel"
+        case .copy: return "Copy"
+        case .copied: return "Copied"
+        case .add: return "Add"
+        case .apply: return "Apply"
+        case .connect: return "Connect"
+        case .disconnect: return "Disconnect"
+        case .uninstall: return "Uninstall"
+        case .ipAddress: return "IP address"
+        case .netmask: return "Subnet mask"
+        case .router: return "Router"
+        case .notConfigured: return "Not configured"
+        case .listSeparator: return ", "
 
-        // MARK: 语言设置
+        // MARK: Language settings
 
-        case .languageLabel: return ("界面语言", "Language")
-        case .languageSystem: return ("跟随系统", "Follow system")
-        case .languageChinese: return ("中文", "中文")
-        case .languageEnglish: return ("English", "English")
-        case .languageMenuTitle: return ("语言", "Language")
+        case .languageLabel: return "Language"
+        case .languageSystem: return "Follow system"
+        case .languageEnglish: return "English"
+        case .languageMenuTitle: return "Language"
 
-        // MARK: 数据模型
+        // MARK: Data model
 
-        case .usbDeviceFallbackName: return ("USB 设备 %04lx:%04lx", "USB device %04lx:%04lx")
-        case .ipModeDhcp: return ("自动（DHCP）", "Automatic (DHCP)")
-        case .ipModeManual: return ("静态 IP", "Static IP")
-        case .ipModeNone: return ("不配置", "None")
+        case .usbDeviceFallbackName: return "USB device %04lx:%04lx"
+        case .ipModeDhcp: return "Automatic (DHCP)"
+        case .ipModeManual: return "Static IP"
+        case .ipModeNone: return "None"
 
-        // MARK: 授权
+        // MARK: Authorization
 
-        case .authorizationCancelled: return ("已取消授权", "Authorization cancelled")
-        case .authorizationDenied: return ("授权未通过（%ld）", "Authorization was denied (%ld)")
+        case .authorizationCancelled: return "Authorization cancelled"
+        case .authorizationDenied: return "Authorization was denied (%ld)"
         case .authorizationSessionFailed:
-            return ("无法创建授权会话（%ld）", "Cannot create an authorization session (%ld)")
+            return "Cannot create an authorization session (%ld)"
         case .authorizationBlobMalformed:
-            return ("授权凭据格式不正确", "The authorization credential is malformed")
+            return "The authorization credential is malformed"
         case .authorizationRestoreFailed:
-            return ("无法还原授权凭据（%ld）", "Cannot restore the authorization credential (%ld)")
+            return "Cannot restore the authorization credential (%ld)"
         case .authorizationRightMissing:
-            return ("调用方没有执行该操作所需的授权（%ld）",
-                    "The caller lacks the authorization this operation requires (%ld)")
+            return "The caller lacks the authorization this operation requires (%ld)"
 
-        // MARK: 库错误
+        // MARK: Library errors
 
         case .libraryGenericFailure:
-            return ("操作失败（错误码 %ld）", "The operation failed (error code %ld)")
+            return "The operation failed (error code %ld)"
 
-        // MARK: 会话事件
+        // MARK: Session events
 
-        case .eventLinkUp: return ("链路已连接", "Link is up")
-        case .eventLinkDown: return ("链路已断开", "Link is down")
+        case .eventLinkUp: return "Link is up"
+        case .eventLinkDown: return "Link is down"
         case .eventDeviceResetReplayed:
-            return ("设备已软复位，寻址信息已重放",
-                    "The device soft-reset; addressing information has been replayed")
-        case .eventDeviceReset: return ("设备已软复位", "The device soft-reset")
+            return "The device soft-reset; addressing information has been replayed"
+        case .eventDeviceReset: return "The device soft-reset"
         case .eventNegotiated:
-            return ("RNDIS 协商完成：MTU %1$ld，链路 %2$ld Mbps",
-                    "RNDIS negotiation complete: MTU %1$ld, link %2$ld Mbps")
+            return "RNDIS negotiation complete: MTU %1$ld, link %2$ld Mbps"
 
-        // MARK: 网络参数校验
+        // MARK: Network validation
 
-        case .invalidIPAddress: return ("IP 地址格式不正确", "The IP address is not valid")
+        case .invalidIPAddress: return "The IP address is not valid"
         case .invalidNetmask:
-            return ("子网掩码不正确（必须是连续的掩码，如 255.255.255.0）",
-                    "The subnet mask is not valid (it must be contiguous, e.g. 255.255.255.0)")
-        case .invalidRouter: return ("网关地址格式不正确", "The router address is not valid")
+            return "The subnet mask is not valid (it must be contiguous, e.g. 255.255.255.0)"
+        case .invalidRouter: return "The router address is not valid"
         case .routerRequiredForDefaultRoute:
-            return ("要把流量默认走这张网卡，必须填写网关地址",
-                    "Routing traffic through this interface by default requires a router address")
+            return "Routing traffic through this interface by default requires a router address"
         case .invalidDNSServer:
-            return ("DNS 服务器 %@ 格式不正确", "DNS server %@ is not a valid address")
+            return "DNS server %@ is not a valid address"
 
-        // MARK: helper 服务
+        // MARK: Helper service
 
-        case .helperSessionAlreadyRunning: return ("会话已经在运行了", "A session is already running")
-        case .helperSessionStopped: return ("会话已停止", "Session stopped")
+        case .helperSessionAlreadyRunning: return "A session is already running"
+        case .helperSessionStopped: return "Session stopped"
         case .helperNetworkApplied:
-            return ("已应用网络配置：%@", "Applied the network configuration: %@")
+            return "Applied the network configuration: %@"
         case .helperRequestDecodeFailed:
-            return ("请求参数无法解析：%@", "Cannot decode the request arguments: %@")
-        case .helperReplyEncodeFailed: return ("应答编码失败：%@", "Cannot encode the reply: %@")
+            return "Cannot decode the request arguments: %@"
+        case .helperReplyEncodeFailed: return "Cannot encode the reply: %@"
         case .helperOrphansCleaned:
-            return ("已清理 %ld 张上次残留的虚拟网卡",
-                    "Cleaned up %ld leftover virtual interface(s) from a previous run")
+            return "Cleaned up %ld leftover virtual interface(s) from a previous run"
         case .helperOrphanCleanupFailed:
-            return ("清理残留虚拟网卡失败：%@",
-                    "Failed to clean up leftover virtual interfaces: %@")
-        case .helperSigtermReceived: return ("收到 SIGTERM，正在停机", "Received SIGTERM; shutting down")
-        case .helperReady: return ("tetherkit-helper 已就绪：%@", "tetherkit-helper ready: %@")
+            return "Failed to clean up leftover virtual interfaces: %@"
+        case .helperSigtermReceived: return "Received SIGTERM; shutting down"
+        case .helperReady: return "tetherkit-helper ready: %@"
         case .installerNeedsRoot:
-            return ("错误：无法取得 root（euid=%1$ld，ruid=%2$ld）。",
-                    "Error: cannot obtain root (euid=%1$ld, ruid=%2$ld).")
+            return "Error: cannot obtain root (euid=%1$ld, ruid=%2$ld)."
         case .installerUseTerminal:
-            return ("请改用终端：sudo %@", "Use the terminal instead: sudo %@")
-        case .installerScriptMissing: return ("错误：找不到脚本 %@", "Error: script %@ not found")
+            return "Use the terminal instead: sudo %@"
+        case .installerScriptMissing: return "Error: script %@ not found"
 
-        // MARK: helper 客户端
+        // MARK: Helper client
 
         case .helperConnectFailed:
-            return ("无法连接到特权组件：%@", "Cannot reach the privileged helper: %@")
+            return "Cannot reach the privileged helper: %@"
         case .helperReplyUnparsable:
-            return ("特权组件的应答无法解析，可能是版本不一致",
-                    "The helper's reply could not be parsed; the versions may not match")
-        // 这两条各自都以「请改用终端」收尾，因此把两句合成一条 —— 拆成两半再拼
-        // 的话，中文之间不该有空格、英文之间必须有，join 的写法一定会错一边。
+            return "The helper's reply could not be parsed; the versions may not match"
+        // Both of these two messages end with "use the terminal instead", so the two
+        // sentences are merged -- Chinese clauses need no space, English ones do, and a join would get one side wrong.
         case .installerNoPayload:
-            return ("这份 TetherKit 不带安装载荷（可能是开发构建）。"
-                    + "请在终端执行：sudo ./gui/Scripts/install-helper.sh",
-                    "This copy of TetherKit carries no installer payload (likely a dev build). "
-                    + "Run this in a terminal: sudo ./gui/Scripts/install-helper.sh")
+            return "This copy of TetherKit carries no installer payload (likely a dev build). "
+                    + "Run this in a terminal: sudo ./gui/Scripts/install-helper.sh"
         case .installerAPIUnavailable:
-            return ("当前系统不再提供 App 内安装所需的接口。"
-                    + "请在终端执行：sudo ./gui/Scripts/install-helper.sh",
-                    "This version of macOS no longer offers the API in-app installation needs. "
-                    + "Run this in a terminal: sudo ./gui/Scripts/install-helper.sh")
+            return "This version of macOS no longer offers the API in-app installation needs. "
+                    + "Run this in a terminal: sudo ./gui/Scripts/install-helper.sh"
         case .installerLaunchFailed:
-            return ("无法启动安装/卸载程序（%ld）",
-                    "Cannot launch the install/uninstall program (%ld)")
+            return "Cannot launch the install/uninstall program (%ld)"
 
-        // MARK: 检查更新
+        // MARK: Update check
 
-        case .updateNoReleases: return ("仓库还没有发布任何版本", "The repository has no releases yet")
-        case .updateHTTPStatus: return ("GitHub 返回了 %ld", "GitHub returned %ld")
-        case .updateBadResponse: return ("响应格式不符合预期", "The response was not in the expected format")
+        case .updateNoReleases: return "The repository has no releases yet"
+        case .updateHTTPStatus: return "GitHub returned %ld"
+        case .updateBadResponse: return "The response was not in the expected format"
 
-        // MARK: 访达别名
+        // MARK: Finder alias
 
         case .aliasSkippedNotBundle:
-            return ("跳过：不是 .app 包（开发构建）", "Skipped: not an .app bundle (dev build)")
+            return "Skipped: not an .app bundle (dev build)"
         case .aliasSkippedAlreadyInApplications:
-            return ("跳过：App 已在 /Applications 里", "Skipped: the app already lives in /Applications")
+            return "Skipped: the app already lives in /Applications"
         case .aliasFailed:
-            return ("失败：/Applications 与 ~/Applications 都没能写入别名",
-                    "Failed: could not write the alias to /Applications or ~/Applications")
-        case .aliasAlreadyPresent: return ("别名已就绪：%@", "Alias already in place: %@")
-        case .aliasCreated: return ("已建立别名：%1$@ → %2$@", "Created alias: %1$@ -> %2$@")
+            return "Failed: could not write the alias to /Applications or ~/Applications"
+        case .aliasAlreadyPresent: return "Alias already in place: %@"
+        case .aliasCreated: return "Created alias: %1$@ -> %2$@"
 
-        // MARK: 连接状态
+        // MARK: Connection status
 
-        case .statusDisconnected: return ("未连接", "Not connected")
-        case .statusConnecting: return ("正在连接", "Connecting")
-        case .statusConnected: return ("已连接", "Connected")
-        case .statusReadyLinkDown: return ("已就绪（链路未连通）", "Ready (link down)")
-        case .statusDisconnecting: return ("正在断开", "Disconnecting")
-        case .statusStopped: return ("已断开", "Disconnected")
-        case .statusFailed: return ("连接失败", "Connection failed")
+        case .statusDisconnected: return "Not connected"
+        case .statusConnecting: return "Connecting"
+        case .statusConnected: return "Connected"
+        case .statusReadyLinkDown: return "Ready (link down)"
+        case .statusDisconnecting: return "Disconnecting"
+        case .statusStopped: return "Disconnected"
+        case .statusFailed: return "Connection failed"
 
-        // MARK: 应用模型
+        // MARK: App model
 
         case .authPromptSession:
-            return ("TetherKit 需要管理员权限来创建虚拟网卡、打开数据链路并配置 IP 地址。",
-                    "TetherKit needs administrator privileges to create the virtual interface, "
-                    + "open the data link and configure IP addresses.")
+            return "TetherKit needs administrator privileges to create the virtual interface, "
+                    + "open the data link and configure IP addresses."
         case .authPromptInstall:
-            return ("TetherKit 需要管理员权限来安装特权组件"
-                    + "（复制到 /Library/PrivilegedHelperTools 并注册系统服务）。",
-                    "TetherKit needs administrator privileges to install the privileged helper "
+            return "TetherKit needs administrator privileges to install the privileged helper "
                     + "(copy it to /Library/PrivilegedHelperTools and register the system "
-                    + "service).")
+                    + "service)."
         case .authPromptUninstall:
-            return ("TetherKit 需要管理员权限来卸载特权组件"
-                    + "（注销系统服务并删除 /Library 里的组件文件）。",
-                    "TetherKit needs administrator privileges to uninstall the privileged helper "
-                    + "(unregister the system service and delete its files under /Library).")
+            return "TetherKit needs administrator privileges to uninstall the privileged helper "
+                    + "(unregister the system service and delete its files under /Library)."
         case .interfaceNotReadyYet:
-            return ("虚拟网卡还没创建，请先连接设备",
-                    "The virtual interface does not exist yet -- connect a device first")
+            return "The virtual interface does not exist yet -- connect a device first"
         case .installScriptRanButUnreachable:
-            return ("安装脚本执行完毕，但仍连不上特权组件。",
-                    "The install script finished, but the helper is still unreachable.")
+            return "The install script finished, but the helper is still unreachable."
         case .uninstallScriptRanButStillAlive:
-            return ("卸载脚本执行完毕，但特权组件仍在响应。",
-                    "The uninstall script finished, but the helper is still responding.")
-        case .scriptOutput: return ("%1$@脚本输出：\n%2$@", "%1$@Script output:\n%2$@")
-        case .scriptNoOutput: return ("（无输出）", "(no output)")
+            return "The uninstall script finished, but the helper is still responding."
+        case .scriptOutput: return "%1$@Script output:\n%2$@"
+        case .scriptNoOutput: return "(no output)"
 
         // MARK: Main window, dialogs and helper management
 
-        case .closeWindow: return ("关闭窗口", "Close Window")
-        case .menuCheckForUpdates: return ("检查更新…", "Check for Updates…")
-        case .alertOperationFailed: return ("操作失败", "Operation failed")
-        case .confirmUninstallTitle: return ("卸载特权组件？", "Uninstall the privileged helper?")
-        case .updateCheckTitle: return ("检查更新", "Check for updates")
-        case .openReleasePage: return ("前往发布页", "Open the release page")
-        case .copyBrewUpgradeCommand: return ("复制 brew 升级命令", "Copy the brew upgrade command")
+        case .closeWindow: return "Close Window"
+        case .menuCheckForUpdates: return "Check for Updates…"
+        case .alertOperationFailed: return "Operation failed"
+        case .confirmUninstallTitle: return "Uninstall the privileged helper?"
+        case .updateCheckTitle: return "Check for updates"
+        case .openReleasePage: return "Open the release page"
+        case .copyBrewUpgradeCommand: return "Copy the brew upgrade command"
         case .updateUpToDate:
-            return ("当前已是最新版本（v%@）。", "You are on the latest version (v%@).")
+            return "You are on the latest version (v%@)."
         case .updateAvailable:
-            return ("发现新版本 v%@。通过 Homebrew 安装的话，"
-                    + "在终端执行 brew upgrade tetherkit；"
-                    + "从源码构建的话，拉取最新代码重新编译即可。",
-                    "Version v%@ is available. If you installed via Homebrew, run "
+            return "Version v%@ is available. If you installed via Homebrew, run "
                     + "brew upgrade tetherkit in a terminal; if you build from source, pull the "
-                    + "latest code and rebuild.")
-        case .updateCheckFailed: return ("无法完成检查：%@", "The check could not be completed: %@")
+                    + "latest code and rebuild."
+        case .updateCheckFailed: return "The check could not be completed: %@"
         case .updateDevBuild:
-            return ("这是开发构建（没有版本号），无从比较。",
-                    "This is a development build with no version number, so there is nothing to "
-                    + "compare against.")
+            return "This is a development build with no version number, so there is nothing to "
+                    + "compare against."
         case .uninstallExplanation:
-            return ("将注销系统服务并删除 /Library 里的组件文件，之后随时可以重新安装。",
-                    "This unregisters the system service and deletes the helper files under "
-                    + "/Library. You can reinstall it at any time.")
+            return "This unregisters the system service and deletes the helper files under "
+                    + "/Library. You can reinstall it at any time."
         case .uninstallWhileRunningWarning:
-            return ("当前连接会被断开、虚拟网卡销毁。",
-                    "The current connection will be dropped and the virtual interface destroyed.")
-        case .helperComponentVersion: return ("特权组件 · %@", "Helper · %@")
-        case .helperVersionMismatch: return ("特权组件 %1$@ · App %2$@", "Helper %1$@ · app %2$@")
+            return "The current connection will be dropped and the virtual interface destroyed."
+        case .helperComponentVersion: return "Helper · %@"
+        case .helperVersionMismatch: return "Helper %1$@ · app %2$@"
         case .helperVersionMismatchTooltip:
-            return ("装着的特权组件仍是 %1$@，而 App 已经是 %2$@。真正干活的是组件里的那份库，"
-                    + "不更新的话新版修好的问题在连接里依旧存在。"
-                    + "点一下就用 App 自带的组件重装一遍，需要一次管理员授权。",
-                    "The installed helper is still %1$@ while the app is %2$@. The library inside "
+            return "The installed helper is still %1$@ while the app is %2$@. The library inside "
                     + "the helper is what does the actual work, so anything the new version fixes "
                     + "stays unfixed until the helper is updated too. One click reinstalls the "
                     + "helper the app ships with; macOS will ask for an administrator password "
-                    + "once.")
-        case .confirmHelperUpdateTitle: return ("更新特权组件？", "Update the privileged helper?")
+                    + "once."
+        case .confirmHelperUpdateTitle: return "Update the privileged helper?"
         case .helperUpdateWhileRunningWarning:
-            return ("更新要先注销旧组件，当前连接会被断开、虚拟网卡销毁。装好后重新连接即可。",
-                    "Updating unregisters the old helper first, so the current connection will be "
+            return "Updating unregisters the old helper first, so the current connection will be "
                     + "dropped and the virtual interface destroyed. Just reconnect once it is "
-                    + "installed.")
-        case .helperUpdateBadge: return ("有新版 %@", "%@ available")
-        case .uninstallHelperMenuItem: return ("卸载特权组件…", "Uninstall the helper…")
-        case .checkingHelper: return ("正在检查特权组件……", "Checking the privileged helper…")
-        case .needInstallTitle: return ("需要先安装特权组件", "The privileged helper must be installed")
+                    + "installed."
+        case .helperUpdateBadge: return "%@ available"
+        case .uninstallHelperMenuItem: return "Uninstall the helper…"
+        case .checkingHelper: return "Checking the privileged helper…"
+        case .needInstallTitle: return "The privileged helper must be installed"
         case .needInstallBody:
-            return ("创建虚拟网卡和打开数据链路需要管理员权限。TetherKit 把这部分\n"
-                    + "放在一个独立的后台组件里，App 本身以普通用户身份运行。",
-                    "Creating the virtual interface and opening the data link require\n"
+            return "Creating the virtual interface and opening the data link require\n"
                     + "administrator privileges. TetherKit keeps that work in a separate\n"
-                    + "background component so the app itself runs as a normal user.")
-        case .installHelperButton: return ("安装特权组件", "Install the helper")
+                    + "background component so the app itself runs as a normal user."
+        case .installHelperButton: return "Install the helper"
         case .installHelperDetail:
-            return ("组件会被装到 /Library/PrivilegedHelperTools 并注册为\n"
-                    + "LaunchDaemon。装好后本页自动恢复，不需要重启 App。",
-                    "It is installed to /Library/PrivilegedHelperTools and registered\n"
+            return "It is installed to /Library/PrivilegedHelperTools and registered\n"
                     + "as a LaunchDaemon. This page recovers on its own afterwards --\n"
-                    + "no need to restart the app.")
+                    + "no need to restart the app."
         case .showConnectFailureDetail:
-            return ("查看连接失败的详细原因", "Show why the connection failed")
-        case .helperNeedsUpdateTitle: return ("特权组件需要更新", "The privileged helper needs updating")
+            return "Show why the connection failed"
+        case .helperNeedsUpdateTitle: return "The privileged helper needs updating"
         case .helperNeedsUpdateBody:
-            return ("已安装的特权组件是升级前的版本，与当前 App 的通信接口对不上"
-                    + "（组件 v%1$@，App 需要 v%2$@）。",
-                    "The installed helper predates this app and speaks a different protocol "
-                    + "(helper v%1$@, app needs v%2$@).")
-        case .updateHelperButton: return ("更新特权组件", "Update the helper")
+            return "The installed helper predates this app and speaks a different protocol "
+                    + "(helper v%1$@, app needs v%2$@)."
+        case .updateHelperButton: return "Update the helper"
         case .updateHelperDetail:
-            return ("更新会先注销旧版本再装新的，装好后本页自动恢复。",
-                    "Updating unregisters the old version before installing the new one. "
-                    + "This page recovers on its own afterwards.")
-        case .installingProgress: return ("正在安装……", "Installing…")
+            return "Updating unregisters the old version before installing the new one. "
+                    + "This page recovers on its own afterwards."
+        case .installingProgress: return "Installing…"
         case .authorizationPromptHint:
-            return ("会弹出系统授权框，需要输入一次管理员密码",
-                    "macOS will ask once for an administrator password")
-        case .installViaTerminal: return ("改用终端安装", "Install from the terminal instead")
+            return "macOS will ask once for an administrator password"
+        case .installViaTerminal: return "Install from the terminal instead"
         case .installViaTerminalHint:
-            return ("在仓库根目录执行，效果与按钮完全相同。",
-                    "Run this from the repository root; it does exactly what the button does.")
-        case .copiedToClipboard: return ("已复制到剪贴板", "Copied to the clipboard")
-        case .copyCommand: return ("复制命令", "Copy the command")
-        case .sysctlNeedsFixTitle: return ("系统参数需要调整", "System parameters need adjusting")
+            return "Run this from the repository root; it does exactly what the button does."
+        case .copiedToClipboard: return "Copied to the clipboard"
+        case .copyCommand: return "Copy the command"
+        case .sysctlNeedsFixTitle: return "System parameters need adjusting"
         case .sysctlNeedsFixBody:
-            return ("下面这些开关会在虚拟网卡**创建时**被快照进去，创建后再改无效，\n"
-                    + "因此必须先修正再连接：",
-                    "These switches are snapshotted into the virtual interface **when it is\n"
+            return "These switches are snapshotted into the virtual interface **when it is\n"
                     + "created**, so changing them afterwards has no effect. Fix them before\n"
-                    + "connecting:")
+                    + "connecting:"
 
-        // MARK: 设备卡
+        // MARK: Device card
 
-        case .usbDeviceSectionTitle: return ("USB 设备", "USB device")
+        case .usbDeviceSectionTitle: return "USB device"
         case .cannotRescanWhileRunning:
-            return ("运行中无法刷新设备列表", "The device list cannot be refreshed while running")
-        case .rescanUSBDevices: return ("重新扫描 USB 设备", "Rescan USB devices")
-        case .noDeviceDetected: return ("没有检测到设备", "No device detected")
+            return "The device list cannot be refreshed while running"
+        case .rescanUSBDevices: return "Rescan USB devices"
+        case .noDeviceDetected: return "No device detected"
         case .deviceChecklistCable:
-            return ("① 用的是数据线，而不是只能供电的充电线",
-                    "1. The cable carries data and is not charge-only")
+            return "1. The cable carries data and is not charge-only"
         case .deviceChecklistTethering:
-            return ("② 手机上已打开「USB 网络共享 / USB tethering」",
-                    "2. \"USB tethering\" is switched on for the phone")
+            return "2. \"USB tethering\" is switched on for the phone"
         case .deviceChecklistUnlocked:
-            return ("③ 手机已解锁并信任本机", "3. The phone is unlocked and trusts this Mac")
-        case .mtuBytes: return ("%@ 字节", "%@ bytes")
+            return "3. The phone is unlocked and trusts this Mac"
+        case .mtuBytes: return "%@ bytes"
         case .mtuHelp:
-            return ("超出设备能力时会在协商阶段自动下调。",
-                    "Values beyond the device's capability are lowered during negotiation.")
+            return "Values beyond the device's capability are lowered during negotiation."
         case .mtuHelpWithLimit:
-            return ("超出设备能力时会在协商阶段自动下调（本机上限 %ld）。",
-                    "Values beyond the device's capability are lowered during negotiation "
-                    + "(this Mac allows up to %ld).")
+            return "Values beyond the device's capability are lowered during negotiation "
+                    + "(this Mac allows up to %ld)."
         case .mtuTooltip:
-            return ("协商阶段以设备汇报的能力为准，填大了会自动下调。"
-                    + "上限受系统的 net.link.fake.max_mtu 约束。",
-                    "Negotiation honours whatever the device reports, so an oversized value is "
+            return "Negotiation honours whatever the device reports, so an oversized value is "
                     + "lowered automatically. The ceiling comes from the system's "
-                    + "net.link.fake.max_mtu.")
-        case .adoptDeviceMAC: return ("采用设备汇报的 MAC 地址", "Adopt the MAC address the device reports")
+                    + "net.link.fake.max_mtu."
+        case .adoptDeviceMAC: return "Adopt the MAC address the device reports"
         case .adoptDeviceMACHelp:
-            return ("只有排查 MAC 冲突时才需要关掉。",
-                    "Only turn this off when investigating a MAC address conflict.")
+            return "Only turn this off when investigating a MAC address conflict."
         case .adoptDeviceMACTooltip:
-            return ("RNDIS 语义下设备就是这块网卡，对端的 ARP 表与 DHCP 租约都按设备的 MAC 建立。",
-                    "Under RNDIS the device *is* the network interface, so the peer's ARP table "
-                    + "and DHCP leases are all keyed on the device's MAC.")
-        case .compatibilityMode: return ("兼容模式", "Compatibility mode")
+            return "Under RNDIS the device *is* the network interface, so the peer's ARP table "
+                    + "and DHCP leases are all keyed on the device's MAC."
+        case .compatibilityMode: return "Compatibility mode"
         case .compatibilityModeTooltip:
-            return ("该设备的 CDC 描述符不规范，已按 Android 的惯例推断接口编号",
-                    "This device's CDC descriptors are non-standard, so the interface numbers "
-                    + "were inferred using the usual Android layout")
+            return "This device's CDC descriptors are non-standard, so the interface numbers "
+                    + "were inferred using the usual Android layout"
 
-        // MARK: 日志卡
+        // MARK: Log card
 
         case .logDroppedNotice:
-            return ("有 %ld 条日志因缓冲写满被丢弃", "%ld log lines were dropped because the buffer filled up")
-        case .logLevelLabel: return ("级别", "Level")
-        case .logLevelAll: return ("全部", "All")
-        case .logLevelDebug: return ("调试", "Debug")
-        case .logLevelInfo: return ("信息", "Info")
-        case .logLevelWarning: return ("警告", "Warning")
-        case .logLevelError: return ("错误", "Error")
-        case .logAutoScroll: return ("自动滚动", "Auto-scroll")
-        case .logCopyAll: return ("复制全部日志", "Copy all log lines")
-        case .logClear: return ("清空日志", "Clear the log")
-        case .logRepeatSuffix: return ("（×%1$ld，自 %2$@ 起）", " (x%1$ld, since %2$@)")
+            return "%ld log lines were dropped because the buffer filled up"
+        case .logLevelLabel: return "Level"
+        case .logLevelAll: return "All"
+        case .logLevelDebug: return "Debug"
+        case .logLevelInfo: return "Info"
+        case .logLevelWarning: return "Warning"
+        case .logLevelError: return "Error"
+        case .logAutoScroll: return "Auto-scroll"
+        case .logCopyAll: return "Copy all log lines"
+        case .logClear: return "Clear the log"
+        case .logRepeatSuffix: return " (x%1$ld, since %2$@)"
         case .logRepeatTooltip:
-            return ("这句话连续出现了 %1$ld 次，首次在 %2$@",
-                    "This line repeated %1$ld times in a row, first at %2$@")
+            return "This line repeated %1$ld times in a row, first at %2$@"
 
-        // MARK: 菜单栏面板
+        // MARK: Menu bar panel
 
-        case .downstreamShort: return ("下行", "Down")
-        case .upstreamShort: return ("上行", "Up")
-        case .noIPConfigured: return ("未配置 IP", "No IP address")
+        case .downstreamShort: return "Down"
+        case .upstreamShort: return "Up"
+        case .noIPConfigured: return "No IP address"
         case .menuBarNoDevice:
-            return ("未检测到设备。用数据线连接手机并开启 USB 网络共享。",
-                    "No device detected. Connect a phone with a data cable and turn on USB "
-                    + "tethering.")
+            return "No device detected. Connect a phone with a data cable and turn on USB "
+                    + "tethering."
         case .menuBarReady:
-            return ("已就绪：%@。打开主窗口即可连接。",
-                    "Ready: %@. Open the main window to connect.")
-        case .openMainWindow: return ("打开主窗口", "Open the main window")
-        case .quit: return ("退出", "Quit")
+            return "Ready: %@. Open the main window to connect."
+        case .openMainWindow: return "Open the main window"
+        case .quit: return "Quit"
         case .quitTooltip:
-            return ("退出只是关闭界面，已建立的连接会继续运行。",
-                    "Quitting only closes the interface; an established connection keeps running.")
+            return "Quitting only closes the interface; an established connection keeps running."
 
-        // MARK: 网络卡
+        // MARK: Network card
 
         case .dnsEffectivenessTooltip:
-            return ("静态模式下 DNS 是否生效取决于系统的解析器管理，请以「当前生效」里的回读结果为准。",
-                    "In manual mode, whether DNS takes effect is up to the system resolver, so "
-                    + "trust what \"Currently effective\" reads back.")
-        case .ipModeLabel: return ("上网方式", "Configure IPv4")
+            return "In manual mode, whether DNS takes effect is up to the system resolver, so "
+                    + "trust what \"Currently effective\" reads back."
+        case .ipModeLabel: return "Configure IPv4"
         case .connectBeforeConfiguring:
-            return ("连接设备后才能配置网络", "Connect a device before configuring the network")
+            return "Connect a device before configuring the network"
         case .dhcpHelp:
-            return ("由系统向设备申请地址，DNS 与路由都自动配好",
-                    "The system asks the device for an address; DNS and routes are set up "
-                    + "automatically")
+            return "The system asks the device for an address; DNS and routes are set up "
+                    + "automatically"
         case .dhcpTooltip:
-            return ("绝大多数手机的 USB 网络共享都自带 DHCP 服务器，这是推荐选项。"
-                    + "应用后最多等待 10 秒；超时通常意味着设备侧没有开启网络共享。",
-                    "Nearly every phone's USB tethering runs its own DHCP server, so this is the "
+            return "Nearly every phone's USB tethering runs its own DHCP server, so this is the "
                     + "recommended choice. Applying it waits up to 10 seconds; a timeout usually "
-                    + "means tethering is not enabled on the device.")
-        case .routerOptional: return ("可留空", "Optional")
-        case .deleteThisEntry: return ("删除这一条", "Remove this entry")
-        case .addDNSServer: return ("添加 DNS 服务器（最多 4 条）", "Add a DNS server (up to 4)")
-        case .setDefaultRoute: return ("让所有流量默认走这张网卡", "Route all traffic through this interface")
+                    + "means tethering is not enabled on the device."
+        case .routerOptional: return "Optional"
+        case .deleteThisEntry: return "Remove this entry"
+        case .addDNSServer: return "Add a DNS server (up to 4)"
+        case .setDefaultRoute: return "Route all traffic through this interface"
         case .setDefaultRouteHelp:
-            return ("不开启时，只有明确绑定到本网卡的流量走它。",
-                    "When off, only traffic explicitly bound to this interface uses it.")
+            return "When off, only traffic explicitly bound to this interface uses it."
         case .setDefaultRouteTooltip:
-            return ("不开启时其余流量仍走当前的主网络。如果本机没有别的可用网络，"
-                    + "通常不需要开 —— 系统会自己把它选为主服务。",
-                    "When off, the rest of your traffic keeps using the current primary network. "
+            return "When off, the rest of your traffic keeps using the current primary network. "
                     + "If this Mac has no other network available you usually do not need this -- "
-                    + "the system picks this interface as the primary service on its own.")
-        case .clearConfiguration: return ("撤销配置", "Clear the configuration")
+                    + "the system picks this interface as the primary service on its own."
+        case .clearConfiguration: return "Clear the configuration"
         case .clearConfigurationTooltip:
-            return ("等同于 ipconfig set <网卡> NONE，会移除地址与相关路由",
-                    "Equivalent to ipconfig set <interface> NONE; removes the address and its "
-                    + "routes")
-        case .currentlyEffective: return ("当前生效", "Currently effective")
-        case .primaryDefaultRoute: return ("主默认路由", "Primary default route")
-        case .notEffective: return ("未生效", "Not in effect")
+            return "Equivalent to ipconfig set <interface> NONE; removes the address and its "
+                    + "routes"
+        case .currentlyEffective: return "Currently effective"
+        case .primaryDefaultRoute: return "Primary default route"
+        case .notEffective: return "Not in effect"
         case .noAddressYet:
-            return ("%@ 目前没有 IP 地址。选择上网方式后点「应用」。",
-                    "%@ has no IP address yet. Pick a configuration and press Apply.")
+            return "%@ has no IP address yet. Pick a configuration and press Apply."
 
-        // MARK: 状态卡
+        // MARK: Status card
 
-        case .linkUp: return ("链路已连通", "Link up")
-        case .linkDown: return ("链路未连通", "Link down")
-        case .transferPaused: return ("已暂停搬运", "Transfer paused")
-        case .pendingDevice: return ("待连接：%@", "Ready to connect: %@")
+        case .linkUp: return "Link up"
+        case .linkDown: return "Link down"
+        case .transferPaused: return "Transfer paused"
+        case .pendingDevice: return "Ready to connect: %@"
         case .noRNDISDeviceDetected:
-            return ("没有检测到 RNDIS 设备。请用数据线连接手机，并在手机上打开「USB 网络共享」。",
-                    "No RNDIS device detected. Connect a phone with a data cable and turn on "
-                    + "\"USB tethering\" on the phone.")
-        case .interfaceLabel: return ("网卡", "Interface")
-        case .interfaceCreating: return ("创建中…", "Creating…")
+            return "No RNDIS device detected. Connect a phone with a data cable and turn on "
+                    + "\"USB tethering\" on the phone."
+        case .interfaceLabel: return "Interface"
+        case .interfaceCreating: return "Creating…"
         case .connectDisabledHint:
-            return ("先连接一台开启了 USB 网络共享的设备",
-                    "Connect a device with USB tethering switched on first")
+            return "Connect a device with USB tethering switched on first"
 
-        // MARK: 吞吐卡
+        // MARK: Throughput card
 
-        case .throughputLive: return ("实时", "Live")
-        case .throughputDownstream: return ("下行（设备 → 本机）", "Down (device -> Mac)")
-        case .throughputUpstream: return ("上行（本机 → 设备）", "Up (Mac -> device)")
-        case .throughputDownstreamFPS: return ("下行帧率", "Down frame rate")
-        case .throughputUpstreamFPS: return ("上行帧率", "Up frame rate")
-        case .chartTime: return ("时间", "Time")
-        case .chartRate: return ("速率", "Rate")
-        case .chartDirection: return ("方向", "Direction")
-        case .throughputCollecting: return ("正在采集…", "Collecting…")
+        case .throughputLive: return "Live"
+        case .throughputDownstream: return "Down (device -> Mac)"
+        case .throughputUpstream: return "Up (Mac -> device)"
+        case .throughputDownstreamFPS: return "Down frame rate"
+        case .throughputUpstreamFPS: return "Up frame rate"
+        case .chartTime: return "Time"
+        case .chartRate: return "Rate"
+        case .chartDirection: return "Direction"
+        case .throughputCollecting: return "Collecting…"
         case .throughputPlaceholder:
-            return ("连接后显示实时吞吐", "Live throughput appears once you connect")
-        case .totalDownstream: return ("累计下行", "Total down")
-        case .totalUpstream: return ("累计上行", "Total up")
-        case .downstreamFrames: return ("下行帧数", "Down frames")
-        case .upstreamFrames: return ("上行帧数", "Up frames")
-        case .downstreamDropped: return ("下行丢弃", "Down dropped")
-        case .upstreamDropped: return ("上行丢弃", "Up dropped")
-        case .kernelDrops: return ("内核丢包", "Kernel drops")
-        case .transmitBackpressure: return ("发送背压", "TX backpressure")
+            return "Live throughput appears once you connect"
+        case .totalDownstream: return "Total down"
+        case .totalUpstream: return "Total up"
+        case .downstreamFrames: return "Down frames"
+        case .upstreamFrames: return "Up frames"
+        case .downstreamDropped: return "Down dropped"
+        case .upstreamDropped: return "Up dropped"
+        case .kernelDrops: return "Kernel drops"
+        case .transmitBackpressure: return "TX backpressure"
 
         // MARK: Sidebar pages
 
-        case .pageConnectionTitle: return ("连接", "Connection")
-        case .pageNetworkTitle: return ("网络", "Network")
-        case .pageThroughputTitle: return ("吞吐", "Throughput")
-        case .pageLogTitle: return ("日志", "Log")
-        case .pageManageTitle: return ("管理", "Manage")
-        case .manageHelperSectionTitle: return ("特权组件", "Privileged helper")
+        case .pageConnectionTitle: return "Connection"
+        case .pageNetworkTitle: return "Network"
+        case .pageThroughputTitle: return "Throughput"
+        case .pageLogTitle: return "Log"
+        case .pageManageTitle: return "Manage"
+        case .manageHelperSectionTitle: return "Privileged helper"
         }
     }
 }
