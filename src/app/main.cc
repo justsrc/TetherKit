@@ -1,8 +1,14 @@
-// TetherKit 命令行入口。
+// TetherKit command-line entry point.
 //
-// 职责刻意保持很薄：解析参数 → 装配 RuntimeConfig → 交给 core::Runtime →
-// 处理信号。所有实质逻辑都在库里，这样才能被单元测试覆盖。
-#include <signal.h>  // NOLINT(modernize-deprecated-headers) —— sigaction 只在此头文件里
+// Kept deliberately thin: parse arguments -> assemble a RuntimeConfig -> hand
+// it to core::Runtime -> handle signals. All substantive logic lives in the
+// library so it can be covered by unit tests.
+#include "tetherkit/common/i18n.h"
+#include "tetherkit/common/logging.h"
+#include "tetherkit/core/runtime.h"
+#include "tetherkit/version.h"
+
+#include <signal.h>  // NOLINT(modernize-deprecated-headers) -- sigaction lives only in this header
 #include <unistd.h>
 
 #include <atomic>
@@ -15,11 +21,6 @@
 #include <string_view>
 #include <thread>
 
-#include "tetherkit/common/i18n.h"
-#include "tetherkit/common/logging.h"
-#include "tetherkit/core/runtime.h"
-#include "tetherkit/version.h"
-
 namespace {
 
 using tetherkit::Error;
@@ -31,31 +32,35 @@ using tetherkit::Status;
 using tetherkit::Text;
 using tetherkit::Tr;
 
-/// 全局停机标志。
+/// Global shutdown flag.
 ///
-/// 进程级的信号状态天然是全局的，无法避免；用无锁原子保证安全后不再包装。
+/// Process-level signal state is inherently global and unavoidable; with a
+/// lock-free atomic making it safe, no further wrapping is needed.
 // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
-/// **信号处理器里只能碰 volatile sig_atomic_t 或无锁原子**，绝不能加锁、
-/// 分配内存或打日志 —— 那些都不是异步信号安全的。这里只写一个原子，
-/// 真正的停机由主线程在看到它之后执行。
+/// **Only volatile sig_atomic_t or lock-free atomics may be touched from a
+/// signal handler** -- never locks, allocation or logging: none of those are
+/// async-signal-safe. We write a single atomic here; the real shutdown runs on
+/// the main thread once it observes it.
 std::atomic<bool> g_stop_requested{false};
 
 extern "C" void HandleSignal(int /*signal_number*/) {
   g_stop_requested.store(true, std::memory_order_release);
 }
 
-/// 安装信号处理器。
+/// Install the signal handlers.
 ///
-/// 用 sigaction 而非 signal()：后者的语义在各 Unix 上不一致，
-/// 而且默认会在处理器执行期间重置为 SIG_DFL。
+/// sigaction rather than signal(): the latter has inconsistent semantics
+/// across Unixes and resets to SIG_DFL by default while the handler runs.
 [[nodiscard]] Status InstallSignalHandlers() {
   struct sigaction action{};
   action.sa_handler = &HandleSignal;
-  // 注意：macOS 上 sigemptyset 是**宏**（#define sigemptyset(set) (*(set)=0,0)），
-  // 不能写成 ::sigemptyset —— 宏名无法被作用域限定。
+  // Note: on macOS sigemptyset is a **macro**
+  // (#define sigemptyset(set) (*(set)=0,0)), so it cannot be written as
+  // ::sigemptyset -- macro names cannot be scope-qualified.
   sigemptyset(&action.sa_mask);
-  // 刻意**不设** SA_RESTART：我们希望信号能打断阻塞的系统调用（例如 BPF 的
-  // read()），让线程有机会看到停机标志。
+  // Deliberately **do not set** SA_RESTART: we want signals to interrupt
+  // blocking syscalls (BPF's read() for example) so threads get a chance to
+  // observe the shutdown flag.
   action.sa_flags = 0;
 
   for (const int signal_number : {SIGINT, SIGTERM, SIGHUP}) {
@@ -65,7 +70,8 @@ extern "C" void HandleSignal(int /*signal_number*/) {
     }
   }
 
-  // 忽略 SIGPIPE：往已关闭的 BPF 描述符写会触发它，默认行为是终止进程。
+  // Ignore SIGPIPE: writing to a closed BPF descriptor triggers it and the
+  // default action terminates the process.
   struct sigaction ignore{};
   ignore.sa_handler = SIG_IGN;
   sigemptyset(&ignore.sa_mask);
@@ -76,13 +82,14 @@ extern "C" void HandleSignal(int /*signal_number*/) {
 }
 
 // =============================================================================
-// 命令行解析
+// Command-line parsing
 // =============================================================================
 
-/// 把一条不带参数的文案原样写到 stdout。
+/// Write a parameterless user-facing string verbatim to stdout.
 ///
-/// 用 fwrite 而不是 fputs：`Text()` 返回的 string_view 指向表里的字面量，
-/// 虽然实际上带 NUL，但 string_view 的契约里没有这一条，别养成坏习惯。
+/// fwrite rather than fputs: the string_view from `Text()` points at literals
+/// in the table, and although they happen to be NUL-terminated, that is not
+/// part of the string_view contract -- do not form bad habits.
 void PrintText(Msg id) {
   const std::string_view text = Text(id);
   std::fwrite(text.data(), 1, text.size(), stdout);
@@ -92,16 +99,18 @@ void PrintUsage() {
   PrintText(Msg::kCliUsage);
 }
 
-/// 在正式解析参数**之前**先把 `--lang` 挑出来生效。
+/// Pull `--lang` out and apply it **before** formal argument parsing.
 ///
-/// 为什么要单独扫一遍：帮助文本、以及解析过程中自己产生的报错，都得用用户要的
-/// 那种语言。等 ParseArguments 顺序走到 `--lang` 时，前面几个选项的错误消息
-/// 已经用旧语言发出去了。
+/// Why a separate pass: the help text, and the errors ParseArguments itself
+/// emits along the way, must all be in the language the user asked for. By the
+/// time ParseArguments reaches `--lang` in order, messages for earlier options
+/// have already gone out in the old language.
 ///
-/// 只认 `--lang <值>` 这一种写法（全项目的选项都不支持 `--opt=值`，不在这里
-/// 破例，否则 ParseArguments 会把 `--lang=en` 当成未知选项，反而更费解）。
-/// 值非法时这里不报错，留给 ParseArguments 去报 —— 那时报错本身已经是
-/// 用户要的语言了。
+/// Only the `--lang <value>` spelling is accepted (no option in this project
+/// supports `--opt=value`, and making an exception here would only confuse
+/// ParseArguments, which would treat `--lang=en` as an unknown option). An
+/// invalid value is not reported here -- ParseArguments reports it, by which
+/// point the error itself is already in the user's language.
 void ApplyLanguageOption(int argc, char** argv) {
   for (int i = 1; i + 1 < argc; ++i) {
     if (std::string_view{argv[i]} != "--lang") {
@@ -114,7 +123,7 @@ void ApplyLanguageOption(int argc, char** argv) {
   }
 }
 
-/// 解析一个无符号整数参数。
+/// Parse an unsigned integer argument.
 [[nodiscard]] Result<std::uint32_t> ParseUint(std::string_view text, int base = 10) {
   std::uint32_t value = 0;
   const char* begin = text.data();
@@ -148,7 +157,7 @@ void ApplyLanguageOption(int argc, char** argv) {
   return std::unexpected(Error::Generic(Tr(Msg::kCliUnknownLogLevel, text)));
 }
 
-/// 解析结果。
+/// Result of parsing.
 struct ParsedArguments {
   tetherkit::core::RuntimeConfig config;
   bool show_help = false;
@@ -159,7 +168,7 @@ struct ParsedArguments {
 [[nodiscard]] Result<ParsedArguments> ParseArguments(int argc, char** argv) {
   ParsedArguments parsed;
 
-  // 取一个需要值的选项的值。
+  // Take the value of an option that requires one.
   const auto take_value = [argc, argv](int& index,
                                        std::string_view option) -> Result<std::string_view> {
     if (index + 1 >= argc) {
@@ -255,8 +264,9 @@ struct ParsedArguments {
       continue;
     }
     if (argument == "--lang") {
-      // 值已经由 ApplyLanguageOption 在解析开始前生效了（那样连本轮的报错
-      // 都是目标语言）。这里只把它消费掉并复核一次拼写。
+      // The value was already applied by ApplyLanguageOption before parsing
+      // began (so that even this round's errors come out in the target
+      // language). Here we only consume it and re-check the spelling.
       TETHERKIT_ASSIGN_OR_RETURN(const auto text, take_value(i, argument));
       Language ignored{};
       if (!tetherkit::ParseLanguage(text, &ignored)) {
@@ -270,7 +280,7 @@ struct ParsedArguments {
   return parsed;
 }
 
-/// `--list`：列出识别到的 RNDIS 设备。**不需要 root**。
+/// `--list`: print the recognized RNDIS devices. **Does not need root**.
 [[nodiscard]] Status ListDevices(const tetherkit::usb::DeviceFilter& filter) {
   TETHERKIT_ASSIGN_OR_RETURN(const auto context, tetherkit::usb::Context::Create());
   TETHERKIT_ASSIGN_OR_RETURN(const auto candidates,
@@ -297,8 +307,9 @@ struct ParsedArguments {
 }  // namespace
 
 int main(int argc, char** argv) {
-  // 语言要在**任何**输出之前定下来。先按环境推断，再让显式的 --lang 覆盖 ——
-  // 这样连参数解析自己报的错也是用户要的那种语言。
+  // The language must be settled **before any** output. Infer from the
+  // environment first, then let an explicit --lang override -- that way even
+  // argument parsing's own errors come out in the user's language.
   tetherkit::SetLanguage(tetherkit::DetectLanguageFromEnvironment());
   ApplyLanguageOption(argc, argv);
 
@@ -347,9 +358,10 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  // 信号处理器里只能置一个原子（异步信号安全的唯一做法），所以需要有人把它
-  // 转达给运行时。用一个轻量的守望线程而不是让 Runtime 直接读进程级全局变量 ——
-  // 这样 Runtime 不依赖任何全局状态，便于测试。
+  // A signal handler may only set one atomic (the only async-signal-safe
+  // option), so someone has to relay it to the runtime. A lightweight watcher
+  // thread rather than letting Runtime read the process-level global directly
+  // -- that way Runtime depends on no global state and stays testable.
   std::thread signal_watcher([&runtime] {
     while (!g_stop_requested.load(std::memory_order_acquire)) {
       std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -358,19 +370,21 @@ int main(int argc, char** argv) {
     (*runtime)->RequestStop();
   });
 
-  // 控制循环跑在 Runtime 自己的线程上（见 core/runtime.h 的线程模型说明），
-  // 主线程只需要在这里挂起等它结束。
+  // The control loop runs on Runtime's own thread (see the thread model notes
+  // in core/runtime.h); the main thread only parks here until it ends.
   (*runtime)->WaitUntilStopped();
 
-  // 控制循环可能是因为内部致命错误退出的（而不是收到信号），
-  // 这时也要让守望线程结束。
+  // The control loop may have exited because of an internal fatal error
+  // rather than a signal; the watcher thread must still be released.
   g_stop_requested.store(true, std::memory_order_release);
   signal_watcher.join();
 
   (*runtime)->Stop();
 
-  // 启动序列是异步跑的，失败不会体现在 Start() 的返回值里 —— 从快照里取。
-  // 错误内容运行时已经打过日志，这里只负责把退出码带出去，好让脚本能判断。
+  // The start sequence runs asynchronously, so failures do not show up in
+  // Start()'s return value -- take them from the snapshot. The error text has
+  // already been logged; here we only carry the exit code out so scripts can
+  // tell.
   const auto snapshot = (*runtime)->Snapshot();
   return snapshot.fatal_message.empty() ? 0 : 1;
 }

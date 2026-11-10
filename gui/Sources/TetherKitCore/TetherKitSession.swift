@@ -2,20 +2,24 @@ import CTetherKit
 import Foundation
 import TetherKitIPC
 
-/// 一个 RNDIS 会话。**需要 root**，因此只在 helper 进程里使用。
+/// An RNDIS session. Requires root, so it is used only inside the helper
+/// process.
 ///
-/// 线程安全：C 侧的会话本身是线程安全的（状态快照与事件队列都有锁），但
-/// `start` / `stop` 的调用顺序需要调用方自己保证不并发。helper 用一个串行
-/// 队列串起所有生命周期调用来满足这一点。
+/// Thread safety: the C-side session is itself thread-safe (status snapshots and
+/// the event queue are both locked), but the caller must ensure `start` / `stop`
+/// are not called concurrently. The helper satisfies this by serializing all
+/// lifecycle calls on a single serial queue.
 public final class TetherKitSession {
     private let handle: OpaquePointer
 
-    /// 一次最多取走多少条事件，与 C 侧环形缓冲容量（128）一致。
+    /// Maximum number of events drained in one call, matching the C-side ring
+    /// buffer capacity (128).
     private static let eventCapacity = 128
 
     public init(configuration: SessionConfiguration) throws {
         var raw = tk_session_config_t()
-        // 必须先 init 再改：结构体里有一堆调优旋钮，全零初始化会得到无效配置。
+        // Must init before mutating: the struct carries many tuning knobs, and
+        // zero-initialization would produce an invalid configuration.
         tk_session_config_init(&raw)
         raw.vendor_id = configuration.vendorID
         raw.product_id = configuration.productID
@@ -32,23 +36,25 @@ public final class TetherKitSession {
     }
 
     deinit {
-        // tk_session_destroy 内部会先停机（幂等），所以这里不用先 stop。
+        // tk_session_destroy stops internally first (idempotent), so there is no
+        // need to call stop here.
         tk_session_destroy(handle)
     }
 
-    /// 启动。**非阻塞** —— 返回只表示请求已受理，成败要看后续的 status。
+    /// Start. Non-blocking -- returning only means the request was accepted;
+    /// success or failure is reflected in subsequent status.
     public func start() throws {
         var error = tk_error_t()
         let result = tk_session_start(handle, &error)
         try check(result, error)
     }
 
-    /// 停机并等待全部拆除完成。幂等。
+    /// Stop and wait for all teardown to complete. Idempotent.
     public func stop() {
         _ = tk_session_stop(handle)
     }
 
-    /// 取一份状态快照。任意线程可调。
+    /// Take a status snapshot. Callable from any thread.
     public func status() -> SessionStatus {
         var raw = tk_session_status_t()
         guard tk_session_status_get(handle, &raw) == TK_OK else {
@@ -79,17 +85,20 @@ public final class TetherKitSession {
             fatalMessage: String(fixedCArray: raw.fatal))
     }
 
-    /// 取走已排队的事件，渲染成给用户看的一句话。
+    /// Drain queued events and render them as one-line notices for the user.
     ///
-    /// 只保留「用户会关心」的那几类：链路变化、设备复位、致命错误。RNDIS 内部
-    /// 的状态迁移与生命周期迁移界面已经通过 status 展示了，再刷成通知只是噪音。
+    /// Keeps only the categories the user cares about: link changes, device
+    /// resets, and fatal errors. RNDIS-internal state transitions and lifecycle
+    /// transitions are already shown through status in the UI; surfacing them as
+    /// notices again would just be noise.
     public func drainNotices() -> [String] {
         var buffer = [tk_event_t](repeating: tk_event_t(), count: Self.eventCapacity)
         let taken = tk_session_poll_events(handle, &buffer, Self.eventCapacity)
 
         return buffer.prefix(taken).compactMap { event -> String? in
-            // C 侧的 tk_event_kind 全是非负值，被 Swift 导入成 UInt32，而结构体
-            // 字段是 int32_t —— 两者不能直接比较，必须显式转一次。
+            // On the C side tk_event_kind values are all non-negative and are
+            // imported into Swift as UInt32, while the struct field is int32_t
+            // -- they cannot be compared directly, so an explicit cast is needed.
             switch event.kind {
             case Int32(TK_EVENT_LINK.rawValue):
                 return L(event.a == 1 ? .eventLinkUp : .eventLinkDown)

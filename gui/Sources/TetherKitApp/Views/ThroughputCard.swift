@@ -2,10 +2,13 @@ import Charts
 import SwiftUI
 import TetherKitIPC
 
-/// 吞吐与计数器。
+/// Throughput and counters.
 ///
-/// 图表刻意只画**速率**而不画累计量：累计曲线永远单调上升，看不出任何东西；
-/// 而速率能一眼看出卡顿、抖动和被限速。累计量放在下面的指标格里，需要时能读到。
+/// The chart deliberately plots the **rate** and not the cumulative
+/// total: a cumulative curve only ever climbs and shows nothing; the
+/// rate makes stutter, jitter and throttling visible at a glance. The
+/// cumulative totals sit in the metric tiles below, readable when
+/// needed.
 ///
 /// The card carries no title row: it is the body of the "Throughput"
 /// page and the page header already says it (with the LIVE badge).
@@ -90,8 +93,10 @@ struct ThroughputCard: View {
                     }
                 }
             }
-            // 横轴不画刻度：这是一条「最近 60 秒」的滚动曲线，具体时刻没有意义，
-            // 画上去只会挤占本来就不高的绘图区。
+            // The x axis carries no ticks: this is a rolling curve over
+            // "the last 60 seconds", the exact moments mean nothing, and
+            // drawing them would only eat into an already short plot
+            // area.
             .chartXAxis(.hidden)
             .frame(height: 120)
         } else {
@@ -119,11 +124,14 @@ struct ThroughputCard: View {
             || model.status.linkKernelDrops > 0 || model.status.txBackpressure > 0
     }
 
-    /// 丢包提示。
+    /// The drop hint.
     ///
-    /// 分开列四个数字而不是合成一个「丢包率」：它们指向完全不同的瓶颈 ——
-    /// 队列满是下游写不过来，内核丢是我们读得不够快，背压是 USB 侧发不出去。
-    /// 合并之后就分不清该调哪个参数了。
+    /// Four numbers are listed separately instead of being merged into one
+    /// "drop rate": they point at completely different bottlenecks -- a
+    /// full queue means the downstream side cannot keep up, kernel drops
+    /// mean we are not reading fast enough, and backpressure means the
+    /// USB side cannot send. Once they are merged, there is no way to
+    /// tell which parameter to turn.
     private var dropHint: some View {
         HStack(spacing: Design.Spacing.medium) {
             MetricTile(caption: L(.downstreamDropped), value: Format.count(model.status.rxDropped), tint: .orange)

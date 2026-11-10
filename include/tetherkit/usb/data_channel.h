@@ -1,41 +1,52 @@
-// RNDIS 数据通道：异步 bulk IN / OUT 传输池。
+// RNDIS data channel: a pool of asynchronous bulk IN / OUT transfers.
 //
-// ★ 无 use-after-free 的拆除算法（本文件最重要的部分）★
+//  The teardown algorithm that avoids use-after-free (the most important
+//   part of this file)
 //
-//   libusb_close **不会**帮你回收在飞 transfer。do_close() 对仍在飞的 transfer
-//   只是 list_del + 把 transfer->dev_handle 置空，再打一条
-//   "Device handle closed while transfer was still being processed" 的日志 ——
-//   **不调用你的回调、不释放内存**。而之后 darwin 后端 close 会
-//   USBInterfaceClose 触发 IOKit 中止，darwin_async_io_callback 仍然会在 libusb
-//   内部线程上跑并调 usbi_signal_transfer_completion()。如果那时你已经
-//   libusb_free_transfer 了，就是 use-after-free。
+//   libusb_close does **not** reap in-flight transfers for you. do_close()
+//   only does list_del + nulling transfer->dev_handle for the transfers still
+//   in flight, and then logs "Device handle closed while transfer was still
+//   being processed" -- it **does not invoke your callback and does not free
+//   the memory**. The later close of the darwin backend calls
+//   USBInterfaceClose, which triggers the IOKit abort, and
+//   darwin_async_io_callback still runs on an internal libusb thread and calls
+//   usbi_signal_transfer_completion(). If you have already called
+//   libusb_free_transfer by then, that is a use-after-free.
 //
-//   正确顺序（Shutdown() 实现的就是这个）：
-//     1. 置停机标志 —— 回调看到它就不再 resubmit，让在飞数自然收敛；
-//     2. 对在飞 transfer 调 libusb_cancel_transfer；
-//     3. **等到在飞计数归零**（每个回调都回来了）；
-//     4. 这时才 libusb_free_transfer + 释放缓冲；
-//     5. 调用方之后才可以销毁 Device（release_interface → close）。
+//   The correct order (this is what Shutdown() implements):
+//     1. Set the shutdown flag -- the callback sees it and stops resubmitting,
+//        so the in-flight count converges on its own;
+//     2. Call libusb_cancel_transfer on the in-flight transfers;
+//     3. **Wait for the in-flight count to reach zero** (every callback has
+//        come back);
+//     4. Only then libusb_free_transfer and release the buffers;
+//     5. Only after that may the caller destroy the Device (release_interface
+//        -> close).
 //
-//   ⚠️ 第 3 步**绝对不能在 libusb 事件线程上等** —— 回调正是在那个线程上跑的，
-//      在那里等就是自己等自己，必然死锁。Shutdown() 因此只能从控制线程或主线程
-//      调用，代码里用注释和断言双重提醒。
+//    Step 3 **must not be waited for on the libusb event thread** -- the
+//      callback runs on exactly that thread, so waiting there is waiting for
+//      yourself, a guaranteed deadlock. Shutdown() can therefore only be
+//      called from the control thread or the main thread; the code reminds
+//      of that with both a comment and an assertion.
 //
-//   关于 darwin 的 cancel 粒度：libusb_cancel_transfer 在 darwin 上是
-//   darwin_abort_transfers → **AbortPipe(pipeRef)**，即取消一个 transfer 会
-//   取消**该端点上所有**在飞 transfer（全部以 kIOReturnAborted →
-//   LIBUSB_TRANSFER_CANCELLED 回来）。所以其实只需对每个端点调一次，
-//   但逐个调是幂等且更清晰的，不做这个微优化。
+//   On the granularity of darwin's cancel: libusb_cancel_transfer on darwin
+//   is darwin_abort_transfers -> **AbortPipe(pipeRef)**, that is, cancelling
+//   one transfer cancels **all** in-flight transfers **on that endpoint**
+//   (they all come back as kIOReturnAborted -> LIBUSB_TRANSFER_CANCELLED).
+//   So really one call per endpoint would suffice, but calling them one by
+//   one is idempotent and clearer; this micro-optimization is not made.
 //
-// ★ 为什么「宁少而大，勿多而小」★
+//  Why "fewer but larger" beats "many but small"
 //
-//   darwin 后端在**每次** submit_bulk_transfer 之前都调 darwin_get_pipe_properties，
-//   在 IOUSBInterfaceInterface >= 550 上等于两次 IOKit user-client 调用
-//   （GetPipePropertiesV3 + GetEndpointPropertiesV3）。也就是说 macOS 上每次
-//   libusb_submit_transfer 至少 3 次 IOKit 往返，而不是 1 次。
-//   反过来，darwin 后端对单次 bulk 传输**没有任何长度上限、不做分片**
-//   （Linux 后端才有 MAX_BULK_BUFFER_LENGTH = 16384 的 URB 拆分）。
-//   → 结论：用较少、较大的传输。
+//   The darwin backend calls darwin_get_pipe_properties before **every**
+//   submit_bulk_transfer, which on IOUSBInterfaceInterface >= 550 amounts to
+//   two IOKit user-client calls (GetPipePropertiesV3 + GetEndpointPropertiesV3).
+//   In other words, every libusb_submit_transfer on macOS costs at least 3
+//   IOKit round trips, not 1.
+//   Conversely, the darwin backend has **no length limit and does no
+//   fragmentation** for a single bulk transfer (only the Linux backend has the
+//   MAX_BULK_BUFFER_LENGTH = 16384 URB splitting).
+//   -> Conclusion: use fewer, larger transfers.
 #pragma once
 
 #include <libusb.h>
@@ -60,63 +71,80 @@
 
 namespace tetherkit::usb {
 
-/// 数据通道的配置。
+/// Data channel configuration.
 struct DataChannelConfig {
-  /// 并发在飞的 bulk IN 传输数。
+  /// How many bulk IN transfers are in flight concurrently.
   ///
-  /// 8 个 × 16 KiB = 128 KiB 在飞。调研给的经验值是「在飞总量 ≥ 256 KiB」才能
-  /// 在 USB 2.0 高速（53.2 MB/s 上限）下保证控制器队列不见底 —— 按 50 MB/s 计，
-  /// 1 ms 的空档就浪费 50 KB。所以默认 16 个 × 16 KiB = 256 KiB。
+  /// 8 x 16 KiB = 128 KiB in flight. The value from the research is that "a
+  /// total in flight of >= 256 KiB" is needed to keep the controller queue
+  /// from running dry at USB 2.0 high speed (a 53.2 MB/s ceiling) -- at
+  /// 50 MB/s a 1 ms gap wastes 50 KB. So the default is 16 x 16 KiB =
+  /// 256 KiB.
   std::uint32_t rx_transfer_count = 16;
 
-  /// 每个 bulk IN 缓冲的字节数。
+  /// The byte size of each bulk IN buffer.
   ///
-  /// 必须 >= 我们在 INITIALIZE_MSG 里宣称的 MaxTransferSize，否则设备聚合出来的
-  /// 大传输会溢出/被截断。运行时会用协商结果覆盖这个值。
+  /// It must be >= the MaxTransferSize we advertise in INITIALIZE_MSG,
+  /// otherwise the large transfers the device aggregates overflow or get
+  /// truncated. The runtime overrides this value with the negotiated result.
   std::uint32_t rx_transfer_bytes = 16 * 1024;
 
-  /// 并发在飞的 bulk OUT 传输数。
+  /// How many bulk OUT transfers are in flight concurrently.
   ///
-  /// TX 侧不需要像 RX 那么多：帧是我们主动攒批发出去的，4 个足以让
-  /// 「组装下一批」与「上一批在飞」重叠起来。
+  /// The TX side does not need as many as RX: the frames are accumulated and
+  /// sent in batches by us, and 4 are enough to overlap "assemble the next
+  /// batch" with "the previous batch is in flight".
   std::uint32_t tx_transfer_count = 4;
 
-  /// 每个 bulk OUT 缓冲的字节数。运行时会被协商出的设备 MaxTransferSize 覆盖。
+  /// The byte size of each bulk OUT buffer. The runtime overrides it with the
+  /// negotiated device MaxTransferSize.
   std::uint32_t tx_transfer_bytes = 16 * 1024;
 
-  /// bulk IN 的超时（毫秒）。
+  /// The bulk IN timeout (milliseconds).
   ///
-  /// **必须是 0（无限）**：RNDIS 的数据通道可能长时间空闲（用户没在传数据），
-  /// 设了超时就会不断地超时-重提交，每次重提交都是 3 次 IOKit 往返，纯属浪费。
-  /// darwin 把 timeout 同时作为 noDataTimeout 与 completionTimeout 传给 IOKit，
-  /// 0 表示无限等待。
+  /// **It must be 0 (infinite)**: the RNDIS data channel can be idle for a
+  /// long time (the user is not transferring anything), and with a timeout
+  /// set it would time out and resubmit over and over, every resubmission
+  /// costing 3 IOKit round trips -- pure waste. darwin passes the timeout to
+  /// IOKit as both noDataTimeout and completionTimeout, and 0 means wait
+  /// forever.
   std::uint32_t rx_timeout_millis = 0;
 
-  /// bulk OUT 的超时（毫秒）。TX 有超时是合理的 —— 设备卡住时我们要能察觉。
+  /// The bulk OUT timeout (milliseconds). A timeout on TX is reasonable -- we
+  /// need to notice when the device gets stuck.
   std::uint32_t tx_timeout_millis = 5'000;
 };
 
-/// 一次 SendFrames 的结果。
+/// The result of one SendFrames.
 ///
-/// 为什么不只返回一个数：曾经就是只返回「发出帧数」，结果两类被跳过的帧
-/// （超过设备 MaxTransferSize 的、短于以太头的）被算进了「发出」里 ——
-/// 注释声称「由调用方从返回值推断丢弃」，而调用方根本推断不出来。
-/// 把「消费了多少」「真发出多少」「跳过多少」分开，账才能对上。
+/// Why not just return a single number: it used to return only "the number of
+/// frames sent", and as a result two kinds of skipped frames (the ones
+/// exceeding the device MaxTransferSize and the ones shorter than an
+/// Ethernet header) were counted as "sent" -- the comment claimed "the caller
+/// can infer the drops from the return value", and the caller simply could
+/// not. Splitting "how much was consumed", "how much was really sent" and
+/// "how much was skipped" is what makes the books balance.
 struct SendOutcome {
-  /// 调用方应把偏移前进这么多帧（含被跳过的）。0 表示传输池满，一帧都没进去。
+  /// The caller should advance its offset by this many frames (including the
+  /// skipped ones). 0 means the transfer pool was full and not a single frame
+  /// went in.
   std::uint32_t consumed = 0;
-  /// 真正进入 bulk OUT 传输的帧数。
+  /// The number of frames that really entered a bulk OUT transfer.
   std::uint32_t sent_frames = 0;
-  /// 上述帧的净荷字节合计（不含 RNDIS 头与填充）。
+  /// The total payload bytes of those frames (excluding the RNDIS header and
+  /// the padding).
   std::uint64_t sent_bytes = 0;
-  /// 因长度非法（超长 / 短于以太头）被跳过的帧数。恒等于 consumed - sent_frames。
+  /// The number of frames skipped because of an illegal length (too long /
+  /// shorter than an Ethernet header). Always equal to consumed - sent_frames.
   std::uint32_t skipped = 0;
 };
 
-/// 数据通道抽象。
+/// The data channel abstraction.
 ///
-/// 抽象的粒度是**批**而不是帧：一次虚调用处理几十上百帧，摊到每帧的开销远小于
-/// 1 ns。这是刻意的 —— 若做成每帧一次虚调用就不可接受了。
+/// The granularity of the abstraction is the **batch**, not the frame: one
+/// virtual call handles dozens to hundreds of frames, and the cost amortized
+/// per frame is far below 1 ns. This is deliberate -- a virtual call per
+/// frame would have been unacceptable.
 class DataChannel {
  public:
   DataChannel() = default;
@@ -126,62 +154,77 @@ class DataChannel {
   DataChannel& operator=(DataChannel&&) = delete;
   virtual ~DataChannel() = default;
 
-  /// 启动接收：把解出的以太帧推进 `rx_ring`。
+  /// Starts receiving: pushes the decoded Ethernet frames into `rx_ring`.
   ///
-  /// 调用后接收就一直在跑，直到 Shutdown()。
+  /// Receiving keeps running after the call, until Shutdown().
   [[nodiscard]] virtual Status StartReceiving(FrameRing& rx_ring,
                                               DirectionCounters& rx_counters) = 0;
 
-  /// 把一批以太帧聚合成 RNDIS 消息发给设备。**不阻塞。**
+  /// Aggregates a batch of Ethernet frames into RNDIS messages and sends them
+  /// to the device. **Does not block.**
   ///
-  /// `consumed < frames.size()` 表示传输池暂时没有空闲槽位（背压）。
-  /// 调用方应保留剩余帧，用 WaitForSendCapacity() 等到有空槽再重试 ——
-  /// **不要丢弃**：上游（内核 BPF 缓冲）才是该吸收突发的弹性队列。
+  /// `consumed < frames.size()` means the transfer pool has no free slot for
+  /// the moment (backpressure). The caller should keep the remaining frames
+  /// and wait with WaitForSendCapacity() until a slot is free and then retry
+  /// -- **do not drop them**: the upstream (the kernel BPF buffer) is the
+  /// elastic queue that should absorb bursts.
   [[nodiscard]] virtual Result<SendOutcome> SendFrames(std::span<const FrameView> frames) = 0;
 
-  /// 等待 TX 方向出现空闲传输槽位。
+  /// Waits for a free transfer slot to appear in the TX direction.
   ///
-  /// 返回 true 表示「值得再试一次 SendFrames」：有槽位空出来了，或通道已进入
-  /// 停机（此时重试会得到错误，调用方自会退出）。false 表示等满超时仍无容量。
+  /// Returning true means "it is worth calling SendFrames again": a slot has
+  /// become free, or the channel has entered shutdown (in which case the
+  /// retry gets an error and the caller exits on its own). false means the
+  /// timeout expired with still no capacity.
   ///
-  /// 只能由 SendFrames 的同一调用线程使用（TX 抽取线程）。实现必须保证
-  /// Shutdown() 能唤醒正在等待的线程 —— 但调用方也不应依赖这一点做停机，
-  /// 应该用有限超时并在每次醒来后自查停机标志。
+  /// Only the same calling thread as SendFrames may use it (the TX extractor
+  /// thread). The implementation must guarantee that Shutdown() can wake a
+  /// waiting thread -- but the caller should not rely on that for shutdown
+  /// either; it should use a finite timeout and re-check the shutdown flag
+  /// after every wakeup.
   [[nodiscard]] virtual bool WaitForSendCapacity(std::uint32_t timeout_millis) = 0;
 
-  /// 停止并回收全部在飞传输。
+  /// Stops and reaps every in-flight transfer.
   ///
-  /// **不能从 libusb 事件线程调用**（会死锁，见文件头说明）。
+  /// **Must not be called from the libusb event thread** (that deadlocks, see
+  /// the file header).
   virtual void Shutdown() = 0;
 
-  /// 当前 TX 是否有空闲传输槽位可用。
+  /// Whether TX currently has a free transfer slot.
   [[nodiscard]] virtual bool CanSend() const noexcept = 0;
 
-  /// 单次传输能容纳的最大字节数（TX 方向）。
+  /// The maximum number of bytes a single transfer can hold (TX direction).
   [[nodiscard]] virtual std::uint32_t MaxTransferBytes() const noexcept = 0;
 
-  /// 异步发送完成回调里累计的 I/O 错误数（STALL、传输失败等）。
+  /// The I/O errors accumulated in the async send completion callback (STALL,
+  /// transfer failures, ...).
   ///
-  /// 为什么要单独开这个接口，而不是让数据通道直接写桥接层的 TX 计数器：
-  /// DirectionCounters 的契约是「**只允许一个线程**调用 Add*」（它用 relaxed
-  /// load+store 而非 fetch_add，正是靠单写者才安全）。而 TX 方向有两个写者 ——
-  /// 提交侧在 TX 抽取线程、错误侧在 libusb 事件线程。硬塞进同一个计数器就破坏了
-  /// 这个不变式（TSan 也会报）。
-  /// 因此拆成两份各自单写的计数，由 Bridge::Snapshot() 在**读取时**合并。
+  /// Why this is a separate interface instead of letting the data channel
+  /// write the bridge's TX counters directly: the contract of
+  /// DirectionCounters is "**only one thread** may call Add*" (it uses a
+  /// relaxed load+store instead of fetch_add, and is safe precisely because
+  /// there is a single writer). But TX has two writers -- the submission
+  /// side on the TX extractor thread, the error side on the libusb event
+  /// thread. Forcing them into the same counter breaks that invariant (and
+  /// TSan reports it).
+  /// Hence two separately single-written counters, merged by
+  /// Bridge::Snapshot() **at read time**.
   [[nodiscard]] virtual std::uint64_t AsyncSendErrors() const noexcept = 0;
 };
 
-/// 基于 libusb 异步 API 的数据通道实现。
+/// A data channel implementation based on the libusb asynchronous API.
 class UsbDataChannel final : public DataChannel {
  public:
-  /// @param device      已声明好接口的设备
-  /// @param parameters  RNDIS 协商结果（决定聚合上限与对齐）
-  /// @param config      传输池参数
+  /// @param device      The device with its interfaces already claimed
+  /// @param parameters  The RNDIS negotiation result (decides the aggregation
+  ///                    limit and the alignment)
+  /// @param config      The transfer pool parameters
   [[nodiscard]] static Result<std::unique_ptr<UsbDataChannel>> Create(
       Device& device, const rndis::NegotiatedParameters& parameters,
       const DataChannelConfig& config);
 
-  // 拷贝与移动已在基类 DataChannel 中删除，这里显式重申以满足静态检查。
+  // Copy and move are already deleted in the base class DataChannel; they are
+  // restated here to satisfy the static checks.
   UsbDataChannel(const UsbDataChannel&) = delete;
   UsbDataChannel& operator=(const UsbDataChannel&) = delete;
   UsbDataChannel(UsbDataChannel&&) = delete;
@@ -204,7 +247,8 @@ class UsbDataChannel final : public DataChannel {
     return async_send_errors_.load(std::memory_order_relaxed);
   }
 
-  /// 累计因 RNDIS 消息畸形而丢弃的传输数，用于诊断设备 bug。
+  /// The number of transfers dropped because of a malformed RNDIS message,
+  /// used to diagnose device bugs.
   [[nodiscard]] std::uint64_t MalformedTransfers() const noexcept {
     return malformed_transfers_.load(std::memory_order_relaxed);
   }
@@ -212,7 +256,7 @@ class UsbDataChannel final : public DataChannel {
  private:
   UsbDataChannel() = default;
 
-  /// 池中的一个传输及其缓冲。
+  /// One transfer of the pool together with its buffer.
   struct Slot {
     ::libusb_transfer* transfer = nullptr;
     std::byte* buffer = nullptr;
@@ -221,22 +265,23 @@ class UsbDataChannel final : public DataChannel {
     std::uint32_t index = 0;
   };
 
-  // ---- libusb 回调（静态跳板 → 成员函数）----
+  // ---- libusb callbacks (static trampolines -> member functions) ----
   static void ReceiveCallbackTrampoline(::libusb_transfer* transfer);
   static void SendCallbackTrampoline(::libusb_transfer* transfer);
 
   void OnReceiveComplete(Slot& slot) noexcept;
   void OnSendComplete(Slot& slot) noexcept;
 
-  /// 分配一个池。缓冲按页对齐（darwin 上没有零拷贝 DMA 缓冲，
-  /// libusb_dev_mem_alloc 返回 NULL，只能自己 posix_memalign；按 hw.pagesize
-  /// 对齐能减少 IOKit 建立 DMA 描述符时的分段）。
+  /// Allocates one pool. The buffers are page aligned (darwin has no
+  /// zero-copy DMA buffers, libusb_dev_mem_alloc returns NULL, so we have to
+  /// use posix_memalign ourselves; aligning to hw.pagesize reduces the
+  /// fragmentation when IOKit builds the DMA descriptors).
   [[nodiscard]] Status AllocatePool(std::vector<Slot>& pool, std::uint32_t count,
                                     std::uint32_t buffer_bytes);
 
   static void FreePool(std::vector<Slot>& pool) noexcept;
 
-  /// 提交一个 RX 传输。
+  /// Submits one RX transfer.
   [[nodiscard]] Status SubmitReceive(Slot& slot);
 
   Device* device_ = nullptr;
@@ -248,39 +293,47 @@ class UsbDataChannel final : public DataChannel {
   std::vector<Slot> rx_pool_;
   std::vector<Slot> tx_pool_;
 
-  /// TX 空闲槽位索引队列。
+  /// The queue of free TX slot indices.
   ///
-  /// 生产者 = libusb 事件线程（发送完成回调归还槽位），
-  /// 消费者 = BPF 读线程（取槽位组装下一批）。正好是 SPSC。
+  /// The producer is the libusb event thread (the send completion callback
+  /// returns the slot), the consumer is the BPF read thread (takes a slot to
+  /// assemble the next batch). Exactly an SPSC.
   std::unique_ptr<SpscRing<std::uint32_t>> tx_free_slots_;
 
-  /// 接收目标。StartReceiving 之后非空。
+  /// The receive destination. Non-null after StartReceiving.
   FrameRing* rx_ring_ = nullptr;
   DirectionCounters* rx_counters_ = nullptr;
 
-  /// 异步发送完成回调里累计的 I/O 错误。**只由 libusb 事件线程递增**，
-  /// 与桥接层的 TX 计数器分开，见 AsyncSendErrors() 的说明。
+  /// The I/O errors accumulated in the async send completion callback.
+  /// **Incremented by the libusb event thread only**, kept separate from the
+  /// bridge's TX counters; see the description of AsyncSendErrors().
   std::atomic<std::uint64_t> async_send_errors_{0};
 
-  /// 在飞传输计数。回调递减，Shutdown 等它归零。
+  /// The in-flight transfer count. The callbacks decrement it, Shutdown waits
+  /// for it to reach zero.
   std::atomic<std::uint32_t> outstanding_{0};
-  /// 停机标志。回调看到它就不再 resubmit。
+  /// The shutdown flag. Once the callback sees it, it stops resubmitting.
   std::atomic<bool> shutting_down_{false};
-  /// 是否已经完成拆除（Shutdown 幂等）。
+  /// Whether the teardown has already completed (Shutdown is idempotent).
   bool shutdown_complete_ = false;
 
   std::atomic<std::uint64_t> malformed_transfers_{0};
 
-  /// 等待在飞计数归零。
+  /// Waits for the in-flight count to reach zero.
   std::mutex drain_mutex_;
   std::condition_variable drain_condition_;
 
-  /// TX 空槽等待。
+  /// The wait for a free TX slot.
   ///
-  /// 谓词的真值源是 tx_free_slots_（无锁 SPSC 环），这对互斥量+条件变量只是
-  /// 唤醒机制：完成回调归还槽位后取一下锁再 notify（空临界区惯用法），保证
-  /// 等待方要么在谓词检查里看到新槽位、要么已进入 wait 能收到通知，不会漏醒。
-  /// 完成回调在 libusb 事件线程上，这把锁只被瞬间持有，不构成「回调阻塞」。
+  /// The source of truth for the predicate is tx_free_slots_ (the lock-free
+  /// SPSC ring), which makes the mutex + condition variable nothing but a
+  /// wakeup mechanism: the completion callback returns the slot, then takes
+  /// the lock and notifies (the empty critical section idiom), which
+  /// guarantees the waiter either sees the new slot in the predicate check or
+  /// has already entered wait and will get the notification -- no missed
+  /// wakeup. The completion callback runs on the libusb event thread and
+  /// holds this lock only momentarily, so it does not amount to "the callback
+  /// blocks".
   std::mutex send_capacity_mutex_;
   std::condition_variable send_capacity_cv_;
 };

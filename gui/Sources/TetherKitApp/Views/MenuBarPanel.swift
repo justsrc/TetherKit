@@ -2,10 +2,12 @@ import AppKit
 import SwiftUI
 import TetherKitIPC
 
-/// 菜单栏里的常驻标签：状态图标 + 实时速率。
+/// The permanent menu bar label: a status icon plus live rates.
 ///
-/// 只在会话运行时显示速率文本 —— 空闲时一串 "0K" 只是噪音，图标本身已经把
-/// 状态说清楚了。数字用等宽，避免速率跳动时把右边的其它菜单栏项挤来挤去。
+/// The rate text appears only while a session is running -- when idle a
+/// string of "0K" is just noise, and the icon itself already says what
+/// the state is. The digits are monospaced, so a changing rate does not
+/// shove the other menu bar items to the right around.
 struct MenuBarLabel: View {
     var model: AppModel
 
@@ -25,10 +27,12 @@ struct MenuBarLabel: View {
     }
 }
 
-/// 点开菜单栏项后的小面板。
+/// The small panel that opens when the menu bar item is clicked.
 ///
-/// 内容按「瞟一眼要知道什么」取舍：状态、速率、网卡与地址，再加两个动作
-/// （打开主窗口、退出）。配置、图表、日志一律留在主窗口 —— 面板不是第二个界面。
+/// The content is chosen by "what do you need to know at a glance": the
+/// state, the rates, the interface and the address, plus two actions
+/// (open the main window, quit). Configuration, charts and logs stay in
+/// the main window -- the panel is not a second interface.
 struct MenuBarPanel: View {
     var model: AppModel
     @Environment(\.dismiss) private var dismiss
@@ -59,10 +63,15 @@ struct MenuBarPanel: View {
         }
         .padding(Design.Spacing.medium)
         .frame(width: 280)
-        // 与主窗口同理：文案来自全局查表，改语言不会让任何 @Observable 属性
-        // 「看起来」变了，得靠显式 identity 强制重建。面板本身会随轮询刷新，
-        // 不加这行语言也会在下一个周期跟上 —— 但从面板里改语言时，用户盯着
-        // 的就是这块面板，慢半拍会被当成没生效。
+        // Same reasoning as the main window: the strings come from a
+        // global table lookup, so changing the language makes no
+        // @Observable property "look" changed, and an explicit identity is
+        // needed to force a rebuild. The panel itself refreshes with the
+        // polling, so without this line the language would catch up on
+        // the next cycle anyway -- but when the user changes the language
+        // from inside the panel, the panel is exactly what they are
+        // staring at, and half a beat of delay reads as "it did not take
+        // effect".
         .id(model.languageRevision)
     }
 
@@ -120,9 +129,13 @@ struct MenuBarPanel: View {
 
                 Spacer()
 
-                // 仅菜单栏模式下这块面板是唯一入口，语言开关必须在这里也够得到 ——
-                // 否则一个看不懂界面的用户，得先知道「要去 App 菜单」才能改语言，
-                // 而在这个模式下 App 菜单只有把窗口开出来才看得见。
+                // In menu-bar-only mode this panel is the only entry
+                // point, so the language switch has to be reachable here
+                // as well -- otherwise a user who cannot read the
+                // interface has to know that they should "go to the app
+                // menu" before they can change the language, and in this
+                // mode the app menu is only visible once the window is
+                // opened.
                 languageMenu
 
                 Button(L(.quit)) {
@@ -132,8 +145,10 @@ struct MenuBarPanel: View {
             }
 
             if status.runState == .running {
-                // 会话属于 helper，App 退出不影响它 —— 这一点必须说出来，
-                // 否则用户会以为「退出 = 断网」而不敢点。
+                // The session belongs to the helper and quitting the app
+                // does not affect it -- this has to be said out loud,
+                // otherwise users think "quitting = losing the network"
+                // and hesitate to click.
                 Text(L(.quitTooltip))
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
@@ -142,12 +157,12 @@ struct MenuBarPanel: View {
         }
     }
 
-    /// 语言开关。选项写母语名字，不跟随界面语言翻译 —— 见 LanguageMenu 的说明。
+    /// The language toggle. Options show native names, not translations --
+    /// see LanguageMenu for why.
     private var languageMenu: some View {
         Menu {
             Picker(L(.languageLabel), selection: Bindable(model).languagePreference) {
                 Text(L(.languageSystem)).tag(LanguagePreference.system)
-                Text(verbatim: "中文").tag(LanguagePreference.chinese)
                 Text(verbatim: "English").tag(LanguagePreference.english)
             }
             .pickerStyle(.inline)

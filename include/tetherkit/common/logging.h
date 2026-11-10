@@ -1,13 +1,15 @@
-// 轻量分级日志。
+// Lightweight leveled logging.
 //
-// 设计约束：
-//   1. **禁止出现在数据热路径上。** Trace/Debug 级别在 Release 构建下被
-//      预处理器整段删掉（连参数求值都不会发生），所以在热路径写 TETHERKIT_TRACE
-//      是安全的；但 Info 及以上会真的做格式化与加锁写 stderr，热路径禁用。
-//   2. 线程安全：多线程同时写 stderr 会交错，因此在一把互斥锁下整行输出。
-//      日志不在热路径，锁竞争无所谓。
-//   3. 不引入第三方日志库：只需要「时间 + 级别 + 线程名 + 位置 + 消息」，
-//      std::format 已经够了。
+// Design constraints:
+//   1. **Must not appear on data hot paths.** Trace/Debug levels are removed entirely by
+//      the preprocessor in Release builds (even argument evaluation does not happen), so
+//      writing TETHERKIT_TRACE on a hot path is safe; but Info and above really do
+//      formatting and a locked stderr write, so hot paths must not use them.
+//   2. Thread-safe: concurrent writes to stderr from multiple threads would interleave,
+//      so each full line is written under a mutex. Logging is not on hot paths, so lock
+//      contention does not matter.
+//   3. No third-party logging library: "time + level + thread name + location + message"
+//      is all that is needed, and std::format is enough.
 #pragma once
 
 #include <cstdint>
@@ -20,18 +22,22 @@
 namespace tetherkit {
 
 enum class LogLevel : std::uint8_t {
-  kTrace = 0,  ///< 逐帧级别的细节，Release 构建下编译期删除。
-  kDebug = 1,  ///< 协议交互细节（每条 RNDIS 控制消息），Release 下编译期删除。
-  kInfo = 2,   ///< 生命周期事件（设备连接、状态机迁移、统计报告）。
-  kWarn = 3,   ///< 可恢复异常（USB stall、BPF 丢包、保活超时重试）。
-  kError = 4,  ///< 不可恢复错误。
-  kOff = 5,    ///< 全部关闭。
+  kTrace = 0,  ///< Per-frame details, removed at compile time in Release builds.
+  kDebug = 1,  ///< Protocol interaction details (every RNDIS control message), removed at
+               ///< compile time in Release builds.
+  kInfo = 2,   ///< Lifecycle events (device connect, state machine transition, statistics
+               ///< report).
+  kWarn = 3,   ///< Recoverable anomalies (USB stall, BPF frame drop, keep-alive timeout
+               ///< retry).
+  kError = 4,  ///< Unrecoverable error.
+  kOff = 5,    ///< Fully off.
 };
 
-/// 编译期日志下限。低于此级别的日志调用被预处理器整段删除。
+/// Compile-time log floor. Log calls below this level are removed entirely by the
+/// preprocessor.
 ///
-/// Release 构建（NDEBUG）下把 Trace/Debug 删掉，确保热路径上的
-/// TETHERKIT_TRACE 连参数都不求值。
+/// In Release builds (NDEBUG), Trace/Debug are removed so that TETHERKIT_TRACE on hot
+/// paths does not even evaluate its arguments.
 #ifndef TETHERKIT_COMPILED_MIN_LOG_LEVEL
 #ifdef NDEBUG
 #define TETHERKIT_COMPILED_MIN_LOG_LEVEL 2  // kInfo
@@ -40,64 +46,71 @@ enum class LogLevel : std::uint8_t {
 #endif
 #endif
 
-/// 运行期日志下限，默认 kInfo。
+/// Runtime log floor, kInfo by default.
 void SetLogLevel(LogLevel level) noexcept;
 
 LogLevel GetLogLevel() noexcept;
 
-/// 是否启用彩色输出。默认仅当 stderr 是 tty 时启用。
+/// Whether to enable colored output. Enabled by default only when stderr is a tty.
 void SetLogColorEnabled(bool enabled) noexcept;
 
-/// 给当前线程起个短名字，出现在日志行里，便于区分 usb-event / bpf-rx / bpf-tx。
-/// 同时调用 pthread_setname_np，使其在 Instruments / lldb 里也可见。
+/// Give the current thread a short name that appears in log lines, making it easy to
+/// distinguish usb-event / bpf-rx / bpf-tx.
+/// Also calls pthread_setname_np so the name is visible in Instruments / lldb.
 void SetCurrentThreadName(std::string_view name) noexcept;
 
-/// 日志汇：把已格式化好的日志行**额外**转交给宿主（GUI 需要在界面上显示日志，
-/// 而日志本身只往 stderr 走）。stderr 输出不受影响，两者并行。
+/// Log sink: **additionally** hand each formatted log line to the host (the GUI needs to
+/// show logs in the interface, while logging itself only writes to stderr). stderr output
+/// is unaffected; the two run in parallel.
 ///
-/// ★ 实现日志汇时的三条硬约束 ★
-///   1. 会在**任意线程**上被调用（含 libusb 事件线程）；
-///   2. 会在日志互斥锁**内部**被调用 —— 因此实现里**绝不能再打日志**
-///      （std::mutex 不可重入，会当场死锁）；
-///   3. 绝不能做阻塞 I/O —— 它会把所有正在打日志的线程一起拖住。
+/// Three hard constraints when implementing a log sink:
+///   1. It will be called on **any thread** (including the libusb event thread);
+///   2. It will be called **inside** the logging mutex -- so the implementation must
+///      **never log** (std::mutex is not reentrant and would deadlock immediately);
+///   3. It must never do blocking I/O -- that would stall every thread that is logging.
 ///
-/// 满足这三条的唯一合理实现就是「拷进定长环形缓冲，由宿主轮询取走」。
+/// The only reasonable implementation that satisfies all three is "copy into a fixed-size
+/// ring buffer and let the host poll it out".
 using LogSink = void (*)(LogLevel level, std::string_view thread_name, std::string_view message,
                          void* user) noexcept;
 
-/// 安装 / 卸载日志汇。传 nullptr 卸载。线程安全。
+/// Install / uninstall the log sink. Pass nullptr to uninstall. Thread-safe.
 void SetLogSink(LogSink sink, void* user) noexcept;
 
 namespace detail {
 
 [[nodiscard]] bool IsLogLevelEnabled(LogLevel level) noexcept;
 
-/// 输出一整行日志。`message` 已格式化完毕。
+/// Emit a full log line. `message` is already formatted.
 void EmitLogLine(LogLevel level, std::string_view file, unsigned line,
                  std::string_view message) noexcept;
 
-/// 从 __FILE__ 里截出文件名，避免日志里出现长路径。
+/// Extract the file name from __FILE__ to avoid long paths in log lines.
 constexpr std::string_view BaseName(std::string_view path) noexcept {
   const auto pos = path.find_last_of('/');
   return pos == std::string_view::npos ? path : path.substr(pos + 1);
 }
 
-/// 格式化并输出。故意做成函数模板而非宏内联，缩小宏展开体积。
+/// Format and emit. Deliberately a function template rather than inlined in the macro
+/// to keep macro expansion small.
 template <typename... Args>
 void LogFormatted(LogLevel level, std::string_view file, unsigned line,
                   std::format_string<Args...> fmt, Args&&... args) noexcept {
-  // std::format 可能因内存不足抛异常；日志失败绝不应该拖垮驱动。
+  // std::format may throw on out-of-memory; a logging failure must never take down the
+  // driver.
   try {
     EmitLogLine(level, file, line, std::format(fmt, std::forward<Args>(args)...));
   } catch (...) {  // NOLINT(bugprone-empty-catch)
-    // Text() 只是查表返回 string_view，不分配、不抛 —— 在这个 catch 里是安全的。
+    // Text() only looks up and returns a string_view, no allocation, no throw -- safe
+    // in this catch.
     EmitLogLine(LogLevel::kError, file, line, Text(Msg::kCommonLogFormatFailed));
   }
 }
 
 }  // namespace detail
 
-/// 日志宏。先做编译期级别裁剪，再做运行期级别判断（分支预测友好）。
+/// Logging macros. Do compile-time level trimming first, then the runtime level check
+/// (branch-prediction friendly).
 #define TETHERKIT_LOG(level, ...)                                                          \
   do {                                                                                     \
     if constexpr (static_cast<int>(level) >= TETHERKIT_COMPILED_MIN_LOG_LEVEL) {            \
@@ -114,11 +127,14 @@ void LogFormatted(LogLevel level, std::string_view file, unsigned line,
 #define TETHERKIT_WARN(...) TETHERKIT_LOG(::tetherkit::LogLevel::kWarn, __VA_ARGS__)
 #define TETHERKIT_ERROR(...) TETHERKIT_LOG(::tetherkit::LogLevel::kError, __VA_ARGS__)
 
-/// 打一条**可翻译**的日志。`id` 是 `Msg` 枚举值，其后的参数与 std::format 一致。
+/// Log a **translatable** message. `id` is a `Msg` enum value; the remaining arguments
+/// match std::format.
 ///
-/// 为什么要有这一组而不是直接写 `TETHERKIT_INFO("{}", Tr(id, ...))`：写成宏才能
-/// 让 Tr() 留在级别判断的**内部**，级别没开时连查表带格式化一起省掉 —— 上面那种
-/// 手写法很容易不小心把 Tr() 放到宏外面，每条日志白算一次。
+/// Why this family exists instead of writing `TETHERKIT_INFO("{}", Tr(id, ...))`
+/// directly: as macros, Tr() stays **inside** the level check, so when the level is
+/// disabled both the table lookup and formatting are skipped -- the handwritten form
+/// above makes it easy to accidentally put Tr() outside the macro and pay for it on
+/// every log line.
 #define TETHERKIT_LOG_TR(level, id, ...) \
   TETHERKIT_LOG(level, "{}", ::tetherkit::Tr((id)__VA_OPT__(, ) __VA_ARGS__))
 

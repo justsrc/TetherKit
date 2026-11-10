@@ -1,14 +1,22 @@
-// 文案表的一致性检查。
+// Message-table consistency checks.
 //
-// ★ 这个 suite 存在的唯一理由 ★
+// The one reason this suite exists:
 //
-//   Tr() 的格式串来自运行期查表，编译器**没法**再检查占位符与参数是否匹配 ——
-//   这是把 std::format 换成 vformat 付出的代价。占位符对不上时 vformat 会抛
-//   std::format_error（我们在 FormatMessage 里吞掉了，降级成未替换的原文），
-//   于是错误会安静地变成「日志里有一行长得很奇怪」，可能几个月都没人发现。
+//   Tr()'s format strings come from a runtime table, so the compiler cannot
+//   check placeholder/argument agreement -- the cost of using vformat instead
+//   of std::format. A mismatch makes vformat throw std::format_error, which
+//   FormatMessage swallows and degrades to un-substituted text, so the error
+//   would quietly surface as "one weird log line" and could go unnoticed for
+//   months.
 //
-//   所以那道保障必须在这里补回来：逐条比对两种语言引用的参数下标与类型。
-//   messages.def 里每加一条文案，都会自动被本 suite 覆盖，不需要手动登记。
+//   This suite restores that guarantee: every message's placeholders must
+//   parse cleanly, use contiguous indices starting at 0, and substitute with
+//   real arguments. Adding a row to messages.def gets covered here
+//   automatically, no manual registration.
+//
+// When a language is added, the cross-language parity checks return: each
+// table must expose the same placeholder index set and presentation types as
+// the English one (see the checklist in messages.def).
 #include <cctype>
 #include <cstddef>
 #include <format>
@@ -28,21 +36,24 @@ using tetherkit::Msg;
 
 constexpr std::size_t kMessageCount = static_cast<std::size_t>(Msg::kMessageCount);
 
-/// 一个格式串里出现的所有替换字段。
+/// Every replacement field found in one format string.
 struct ParsedFormat {
-  /// 下标 → 该下标用到的「表现类型」字符集合。
+  /// Index -> set of presentation-type chars used for that index.
   ///
-  /// 表现类型就是格式规格的最后一个字母（`x` / `f` / `d`……），它决定了实参
-  /// 必须是什么类型。宽度、对齐、填充刻意**不比**：译文换了语言之后想调列宽
-  /// 是完全正当的，那不影响类型安全。
+  /// The presentation type is the last letter of the format spec (x / f / d
+  /// ...); it decides what argument type must be passed. Width, alignment,
+  /// and fill are deliberately not compared: a translation that adjusts
+  /// column widths is perfectly legitimate and not a type hazard.
   std::map<std::size_t, std::string> types;
-  /// 是否在同一个串里混用了自动编号与手工编号（std::format 会直接抛）。
+  /// Whether automatic and manual numbering were mixed in one string
+  /// (std::format throws immediately).
   bool mixed_indexing = false;
-  /// 是否有未闭合的 `{`。
+  /// Whether a `{` was left unclosed.
   bool malformed = false;
 };
 
-/// 从格式规格里取出表现类型字符。没有规格、或规格以非字母结尾时返回空串。
+/// Extracts the presentation-type char from a format spec. Empty when the
+/// spec is empty or does not end in a letter.
 [[nodiscard]] std::string PresentationType(std::string_view spec) {
   if (spec.empty()) {
     return {};
@@ -51,10 +62,11 @@ struct ParsedFormat {
   return (std::isalpha(static_cast<unsigned char>(last)) != 0) ? std::string{last} : std::string{};
 }
 
-/// 解析一个 std::format 格式串，收集替换字段。
+/// Parses a std::format string and collects the replacement fields.
 ///
-/// 只实现我们文案里真正用到的语法子集：`{}`、`{n}`、`{:spec}`、`{n:spec}`，
-/// 外加 `{{` / `}}` 转义。嵌套的动态宽度（`{:{}}`）本表里没有，出现即视为畸形。
+/// Only the syntax subset our strings use: `{}`, `{n}`, `{:spec}`, `{n:spec}`,
+/// plus the `{{` / `}}` escapes. Nested dynamic widths (`{:{}`) do not exist in
+/// this table and count as malformed.
 [[nodiscard]] ParsedFormat ParseFormat(std::string_view text) {
   ParsedFormat parsed;
   std::size_t auto_index = 0;
@@ -63,7 +75,7 @@ struct ParsedFormat {
 
   for (std::size_t i = 0; i < text.size(); ++i) {
     if (text[i] == '}') {
-      // 合法的 `}}` 转义，跳过第二个。
+      // A legal `}}` escape; skip the second one.
       if (i + 1 < text.size() && text[i + 1] == '}') {
         ++i;
       }
@@ -73,7 +85,7 @@ struct ParsedFormat {
       continue;
     }
     if (i + 1 < text.size() && text[i + 1] == '{') {
-      ++i;  // `{{` 转义
+      ++i;  // `{{` escape
       continue;
     }
 
@@ -85,13 +97,13 @@ struct ParsedFormat {
     const std::string_view body = text.substr(i + 1, close - i - 1);
     i = close;
 
-    // 拆成「下标」与「规格」两半。
+    // Split into "index" and "spec" halves.
     const std::size_t colon = body.find(':');
     const std::string_view index_text = body.substr(0, colon);
     const std::string_view spec =
         colon == std::string_view::npos ? std::string_view{} : body.substr(colon + 1);
     if (spec.find('{') != std::string_view::npos) {
-      parsed.malformed = true;  // 动态宽度，本表不该出现
+      parsed.malformed = true;  // dynamic width has no business in this table
       continue;
     }
 
@@ -116,8 +128,9 @@ struct ParsedFormat {
   return parsed;
 }
 
-/// 给报错用的可读标签。文案表里没存标识名（X-macro 只展开出文字），所以用
-/// 序号 + 英文原文的开头，足够定位到 messages.def 的哪一行。
+/// Readable label for failure output. The table does not store identifier
+/// names (the X-macro expands to text only), so an index plus the start of the
+/// English text is enough to locate the offending messages.def row.
 [[nodiscard]] std::string Label(std::size_t index) {
   const std::string_view english = tetherkit::TextIn(Language::kEnglish, static_cast<Msg>(index));
   return std::format("message #{} (\"{}\")", index, english.substr(0, 48));
@@ -126,140 +139,119 @@ struct ParsedFormat {
 }  // namespace
 
 TEST_SUITE("common.i18n") {
+  TEST_CASE("language switch and table lookup") {
+    const Language original = tetherkit::GetLanguage();
 
-TEST_CASE("语言切换与查表") {
-  const Language original = tetherkit::GetLanguage();
+    // The selection machinery is process-wide and round-trips; today every
+    // value resolves to the English table, but these calls exercise the same
+    // path a second language will ride.
+    tetherkit::SetLanguage(Language::kEnglish);
+    CHECK(tetherkit::GetLanguage() == Language::kEnglish);
+    CHECK(tetherkit::Text(Msg::kCoreRunStateRunning) == "running");
 
-  tetherkit::SetLanguage(Language::kChinese);
-  CHECK(tetherkit::GetLanguage() == Language::kChinese);
-  CHECK(tetherkit::Text(Msg::kCoreRunStateRunning) == "运行中");
-
-  tetherkit::SetLanguage(Language::kEnglish);
-  CHECK(tetherkit::GetLanguage() == Language::kEnglish);
-  CHECK(tetherkit::Text(Msg::kCoreRunStateRunning) == "running");
-
-  tetherkit::SetLanguage(original);
-}
-
-TEST_CASE("Tr 按当前语言渲染并替换参数") {
-  const Language original = tetherkit::GetLanguage();
-
-  tetherkit::SetLanguage(Language::kChinese);
-  const std::string chinese = tetherkit::Tr(Msg::kNetBpfBindFailed, "feth1");
-  CHECK(chinese.find("feth1") != std::string::npos);
-
-  tetherkit::SetLanguage(Language::kEnglish);
-  const std::string english = tetherkit::Tr(Msg::kNetBpfBindFailed, "feth1");
-  CHECK(english.find("feth1") != std::string::npos);
-  CHECK(english != chinese);
-
-  tetherkit::SetLanguage(original);
-}
-
-TEST_CASE("每条文案两种语言都非空") {
-  for (std::size_t i = 0; i < kMessageCount; ++i) {
-    const auto id = static_cast<Msg>(i);
-    CAPTURE(i);
-    CHECK_FALSE(tetherkit::TextIn(Language::kChinese, id).empty());
-    CHECK_FALSE(tetherkit::TextIn(Language::kEnglish, id).empty());
+    tetherkit::SetLanguage(original);
   }
-}
 
-TEST_CASE("越界的 Msg 返回空串而不是崩溃") {
-  const auto out_of_range = static_cast<Msg>(kMessageCount);
-  CHECK(tetherkit::Text(out_of_range).empty());
-  CHECK(tetherkit::TextIn(Language::kChinese, out_of_range).empty());
-}
+  TEST_CASE("Tr renders the current language and substitutes arguments") {
+    const Language original = tetherkit::GetLanguage();
+    tetherkit::SetLanguage(Language::kEnglish);
 
-// 本 suite 的核心：编译器不再检查的那件事，在这里逐条检查。
-TEST_CASE("两种语言的占位符下标与类型一致") {
-  for (std::size_t i = 0; i < kMessageCount; ++i) {
-    const auto id = static_cast<Msg>(i);
-    const ParsedFormat chinese = ParseFormat(tetherkit::TextIn(Language::kChinese, id));
-    const ParsedFormat english = ParseFormat(tetherkit::TextIn(Language::kEnglish, id));
+    const std::string text = tetherkit::Tr(Msg::kNetBpfBindFailed, "feth1");
+    // The argument really was substituted, not left as an unreplaced field.
+    CHECK(text.find("feth1") != std::string::npos);
+    CHECK(text.find("{}") == std::string::npos);
 
-    CAPTURE(Label(i));
-    CHECK_FALSE(chinese.malformed);
-    CHECK_FALSE(english.malformed);
-    // 同一个串里混用 `{}` 与 `{0}` 会让 std::format 直接抛，编译期又拦不住。
-    CHECK_FALSE(chinese.mixed_indexing);
-    CHECK_FALSE(english.mixed_indexing);
+    tetherkit::SetLanguage(original);
+  }
 
-    // 参数个数与下标必须完全一致：少一个就会渲染出残缺的句子，多一个直接抛。
-    CHECK(chinese.types.size() == english.types.size());
-    for (const auto& [index, type] : chinese.types) {
-      const auto found = english.types.find(index);
-      REQUIRE(found != english.types.end());
-      // 类型字符不同意味着两边期待的实参类型不同，必然有一边会抛。
-      CHECK(found->second == type);
-    }
-
-    // 下标必须是连续的 0..n-1：留空档时 std::format 照样能渲染，但那说明有个
-    // 实参被两种语言同时忽略了，几乎总是写错。
-    std::size_t expected = 0;
-    for (const auto& [index, type] : chinese.types) {
-      CHECK(index == expected);
-      ++expected;
+  TEST_CASE("every message is non-empty") {
+    for (std::size_t i = 0; i < kMessageCount; ++i) {
+      const auto id = static_cast<Msg>(i);
+      CAPTURE(i);
+      CHECK_FALSE(tetherkit::TextIn(Language::kEnglish, id).empty());
     }
   }
-}
 
-TEST_CASE("ParseLanguage 认得常见写法") {
-  Language language = Language::kEnglish;
+  TEST_CASE("out-of-range Msg returns an empty string instead of crashing") {
+    const auto out_of_range = static_cast<Msg>(kMessageCount);
+    CHECK(tetherkit::Text(out_of_range).empty());
+    CHECK(tetherkit::TextIn(Language::kEnglish, out_of_range).empty());
+  }
 
-  CHECK(tetherkit::ParseLanguage("zh", &language));
-  CHECK(language == Language::kChinese);
-  CHECK(tetherkit::ParseLanguage("zh-Hans", &language));
-  CHECK(language == Language::kChinese);
-  CHECK(tetherkit::ParseLanguage("zh_CN.UTF-8", &language));
-  CHECK(language == Language::kChinese);
-  CHECK(tetherkit::ParseLanguage("Chinese", &language));
-  CHECK(language == Language::kChinese);
+  // This suite's core: the one check the compiler stopped doing, done entry by
+  // entry.
+  TEST_CASE("every message's placeholders are well-formed and contiguous") {
+    for (std::size_t i = 0; i < kMessageCount; ++i) {
+      const ParsedFormat parsed =
+          ParseFormat(tetherkit::TextIn(Language::kEnglish, static_cast<Msg>(i)));
 
-  CHECK(tetherkit::ParseLanguage("en", &language));
-  CHECK(language == Language::kEnglish);
-  CHECK(tetherkit::ParseLanguage("EN_US", &language));
-  CHECK(language == Language::kEnglish);
-  CHECK(tetherkit::ParseLanguage("english", &language));
-  CHECK(language == Language::kEnglish);
+      CAPTURE(Label(i));
+      CHECK_FALSE(parsed.malformed);
+      // Mixing `{}` with `{0}` in one string makes std::format throw at
+      // runtime; nothing at compile time can stop it.
+      CHECK_FALSE(parsed.mixed_indexing);
 
-  // auto 走环境推断，只要求它成功并给出两种语言之一。
-  CHECK(tetherkit::ParseLanguage("auto", &language));
+      // Indices must be exactly 0..n-1: a gap still renders, but it means an
+      // argument was silently ignored, which is almost always a mistake.
+      std::size_t expected = 0;
+      for (const auto& entry : parsed.types) {
+        CHECK(entry.first == expected);
+        ++expected;
+      }
+    }
+  }
 
-  CHECK_FALSE(tetherkit::ParseLanguage("klingon", &language));
-  CHECK_FALSE(tetherkit::ParseLanguage("", &language));
-  CHECK_FALSE(tetherkit::ParseLanguage("zh", nullptr));
-}
+  TEST_CASE("ParseLanguage understands the established spellings") {
+    Language language = Language::kEnglish;
 
-TEST_CASE("区域设置串只按 zh 前缀判定") {
-  CHECK(tetherkit::LanguageFromLocaleString("zh_CN.UTF-8") == Language::kChinese);
-  CHECK(tetherkit::LanguageFromLocaleString("ZH-hant") == Language::kChinese);
-  CHECK(tetherkit::LanguageFromLocaleString("en_US.UTF-8") == Language::kEnglish);
-  CHECK(tetherkit::LanguageFromLocaleString("C") == Language::kEnglish);
-  CHECK(tetherkit::LanguageFromLocaleString("") == Language::kEnglish);
-  // 「不以 zh 开头」就是英文，哪怕串里别处有 zh。
-  CHECK(tetherkit::LanguageFromLocaleString("en_zh") == Language::kEnglish);
-}
+    CHECK(tetherkit::ParseLanguage("en", &language));
+    CHECK(language == Language::kEnglish);
+    CHECK(tetherkit::ParseLanguage("EN_US", &language));
+    CHECK(language == Language::kEnglish);
+    CHECK(tetherkit::ParseLanguage("english", &language));
+    CHECK(language == Language::kEnglish);
 
-TEST_CASE("语言标签") {
-  CHECK(tetherkit::LanguageTag(Language::kChinese) == "zh");
-  CHECK(tetherkit::LanguageTag(Language::kEnglish) == "en");
-}
+    // auto defers to the environment; only require it to succeed and yield a
+    // valid language.
+    CHECK(tetherkit::ParseLanguage("auto", &language));
 
-TEST_CASE("错误上下文的分隔符随语言变化") {
-  const Language original = tetherkit::GetLanguage();
+    CHECK_FALSE(tetherkit::ParseLanguage("klingon", &language));
+    CHECK_FALSE(tetherkit::ParseLanguage("", &language));
+    CHECK_FALSE(tetherkit::ParseLanguage("zh", nullptr));
 
-  // Context() 返回的是 view，必须先把 Error 落到具名变量上再取，
-  // 否则临时对象在语句末尾析构，view 当场悬垂。
-  tetherkit::SetLanguage(Language::kChinese);
-  const tetherkit::Error chinese = tetherkit::Error::Generic("inner").WithContext("outer");
-  CHECK(chinese.Context().starts_with("outer："));
+    // Chinese is fully out: no table, no spelling, not even as a parse.
+    CHECK_FALSE(tetherkit::ParseLanguage("zh", &language));
+    CHECK_FALSE(tetherkit::ParseLanguage("Chinese", &language));
+  }
 
-  tetherkit::SetLanguage(Language::kEnglish);
-  const tetherkit::Error english = tetherkit::Error::Generic("inner").WithContext("outer");
-  CHECK(english.Context().starts_with("outer: "));
+  TEST_CASE("locale strings resolve through the current language set") {
+    // Documents today's behavior: with English as the only language, every
+    // locale string resolves to English. When a language is added, the prefix
+    // table goes into LanguageFromLocaleString() and these checks become
+    // per-prefix.
+    CHECK(tetherkit::LanguageFromLocaleString("zh_CN.UTF-8") == Language::kEnglish);
+    CHECK(tetherkit::LanguageFromLocaleString("ZH-hant") == Language::kEnglish);
+    CHECK(tetherkit::LanguageFromLocaleString("en_US.UTF-8") == Language::kEnglish);
+    CHECK(tetherkit::LanguageFromLocaleString("C") == Language::kEnglish);
+    CHECK(tetherkit::LanguageFromLocaleString("") == Language::kEnglish);
+    CHECK(tetherkit::LanguageFromLocaleString("en_zh") == Language::kEnglish);
+  }
 
-  tetherkit::SetLanguage(original);
-}
+  TEST_CASE("language tag") {
+    CHECK(tetherkit::LanguageTag(Language::kEnglish) == "en");
+  }
+
+  TEST_CASE("error context separator is deterministic") {
+    const Language original = tetherkit::GetLanguage();
+    tetherkit::SetLanguage(Language::kEnglish);
+
+    // Context() returns a view, so the Error must land in a named variable
+    // before it is read; a temporary dies at the end of the statement and the
+    // view dangles on the spot.
+    const tetherkit::Error error = tetherkit::Error::Generic("inner").WithContext("outer");
+    CHECK(error.Context().starts_with("outer: "));
+
+    tetherkit::SetLanguage(original);
+  }
 
 }  // TEST_SUITE

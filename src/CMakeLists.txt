@@ -1,20 +1,28 @@
-# src —— 各功能模块
+# src -- the feature modules
 #
-# 依赖方向严格单向，禁止反向依赖或循环依赖：
+# The dependency direction is strictly one-way; reverse or circular
+# dependencies are forbidden:
 #
-#   tk_common  ← 无依赖（日志、错误、无锁容器、内存池、统计）
-#      ↑
-#   tk_rndis   ← common          （RNDIS 线格式与状态机，纯逻辑，不碰 I/O）
-#   tk_net     ← common          （feth 虚拟网卡 + BPF 链路，仅 macOS 系统调用）
-#   tk_usb     ← common          （libusb 封装）
-#      ↑
-#   tk_core    ← common+rndis+net+usb （数据路径桥接与运行时编排）
-#      ↑
-#   tetherkit  ← core            （命令行可执行程序）
-#   tk_capi    ← core            （C ABI，供 Swift GUI 使用）
+#   tk_common  <- no dependencies (logging, errors, lock-free containers,
+#                 memory pool, statistics)
+#      |
+#      v
+#   tk_rndis   <- common           (RNDIS wire format and state machine, pure
+#                                   logic, no I/O)
+#   tk_net     <- common           (feth virtual interface + BPF link, macOS
+#                                   syscalls only)
+#   tk_usb     <- common           (libusb wrapper)
+#      |
+#      v
+#   tk_core    <- common+rndis+net+usb (data-path bridging and runtime
+#                                      orchestration)
+#      |
+#      v
+#   tetherkit  <- core             (command-line executable)
+#   tk_capi    <- core             (C ABI, consumed by the Swift GUI)
 
 # ------------------------------------------------------------------------------
-# 公共编译属性：所有本项目目标都继承它
+# Common compile properties inherited by every target in this project.
 # ------------------------------------------------------------------------------
 add_library(tetherkit_base INTERFACE)
 target_include_directories(tetherkit_base INTERFACE "${PROJECT_SOURCE_DIR}/include")
@@ -22,7 +30,8 @@ target_link_libraries(tetherkit_base INTERFACE tetherkit_warnings tetherkit_sani
                                                tetherkit_optimizations)
 
 # ------------------------------------------------------------------------------
-# 版本号：从模板生成，避免版本变更导致全量重编译
+# Version: generated from the template so that a version bump does not force a
+# full rebuild.
 # ------------------------------------------------------------------------------
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/version.cc.in" "${CMAKE_CURRENT_BINARY_DIR}/version.cc"
                @ONLY)

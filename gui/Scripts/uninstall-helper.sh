@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# 卸载 tetherkit-helper。**必须用 sudo 运行。**
+# Uninstall tetherkit-helper. **Must run with sudo.**
 #
 #   sudo ./gui/Scripts/uninstall-helper.sh
 set -euo pipefail
@@ -13,29 +13,31 @@ STATE_FILE="/var/run/tetherkit-interfaces"
 
 log() { printf '\033[32m==>\033[0m %s\n' "$1"; }
 
-[[ "${EUID}" -eq 0 ]] || { printf '需要 root 权限，请用 sudo 运行\n' >&2; exit 1; }
+[[ "${EUID}" -eq 0 ]] || { printf 'root privileges required; run with sudo\n' >&2; exit 1; }
 
-# bootout 发的是 SIGTERM，helper 接住后会停会话并销毁虚拟网卡。
-# 必须在删文件**之前**做 —— 二进制没了它就没法优雅退出了。
+# bootout sends SIGTERM; the helper catches it, stops the sessions, and
+# destroys the virtual interfaces. It must happen BEFORE the files are
+# deleted -- with the binary gone, it can no longer shut down gracefully.
 if launchctl print "system/${LABEL}" >/dev/null 2>&1; then
-  log "停止并注销服务"
+  log "Stopping and unregistering the service"
   launchctl bootout "system/${LABEL}" 2>/dev/null || true
-  # 给它一点时间跑完停机拆除。
+  # Give it a moment to finish its shutdown teardown.
   sleep 1
 fi
 
-log "删除文件"
+log "Deleting files"
 rm -f "${PLIST_PATH}" "${INSTALL_PATH}"
 rm -f "${TOOLS_DIR}"/libtetherkit*.dylib "${TOOLS_DIR}"/libusb-*.dylib
 
-# 兜底：helper 若曾被强杀，登记文件里可能还留着没销毁的网卡。
+# Backstop: if the helper was ever force-killed, the state file may still
+# list interfaces it never destroyed.
 if [[ -f "${STATE_FILE}" ]]; then
   while read -r interface; do
     [[ "${interface}" =~ ^feth[0-9]+$ ]] || continue
-    log "销毁残留的虚拟网卡 ${interface}"
+    log "Destroying leftover virtual interface ${interface}"
     ifconfig "${interface}" destroy 2>/dev/null || true
   done < "${STATE_FILE}"
   rm -f "${STATE_FILE}"
 fi
 
-log "已卸载"
+log "Uninstalled"

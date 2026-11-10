@@ -1,48 +1,57 @@
-// 数据路径桥接：把 RNDIS 数据通道与 feth/BPF 链路对接起来。
+// Data path bridge: connects the RNDIS data channel to the feth/BPF link.
 //
-// ★ 线程模型（本文件最重要的设计决定）★
+//  Threading model (the most important design decision in this file)
 //
-//   ┌─────────────────────────────────────────────────────────────────────┐
-//   │ RX 方向（设备 → 主机）                                               │
-//   │                                                                     │
-//   │  libusb 事件线程                        RX 注入线程                  │
-//   │  ───────────────                        ───────────                  │
-//   │  handle_events()                        BatchRead 取一批帧            │
-//   │   └→ bulk IN 回调                  ┌──►  └→ LinkBackend::WriteFrames │
-//   │       ├ 拆 RNDIS 包               │        （一次系统调用发整批）     │
-//   │       ├ BatchWrite 进 FrameRing ──┘                                  │
-//   │       └ 立刻 resubmit                                                │
-//   └─────────────────────────────────────────────────────────────────────┘
-//   ┌─────────────────────────────────────────────────────────────────────┐
-//   │ TX 方向（主机 → 设备）                                               │
-//   │                                                                     │
-//   │  TX 抽取线程                                                         │
-//   │  ───────────                                                         │
-//   │  LinkBackend::ReadFrames()（阻塞，内核自动聚合成批）                  │
-//   │   └→ DataChannel::SendFrames（聚合成 RNDIS 多包，异步提交 bulk OUT）  │
-//   └─────────────────────────────────────────────────────────────────────┘
+//  +---------------------------------------------------------------------+
+//  | RX direction (device -> host)                                       |
+//  |                                                                     |
+//  |  libusb event thread                     RX injector thread         |
+//  |  ---------------                        -----------                 |
+//  |  handle_events()                        BatchRead takes a batch     |
+//  |   +> bulk IN callback             +-->  +> LinkBackend::WriteFrames |
+//  |       + decode RNDIS packet        |        (one syscall per batch) |
+//  |       + BatchWrite into FrameRing -+                                |
+//  |       + resubmit immediately                                        |
+//  +---------------------------------------------------------------------+
+//  +---------------------------------------------------------------------+
+//  | TX direction (host -> device)                                       |
+//  |                                                                     |
+//  |  TX extractor thread                                                |
+//  |  -----------                                                        |
+//  |  LinkBackend::ReadFrames() (blocks, the kernel aggregates a batch)  |
+//  |   +> DataChannel::SendFrames (aggregates into RNDIS multi-packets,  |
+//  |      submits bulk OUT asynchronously)                               |
+//  +---------------------------------------------------------------------+
 //
-//   一共三个数据路径线程（外加 libusb 自己的 IOKit runloop 线程与状态机的控制
-//   线程）。本机是 4 性能核 + 6 效率核，三个热线程 + libusb 的 runloop 线程刚好
-//   占满性能核集群且不过订阅。
+//   Three data path threads in total (plus libusb's own IOKit runloop thread
+//   and the state machine's control thread). This machine has 4 performance
+//   cores and 6 efficiency cores, so the three hot threads plus libusb's
+//   runloop thread just fill the performance core cluster without
+//   oversubscribing it.
 //
-//   为什么 RX 必须拆成两个线程？
-//     libusb 的 transfer 回调持有 ctx->event_waiters_lock，回调里做阻塞 I/O 会
-//     把所有等同步传输的线程（包括跑控制通道的状态机线程）一起拖住。而 BPF 的
-//     write() 是系统调用（macOS 上约 660 ns 起，批量写更久）。所以回调只做
-//     「拆包 + memcpy 进无锁队列 + 立刻 resubmit」，真正的写出交给注入线程。
+//   Why must RX be split into two threads?
+//     libusb's transfer callback holds ctx->event_waiters_lock, so blocking
+//     I/O inside the callback holds up every thread waiting for a synchronous
+//     transfer (including the state machine thread that runs the control
+//     channel). And the BPF write() is a system call (about 660 ns on macOS,
+//     longer for a batch write). So the callback only does "decode the packet
+//     + memcpy into the lock-free queue + resubmit immediately"; the actual
+//     write-out is handed to the injector thread.
 //
-//   为什么 TX 只需要一个线程？
-//     BPF 的 read() 本身就是阻塞并自动聚合的（BIOCIMMEDIATE=1 下每来一包就唤醒，
-//     醒来时一次性交付期间累积的全部包），而 SendFrames 是**异步**提交，不阻塞。
-//     所以「读一批 → 提交一批」在同一个线程里就是最优形态，多一个线程只会多一次
-//     跨核队列传递。
+//   Why does TX need only one thread?
+//     BPF's read() is itself blocking and self-aggregating (with
+//     BIOCIMMEDIATE=1 it wakes on every arriving packet and delivers all the
+//     packets accumulated in the meantime in one go), and SendFrames submits
+//     **asynchronously**, so it does not block. Therefore "read a batch ->
+//     submit a batch" in a single thread is the optimal shape; one more thread
+//     would only add one more cross-core queue transfer.
 //
-//   为什么不用单个 kqueue 事件循环把三件事合起来？
-//     实测 macOS 上一次空的 kevent()（timeout={0,0}、无事件）要 13.4~13.7 µs，
-//     比普通系统调用贵 20 倍。25 kpps 下光探测就要花掉 34% 的单核。kqueue 只能
-//     用于真正的阻塞等待，绝不能用于轮询 —— 而我们的三条路径各自都已经有天然的
-//     阻塞点，合并没有收益。
+//   Why not merge all three into a single kqueue event loop?
+//     Measured on macOS, one empty kevent() (timeout={0,0}, no events) costs
+//     13.4~13.7 us, 20 times more than an ordinary system call. At 25 kpps
+//     the polling alone would eat 34% of a core. kqueue is only for real
+//     blocking waits, never for polling -- and each of our three paths
+//     already has a natural blocking point, so merging gains nothing.
 #pragma once
 
 #include <atomic>
@@ -59,58 +68,72 @@
 
 namespace tetherkit::core {
 
-/// 桥接层配置。
+/// Bridge layer configuration.
 struct BridgeConfig {
-  /// RX 队列容量（帧数）。
+  /// RX queue capacity (in frames).
   ///
-  /// 容量推导：要缓冲住「libusb 回调突发」与「BPF 写线程被调度延迟」之间的错配。
-  /// 按最坏 10 ms 调度延迟、1 Gbps 满速（82 k pps）计需要约 820 帧；取 2048 留
-  /// 2.5 倍余量。每槽 2048+128 字节，2048 槽约 4.25 MiB。
+  /// Sizing rationale: it has to absorb the mismatch between "a burst of
+  /// libusb callbacks" and "the BPF writer being delayed by the scheduler".
+  /// At a worst-case 10 ms scheduling delay and full 1 Gbps speed (82 k pps)
+  /// that needs about 820 frames; 2048 leaves a 2.5x margin. Each slot is
+  /// 2048+128 bytes, so 2048 slots are about 4.25 MiB.
   std::size_t rx_ring_frames = 2048;
 
-  /// 单帧上限（含以太头）。应与 feth 的 MTU + 14 一致。
+  /// Max single-frame length (Ethernet header included). Should match the
+  /// feth MTU + 14.
   std::uint32_t max_frame_bytes = 1518;
 
-  /// RX 注入线程一次最多攒多少帧再写出。
+  /// How many frames the RX injector thread accumulates before writing them
+  /// out.
   ///
-  /// 批量写能把「一次 write() 的系统调用成本」摊薄到每帧；实测收益在 batch≥8
-  /// 就基本饱和，但更大的批在突发时能进一步降低系统调用次数。取 64 兼顾两者：
-  /// 空闲时批很小（延迟低），突发时自动变大（吞吐高）。
+  /// A batch write amortizes "the system call cost of one write()" over the
+  /// frames; measured, the gain basically saturates at batch >= 8, but a
+  /// larger batch further cuts the number of system calls during a burst. 64
+  /// balances both: batches stay small when idle (low latency) and grow on
+  /// their own during a burst (high throughput).
   std::uint32_t rx_write_batch = 64;
 
-  /// RX 队列空时自旋多少次再让出 CPU。
+  /// How many times to spin before yielding the CPU when the RX queue is
+  /// empty.
   ///
-  /// 纯自旋会白烧一个核；直接 yield 又会在高吞吐下增加延迟。少量自旋能覆盖
-  /// 「生产者正在写下一帧」这种极短的空窗。
+  /// Pure spinning burns a core for nothing; yielding outright adds latency
+  /// at high throughput. A short spin covers very brief gaps such as "the
+  /// producer is writing the next frame".
   std::uint32_t rx_spin_before_yield = 64;
 
-  /// TX 方向单批最多提交多少帧给 USB。
+  /// How many frames a single TX batch submits to the USB.
   std::uint32_t tx_submit_batch = 256;
 
-  /// 统计报告周期（毫秒）；0 表示不周期性报告。
+  /// Statistics reporting period (milliseconds); 0 means do not report
+  /// periodically.
   std::uint32_t stats_interval_millis = 0;
 };
 
-/// 桥接层运行时的可观测快照。
+/// An observable snapshot of the bridge layer at runtime.
 struct BridgeStats {
   DirectionSnapshot rx;
   DirectionSnapshot tx;
-  /// RX 队列当前深度，用于判断哪一侧是瓶颈。
+  /// Current RX queue depth, used to tell which side is the bottleneck.
   std::size_t rx_queue_depth = 0;
-  /// 内核 BPF 侧累计丢包（bs_drop）。
+  /// Cumulative frame drops on the kernel BPF side (bs_drop).
   std::uint64_t link_kernel_drops = 0;
-  /// TX 因传输池没有空闲槽位而进入等待的次数。
+  /// How many times TX had to wait because the transfer pool had no free
+  /// slot.
   ///
-  /// 这是**事件**计数不是帧数：每次 SendFrames 一帧都没能提交、TX 线程转入
-  /// 等待就 +1（持续压力下每约 50 ms 至多再 +1）。它衡量「TX 侧顶到池上限的
-  /// 频繁程度」；出现它不代表丢帧 —— 等待期间帧安然留在批次里，上游突发由
-  /// 内核 BPF 缓冲吸收，真溢出会体现在 link_kernel_drops。
+  /// This counts **events**, not frames: it goes up by 1 every time
+  /// SendFrames manages to submit not a single frame and the TX thread
+  /// switches to waiting (under sustained pressure at most one more every
+  /// ~50 ms). It measures "how often the TX side hits the pool ceiling"; its
+  /// presence does not mean frames were dropped -- during the wait the frames
+  /// stay safely in the batch, upstream bursts are absorbed by the kernel BPF
+  /// buffer, and a real overflow shows up in link_kernel_drops.
   std::uint64_t tx_backpressure_events = 0;
 };
 
-/// 数据路径桥接。
+/// The data path bridge.
 ///
-/// 生命周期：Create → Start → （运行）→ Stop。Stop 是幂等的，析构会兜底调用。
+/// Lifecycle: Create -> Start -> (running) -> Stop. Stop is idempotent and
+/// the destructor calls it as a backstop.
 class Bridge {
  public:
   Bridge(usb::DataChannel& data_channel, net::LinkBackend& link, const BridgeConfig& config);
@@ -122,12 +145,13 @@ class Bridge {
 
   ~Bridge();
 
-  /// 启动数据路径。
+  /// Starts the data path.
   [[nodiscard]] Status Start();
 
-  /// 停止数据路径。
+  /// Stops the data path.
   ///
-  /// 拆除顺序是刻意安排的，见实现里的注释 —— 顺序错了会漏帧或者死锁。
+  /// The teardown order is deliberate; see the comments in the implementation
+  /// -- a wrong order leaks frames or deadlocks.
   void Stop();
 
   [[nodiscard]] bool Running() const noexcept {
@@ -136,43 +160,53 @@ class Bridge {
 
   [[nodiscard]] BridgeStats Snapshot() const;
 
-  /// RX 方向的计数器。数据通道的接收回调直接写它。
+  /// The RX direction counters. The data channel's receive callback writes
+  /// them directly.
   [[nodiscard]] DirectionCounters& RxCounters() noexcept { return counters_.rx; }
 
-  /// 暂停 / 恢复数据搬运。
+  /// Pauses / resumes the data movement.
   ///
-  /// 用于 RNDIS 软复位期间：设备会丢弃所有未完成的数据包，这期间继续往它发帧
-  /// 只是浪费，而且可能撞上设备重建内部状态的窗口。
+  /// Used during an RNDIS soft reset: the device drops every outstanding
+  /// packet, so keeping frames coming at it during that window only wastes
+  /// effort and may collide with the device rebuilding its internal state.
   ///
-  /// `SetPaused(true)` 是**同步**的：返回后保证 RX 注入线程已经停在暂停分支上，
-  /// 既不会再碰 rx_ring_、也不会再往链路写帧。
+  /// `SetPaused(true)` is **synchronous**: on return the RX injector thread is
+  /// guaranteed to be parked in the paused branch, no longer touching rx_ring_
+  /// and no longer writing frames to the link.
   ///
-  /// 这个同步是必需的，光靠标志位给不了保证：worker 可能刚过完标志检查、正准备
-  /// 把一批取出的帧写出去，调用方却以为已经停了。曾经就是这样漏过一个
-  /// rx_write_batch（16 帧）出去。
+  /// That synchronization is required; a flag alone gives no such guarantee:
+  /// the worker may have just passed the flag check and be about to write out
+  /// a batch it already took, while the caller believes it has stopped. That
+  /// is exactly how one rx_write_batch (16 frames) once leaked out.
   ///
-  /// TX 方向拿不到同样强的保证 —— 它必须持续把 BPF 读空，否则内核缓冲会堆满
-  /// 转成内核侧丢包。暂停期间它改为读出即丢弃，并在每个提交分片前重新检查，
-  /// 因此本函数返回后最多只可能有一个已在途的分片继续提交完。
+  /// The TX direction cannot get an equally strong guarantee -- it has to
+  /// keep draining BPF, otherwise the kernel buffer fills up and turns into
+  /// kernel-side frame drops. While paused it reads and discards instead, and
+  /// it re-checks before every submission fragment, so after this function
+  /// returns at most one fragment already in flight can still complete.
   ///
-  /// ⚠️ 不可从 RX/TX 工作线程内部调用 —— 会自等死锁。现有调用方都在控制路径上
-  /// （链路状态变化、设备软复位），满足这个前提。
+  ///  Must not be called from inside the RX/TX worker threads -- it would
+  /// deadlock on itself. The existing callers all sit on the control path
+  /// (link state changes, device soft reset), which satisfies this premise.
   void SetPaused(bool paused) noexcept;
 
   [[nodiscard]] bool Paused() const noexcept { return paused_.load(std::memory_order_acquire); }
 
  private:
-  /// RX 注入线程：从 FrameRing 取帧批量写入链路。
+  /// RX injector thread: takes frames from the FrameRing and writes them to
+  /// the link in batches.
   void RunReceiveInjector() noexcept;
 
-  /// TX 抽取线程：从链路读帧批量提交给 USB。
+  /// TX extractor thread: reads frames from the link and submits them to USB
+  /// in batches.
   void RunTransmitExtractor() noexcept;
 
   usb::DataChannel* data_channel_;
   net::LinkBackend* link_;
   BridgeConfig config_;
 
-  /// RX 队列：libusb 事件线程（生产者）→ RX 注入线程（消费者）。
+  /// The RX queue: libusb event thread (producer) -> RX injector thread
+  /// (consumer).
   std::unique_ptr<FrameRing> rx_ring_;
 
   PathCounters counters_;
@@ -186,18 +220,22 @@ class Bridge {
   std::atomic<bool> stop_requested_{false};
   std::atomic<bool> paused_{false};
 
-  /// RX 注入线程对 paused_ 的确认位，SetPaused(true) 等的就是它。
+  /// The RX injector thread's acknowledgement bit for paused_; SetPaused(true)
+  /// waits for exactly this.
   ///
-  /// 由 RX 注入线程**独占写入**：每轮循环开头先清零、确认停住后再置位。
-  /// 每轮都清零是关键 —— 否则 SetPaused(false) 紧接 SetPaused(true) 时，
-  /// 后者可能读到上一轮残留的 true 就直接返回，保证当场失效。
+  /// Written by the RX injector thread **exclusively**: cleared at the start
+  /// of every loop turn and set once the thread has parked. Clearing it every
+  /// turn is the key -- otherwise a SetPaused(false) immediately followed by
+  /// SetPaused(true) could read a leftover true from the previous turn and
+  /// return at once, voiding the guarantee right there.
   std::atomic<bool> rx_paused_ack_{false};
 
-  /// RX 注入线程复用的帧视图数组，避免每批都分配。
+  /// The frame view array reused by the RX injector thread, so no batch has
+  /// to allocate.
   std::vector<FrameView> rx_batch_;
 };
 
-/// 把统计快照渲染成一行人类可读的文本。
+/// Renders a statistics snapshot as one human-readable line.
 [[nodiscard]] std::string FormatStatsLine(const BridgeStats& previous, const BridgeStats& current,
                                           double seconds);
 

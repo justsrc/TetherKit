@@ -1,12 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  TetherKit.app 的 Info.plist 模板。
+  The Info.plist template for TetherKit.app.
 
-  Scripts/build-gui.sh 会把 __TETHERKIT_VERSION__ 替换成真实版本号后拷进
-  TetherKit.app/Contents/。
+  Scripts/build-gui.sh replaces __TETHERKIT_VERSION__ with the real version
+  number and copies the file into TetherKit.app/Contents/.
 
-  App 本身**不需要任何 entitlement**：它以普通用户身份运行，既不碰 USB 也不碰
-  网卡，全部特权操作都通过 XPC 交给 tetherkit-helper。
+  The app itself needs **no entitlements at all**: it runs as an ordinary
+  user, touches neither USB nor the interface, and hands every privileged
+  operation to tetherkit-helper over XPC.
 -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -22,7 +23,8 @@
     <string>TetherKit</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
-    <!-- Dock / 访达用的图标。Resources/AppIcon.icns 由 build-gui.sh 拷入。 -->
+    <!-- The icon for the Dock and Finder. Resources/AppIcon.icns is
+         copied in by build-gui.sh. -->
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
     <key>CFBundleShortVersionString</key>
@@ -30,33 +32,37 @@
     <key>CFBundleVersion</key>
     <string>__TETHERKIT_VERSION__</string>
 
-    <!-- 支持的界面语言。
-         文案本身是编进二进制的（见 TetherKitIPC/Localization.swift 里为什么不
-         走 .lproj），所以这里**不影响**实际显示什么 —— 它的作用是让
-         「系统设置 → 通用 → 语言与地区 → 应用程序」里能列出 TetherKit 并给出
-         这两个选项。App 内的语言菜单与这条各自独立，两者都能用。
-         第一项同时充当 CFBundleDevelopmentRegion 的角色。 -->
+    <!-- The interface languages declared here.
+         The strings themselves are compiled into the binary (see
+         TetherKitIPC/Localization.swift for why they do not go through
+         .lproj), so this **does not** affect what is actually displayed:
+         its purpose is to let "System Settings, General, Language and
+         Region, Applications" list TetherKit and offer the languages
+         below. The in-app language menu is independent of this entry;
+         both work. The first entry also serves as the
+         CFBundleDevelopmentRegion. -->
     <key>CFBundleDevelopmentRegion</key>
     <string>en</string>
     <key>CFBundleLocalizations</key>
     <array>
         <string>en</string>
-        <string>zh-Hans</string>
     </array>
 
-    <!-- Swift 的 Observation 与 ContentUnavailableView 需要 macOS 14。
-         命令行部分仍然支持 13.3，两者是各自独立的产物。 -->
+    <!-- Swift's Observation and ContentUnavailableView need macOS 14.
+         The command line part still supports 13.3; the two are
+         independent artifacts. -->
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
 
     <key>NSHighResolutionCapable</key>
     <true/>
-    <!-- 这是一个有窗口的普通应用，不是后台代理。 -->
+    <!-- This is an ordinary app with a window, not a background agent. -->
     <key>LSUIElement</key>
     <false/>
     <key>NSSupportsAutomaticTermination</key>
     <false/>
-    <!-- 会话跑着的时候被系统「自动终止」等于把用户的网络断掉。 -->
+    <!-- Being automatically terminated by the system while a session
+         runs is the same as cutting the user's network. -->
     <key>NSSupportsSuddenTermination</key>
     <false/>
 </dict>

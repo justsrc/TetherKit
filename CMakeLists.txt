@@ -3,62 +3,68 @@ cmake_minimum_required(VERSION 3.24)
 project(
   TetherKit
   VERSION 0.1.5
-  DESCRIPTION "macOS 用户态 RNDIS 驱动：libusb + feth + BPF"
+  DESCRIPTION "macOS userspace RNDIS driver: libusb + feth + BPF"
   LANGUAGES CXX)
 
 # ------------------------------------------------------------------------------
-# 平台前置检查
+# Platform prerequisites
 #
-# 本项目依赖 macOS 私有的 feth(if_fake) 虚拟网卡与 Darwin BPF，无法跨平台。
+# This project depends on the macOS-private feth (if_fake) virtual interface
+# and Darwin BPF; it cannot be portable.
 # ------------------------------------------------------------------------------
 if(NOT APPLE)
-  message(FATAL_ERROR "TetherKit 仅支持 macOS：依赖 feth(if_fake) 与 Darwin BPF。")
+  message(FATAL_ERROR "TetherKit supports macOS only: it depends on feth (if_fake) and Darwin BPF.")
 endif()
 
 # ------------------------------------------------------------------------------
-# 全局语言标准
+# Global language standard
 #
-# 选 C++23 的理由（实测于 Apple clang 21 / macOS 26.5）：
-#   * std::expected —— 初始化路径的错误传播主力，避免异常与错误码混用。
-#   * std::byteswap —— RNDIS 线格式是小端，跨端序时需要显式转换。
+# Why C++23 (measured on Apple clang 21 / macOS 26.5):
+#   * std::expected -- the primary error-propagation mechanism on control and
+#     init paths, avoiding a mix of exceptions and error codes.
+#   * std::byteswap -- the RNDIS wire format is little-endian, so byte order
+#     flips need explicit conversion.
 # ------------------------------------------------------------------------------
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# 部署目标：
-#   * 不主动设置，让 CMake 取宿主 macOS 版本 —— 否则会和 Homebrew 的 libusb
-#     （按宿主版本构建）产生 "building for macOS-13.3, but linking with dylib
-#     which was built for newer version" 链接告警。
-#   * 但必须校验下限 13.3：libc++ 的 std::to_chars（std::format 浮点格式化的
-#     底层实现）带 availability 标注，更低的部署目标会直接编译失败。
+# Deployment target:
+#   * Do not set it proactively; let CMake take the host macOS version --
+#     otherwise linking against Homebrew's libusb (built for the host version)
+#     produces the "building for macOS-13.3, but linking with dylib which was
+#     built for newer version" warning.
+#   * But the 13.3 floor must be enforced: libc++'s std::to_chars (the
+#     underlying implementation of std::format's float formatting) carries
+#     availability annotations, and anything lower simply fails to compile.
 set(TETHERKIT_MIN_MACOS_VERSION "13.3")
 
 if(CMAKE_OSX_DEPLOYMENT_TARGET AND CMAKE_OSX_DEPLOYMENT_TARGET VERSION_LESS
                                    TETHERKIT_MIN_MACOS_VERSION)
   message(
     FATAL_ERROR
-      "CMAKE_OSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET} 过低，"
-      "至少需要 ${TETHERKIT_MIN_MACOS_VERSION}（libc++ 的 std::to_chars 带 availability 标注）。")
+      "CMAKE_OSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET} is too low; "
+      "at least ${TETHERKIT_MIN_MACOS_VERSION} is required (libc++ std::to_chars carries availability annotations).")
 endif()
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE
       "RelWithDebInfo"
-      CACHE STRING "构建类型" FORCE)
+      CACHE STRING "Build type" FORCE)
 endif()
 
-# 始终导出 compile_commands.json，供 clangd / clang-tidy 使用。
+# Always export compile_commands.json, for clangd / clang-tidy.
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# 全局开启位置无关代码。
+# Position-independent code, globally.
 #
-# 各功能模块都是静态库，但它们最终要被链进共享库 libtetherkit —— 非 PIC 的目标
-# 文件链不进 dylib。macOS/clang 上 PIC 本来就是默认，这里显式写出来是为了让
-# 「为什么必须 PIC」这件事在构建脚本里有据可查。
+# The feature modules are all static libraries, but they end up linked into
+# the shared lib libtetherkit -- non-PIC object files cannot link into a
+# dylib. On macOS/clang, PIC is the default anyway; spelling it out here keeps
+# the "why is PIC mandatory" reasoning documented in the build script itself.
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-# 可执行文件与库统一输出到 build/bin、build/lib，方便脚本引用。
+# Keep executables and libraries under build/bin and build/lib for easy script reference.
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
@@ -66,31 +72,31 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 # ------------------------------------------------------------------------------
-# 构建选项
+# Build options
 # ------------------------------------------------------------------------------
-option(TETHERKIT_BUILD_TESTS "构建单元测试" ON)
-option(TETHERKIT_BUILD_BENCHMARKS "构建性能基准" ON)
-option(TETHERKIT_BUILD_SHARED_LIB "构建共享库 libtetherkit（GUI 与其它语言绑定需要）" ON)
-option(TETHERKIT_WARNINGS_AS_ERRORS "把编译警告当作错误" OFF)
-option(TETHERKIT_NATIVE_ARCH "为本机 CPU 微架构优化（-mcpu=native，产物不可移植）" OFF)
-option(TETHERKIT_ENABLE_LTO "启用链接时优化（Release 类构建）" OFF)
-option(TETHERKIT_ENABLE_ASAN "启用 AddressSanitizer" OFF)
-option(TETHERKIT_ENABLE_UBSAN "启用 UndefinedBehaviorSanitizer" OFF)
-option(TETHERKIT_ENABLE_TSAN "启用 ThreadSanitizer（验证无锁队列与线程模型）" OFF)
+option(TETHERKIT_BUILD_TESTS "Build unit tests" ON)
+option(TETHERKIT_BUILD_BENCHMARKS "Build performance benchmarks" ON)
+option(TETHERKIT_BUILD_SHARED_LIB "Build shared lib libtetherkit (needed by the GUI and other language bindings)" ON)
+option(TETHERKIT_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
+option(TETHERKIT_NATIVE_ARCH "Optimize for the host CPU microarchitecture (-mcpu=native; binary not portable)" OFF)
+option(TETHERKIT_ENABLE_LTO "Enable link-time optimization (Release-style builds)" OFF)
+option(TETHERKIT_ENABLE_ASAN "Enable AddressSanitizer" OFF)
+option(TETHERKIT_ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer" OFF)
+option(TETHERKIT_ENABLE_TSAN "Enable ThreadSanitizer (validates the lock-free queues and thread model)" OFF)
 
 include(CompilerWarnings)
 include(Sanitizers)
 include(Optimizations)
 
 # ------------------------------------------------------------------------------
-# 依赖
+# Dependencies
 # ------------------------------------------------------------------------------
 find_package(LibUSB REQUIRED)
 
 # ------------------------------------------------------------------------------
-# 子目录
+# Subdirectories
 #
-# 依赖方向严格单向：common <- rndis/net <- usb <- core <- app
+# The dependency direction is strictly one-way: common <- rndis/net <- usb <- core <- app
 # ------------------------------------------------------------------------------
 add_subdirectory(third_party)
 add_subdirectory(src)
@@ -105,26 +111,29 @@ if(TETHERKIT_BUILD_BENCHMARKS)
 endif()
 
 # ------------------------------------------------------------------------------
-# 图形界面
+# Graphical interface
 #
-# Swift 部分由 SwiftPM 构建（见 gui/Package.swift 里为什么不用 CMake 的 Swift
-# 支持），这里只提供一个方便的入口，把「先建 C++ 再建 Swift」串起来：
+# The Swift part is built by SwiftPM (see gui/Package.swift for why CMake's
+# Swift support is not used); this only provides a convenient entry point that
+# chains "build C++ first, then Swift":
 #
 #   cmake --build build --target gui
 #
-# 刻意做成**手动触发**的目标（EXCLUDE_FROM_ALL 的效果）：GUI 需要 Xcode 工具链，
-# 而只想要命令行的人不该被迫装它。
+# Deliberately a **manual** target (the effect of EXCLUDE_FROM_ALL): the GUI
+# needs the Xcode toolchain, and someone who only wants the command line should
+# not be forced to install it.
 # ------------------------------------------------------------------------------
 if(TETHERKIT_BUILD_SHARED_LIB AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/gui/Package.swift")
-  # 显式把当前构建目录传给脚本（它默认找 <repo>/build），这样在
-  # build-rel / build-tsan 之类的非默认目录里也能正确找到 libtetherkit。
+  # Pass the current build directory to the script explicitly (by default it
+  # looks for <repo>/build), so libtetherkit is also found correctly in
+  # non-default build dirs such as build-rel / build-tsan.
   add_custom_target(
     gui
     COMMAND "${CMAKE_COMMAND}" -E env "TETHERKIT_BUILD_DIR=${CMAKE_BINARY_DIR}"
             "${CMAKE_CURRENT_SOURCE_DIR}/gui/Scripts/build-gui.sh"
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
     DEPENDS tetherkit_shared
-    COMMENT "构建 TetherKit.app 与 tetherkit-helper"
+    COMMENT "Building TetherKit.app and tetherkit-helper"
     USES_TERMINAL
     VERBATIM)
   set_property(TARGET gui APPEND PROPERTY
@@ -132,23 +141,23 @@ if(TETHERKIT_BUILD_SHARED_LIB AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/gui/Packag
 endif()
 
 # ------------------------------------------------------------------------------
-# 构建配置摘要
+# Build configuration summary
 # ------------------------------------------------------------------------------
 message(STATUS "")
-message(STATUS "==== TetherKit ${PROJECT_VERSION} 构建配置 ====")
-message(STATUS "  构建类型          : ${CMAKE_BUILD_TYPE}")
-message(STATUS "  C++ 标准          : C++${CMAKE_CXX_STANDARD}")
+message(STATUS "==== TetherKit ${PROJECT_VERSION} build configuration ====")
+message(STATUS "  Build type        : ${CMAKE_BUILD_TYPE}")
+message(STATUS "  C++ standard      : C++${CMAKE_CXX_STANDARD}")
 if(CMAKE_OSX_DEPLOYMENT_TARGET)
   set(_tk_deploy "macOS ${CMAKE_OSX_DEPLOYMENT_TARGET}")
 else()
-  set(_tk_deploy "宿主默认")
+  set(_tk_deploy "host default")
 endif()
-message(STATUS "  部署目标          : ${_tk_deploy}（下限 ${TETHERKIT_MIN_MACOS_VERSION}）")
-message(STATUS "  编译器            : ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}")
+message(STATUS "  Deployment target : ${_tk_deploy} (floor ${TETHERKIT_MIN_MACOS_VERSION})")
+message(STATUS "  Compiler          : ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}")
 message(STATUS "  libusb            : ${LibUSB_VERSION} (${LibUSB_LIBRARY})")
-message(STATUS "  单元测试          : ${TETHERKIT_BUILD_TESTS}")
-message(STATUS "  性能基准          : ${TETHERKIT_BUILD_BENCHMARKS}")
-message(STATUS "  本机微架构优化    : ${TETHERKIT_NATIVE_ARCH}")
+message(STATUS "  Unit tests        : ${TETHERKIT_BUILD_TESTS}")
+message(STATUS "  Benchmarks        : ${TETHERKIT_BUILD_BENCHMARKS}")
+message(STATUS "  Host microarch    : ${TETHERKIT_NATIVE_ARCH}")
 message(STATUS "  LTO               : ${TETHERKIT_ENABLE_LTO}")
 message(STATUS "  ASan/UBSan/TSan   : ${TETHERKIT_ENABLE_ASAN}/${TETHERKIT_ENABLE_UBSAN}/${TETHERKIT_ENABLE_TSAN}")
 message(STATUS "=========================================")

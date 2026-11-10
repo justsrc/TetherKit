@@ -2,19 +2,21 @@ import CTetherKit
 import Foundation
 import TetherKitIPC
 
-/// 虚拟网卡的上网方式配置。
+/// Network access configuration for a virtual interface.
 ///
-/// `apply` / `clear` 需要 root（只在 helper 里调）；`query` 不需要。
+/// `apply` / `clear` require root (called only from the helper); `query` does not.
 public enum NetworkConfigurator {
-    /// tk_ip_config_t 里每个地址字段的容量，用于定位二维数组 `dns[4][46]` 的行。
+    /// Capacity of each address field in tk_ip_config_t, used to locate rows in
+    /// the 2D array `dns[4][46]`.
     private static let addressStride = Int(TK_ADDRESS_CAPACITY)
     private static let maxDNSServers = Int(TK_DNS_MAX)
 
-    /// 下发配置。
+    /// Apply configuration.
     ///
-    /// ⚠️ DHCP 模式下会**阻塞**到拿到租约或超时（库内部上限 10 秒）。这是刻意的：
-    /// 「已下发，你自己去轮询」对界面来说没法给出有意义的成败反馈。调用方必须
-    /// 保证不在主线程上调它。
+    /// In DHCP mode this blocks until a lease is obtained or it times out
+    /// (library-internal limit 10 seconds). This is deliberate: "applied, poll it
+    /// yourself" cannot give the UI meaningful success/failure feedback. The
+    /// caller must ensure this is not called on the main thread.
     public static func apply(_ configuration: NetworkConfiguration, to interface: String) throws {
         var raw = tk_ip_config_t()
         tk_ip_config_init(&raw)
@@ -41,17 +43,18 @@ public enum NetworkConfigurator {
         try check(result, error)
     }
 
-    /// 撤销网卡上的 IP 配置。
+    /// Revoke the IP configuration on an interface.
     public static func clear(interface: String) throws {
         var error = tk_error_t()
         let result = interface.withCString { tk_net_clear($0, &error) }
         try check(result, error)
     }
 
-    /// 回读网卡**真实生效**的状态。
+    /// Read back the interface's effective state.
     ///
-    /// 网卡还不存在时返回全空的状态而不是抛错 —— 界面在会话没起来时也会刷新，
-    /// 那时挂一个假的错误只会误导人。
+    /// Returns an all-empty state instead of throwing when the interface does not
+    /// yet exist -- the UI also refreshes before a session is up, and surfacing a
+    /// spurious error there would only mislead.
     public static func query(interface: String) throws -> NetworkState {
         var raw = tk_net_state_t()
         var error = tk_error_t()
@@ -77,34 +80,38 @@ public enum NetworkConfigurator {
     }
 }
 
-// MARK: - 校验
+// MARK: - Validation
 
-/// 静态 IP 表单的输入校验。
+/// Input validation for the manual IP form.
 ///
-/// 放在共享层而不是界面里：helper 侧也要挡一道（XPC 是任何本机进程都能连的），
-/// 两边用同一份规则才不会出现「界面通过了但 helper 拒绝」的割裂。
+/// Kept in the shared layer rather than the UI: the helper side must also reject
+/// bad input (XPC can be reached by any local process), and both sides must use
+/// the same rules to avoid "UI accepts but helper rejects" splits.
 public enum NetworkValidator {
-    /// 是否是合法的点分十进制 IPv4 地址。
+    /// Whether the text is a valid dotted-decimal IPv4 address.
     public static func isValidIPv4(_ text: String) -> Bool {
         var address = in_addr()
         return text.withCString { inet_pton(AF_INET, $0, &address) } == 1
     }
 
-    /// 是否是合法的子网掩码。
+    /// Whether the text is a valid subnet mask.
     ///
-    /// 比「是合法 IPv4」更严：掩码的二进制必须是连续的 1 后面跟连续的 0。
-    /// 255.255.0.255 这种能通过 inet_pton 但作为掩码是错的，而内核对它的反应
-    /// 是给出一个诡异的路由，非常难查 —— 所以在入口就挡掉。
+    /// Stricter than "is a valid IPv4 address": a mask's binary form must be
+    /// contiguous 1s followed by contiguous 0s. Values like 255.255.0.255 pass
+    /// inet_pton but are wrong as masks, and the kernel reacts to them with a
+    /// bizarre route that is very hard to diagnose -- so reject them at entry.
     public static func isValidNetmask(_ text: String) -> Bool {
         var address = in_addr()
         guard text.withCString({ inet_pton(AF_INET, $0, &address) }) == 1 else { return false }
         let host = UInt32(bigEndian: address.s_addr)
-        // 连续掩码的充要条件：取反加一后是 2 的幂（或为 0，对应 255.255.255.255）。
+        // A contiguous mask is necessary and sufficient: bitwise-not plus one is
+        // a power of two (or zero, corresponding to 255.255.255.255).
         let inverted = ~host
         return inverted & (inverted &+ 1) == 0
     }
 
-    /// 逐项校验一份静态 IP 配置，返回第一条不通过的说明；全通过时返回 nil。
+    /// Validate a manual IP configuration item by item and return the first
+    /// failure message; returns nil when everything passes.
     public static func validationMessage(for configuration: NetworkConfiguration) -> String? {
         guard configuration.mode == .manual else { return nil }
 

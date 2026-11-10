@@ -75,10 +75,12 @@ struct ContentView: View {
         .scrollBounceBehavior(.basedOnSize)
     }
 
-    /// 「检查更新」弹窗的正文。
+    /// The body of the "Check for Updates..." popup.
     ///
-    /// brew 命令名与 tap 里实际的 GUI formula（tetherkit）一致 —— CLI 更名
-    /// tetherkit-cli 时这个名字让给了 GUI；手动构建的用户按第二句走。
+    /// The brew command name matches the GUI formula in the tap
+    /// (tetherkit) -- when the CLI was renamed to tetherkit-cli this name
+    /// went to the GUI; users who build by hand follow the second
+    /// sentence.
     private var updateCheckDescription: String {
         switch model.updateCheckResult {
         case .upToDate(let current):
@@ -112,7 +114,7 @@ struct ContentView: View {
     }
 }
 
-/// 正在探测 helper 时的占位。
+/// The placeholder shown while the helper is being probed.
 private struct ProbingCard: View {
     var body: some View {
         Card {
@@ -128,10 +130,12 @@ private struct ProbingCard: View {
     }
 }
 
-/// helper 没装时的引导。
+/// The guide shown when the helper is not installed.
 ///
-/// 这是新用户最可能撞上的一屏，所以把「为什么需要」说清楚之后直接给一个
-/// 「安装」按钮 —— 弹一次系统授权框就装好。终端方案降级成折叠里的备选。
+/// This is the screen a new user is most likely to hit, so after
+/// explaining "why it is needed" it goes straight to an "Install" button
+/// -- one system authorization dialog and the helper is in. The terminal
+/// route is demoted to a fallback inside a disclosure group.
 private struct HelperMissingCard: View {
     var model: AppModel
     let reason: String
@@ -163,10 +167,12 @@ private struct HelperMissingCard: View {
     }
 }
 
-/// 装着的 helper 与当前 App 的 XPC 接口对不上。
+/// The installed helper's XPC interface does not match the current app.
 ///
-/// 单独一屏而不是复用「没安装」：这两种情况下用户要做的事不一样，而且如果不
-/// 明说，症状会表现成调用卡住或直接崩溃 —— 那是最难自查的一类问题。
+/// A screen of its own rather than reusing "not installed": the user has
+/// to do different things in the two cases, and unless it is spelled out
+/// the symptom shows up as calls hanging or crashing outright -- the
+/// hardest kind of problem to diagnose on one's own.
 private struct HelperOutdatedCard: View {
     var model: AppModel
     let installed: Int
@@ -189,10 +195,14 @@ private struct HelperOutdatedCard: View {
     }
 }
 
-/// 「一键安装」按钮 + 终端备选方案。missing / outdated 两张卡共用。
+/// The "one-click install" button plus the terminal fallback. Shared by
+/// the missing and the outdated cards.
 ///
-/// 终端方案必须保留而不是彻底删掉：`swift run` 跑的裸可执行文件没有内嵌载荷，
-/// 按钮会明确报错引导到脚本；也总有人就是不愿意往 App 弹的框里输密码。
+/// The terminal route has to be kept rather than dropped entirely: the
+/// bare executable from `swift run` has no embedded payload, and the
+/// button reports that clearly and points at the script; and there are
+/// always people who simply will not type their password into a dialog
+/// the app pops up.
 private struct HelperInstallSection: View {
     var model: AppModel
     let buttonTitle: String
@@ -242,7 +252,7 @@ private struct HelperInstallSection: View {
     }
 }
 
-/// 一条可复制的命令。
+/// A command that can be copied.
 struct CopyableCommand: View {
     let command: String
     @State private var copied = false
@@ -258,7 +268,9 @@ struct CopyableCommand: View {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(command, forType: .string)
                 copied = true
-                // 2 秒后复原。给的是「已复制」这个确认，不是一个需要用户操作的状态。
+                // Restore after 2 seconds. It gives the "copied"
+                // confirmation, not a state that needs the user to act on
+                // it.
                 Task {
                     try? await Task.sleep(for: .seconds(2))
                     copied = false

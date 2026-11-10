@@ -1,9 +1,11 @@
-# tests —— 单元测试
+# tests -- unit tests
 #
-# 全部测试链接进单个可执行文件 tetherkit_tests，理由：
-#  * doctest 的注册是全局的，单一二进制启动开销最低；
-#  * 通过 doctest 的 --test-suite 过滤即可按模块运行；
-#  * CTest 侧按 test-suite 注册多个用例，失败定位仍然精确。
+# Every test is linked into a single executable, tetherkit_tests, because:
+#  * doctest registration is global, and one binary has the lowest startup
+#    overhead;
+#  * the module can be run via doctest's --test-suite filter alone;
+#  * CTest registers several cases per test-suite, so failing cases still
+#    pinpoint exactly which module broke.
 
 add_executable(
   tetherkit_tests
@@ -22,34 +24,41 @@ add_executable(
   test_core_bridge.cc
   test_capi.cc)
 
-# tk_rndis / tk_net 都 PUBLIC 链接了 tk_common，无需重复列出（否则链接器报
-# "ignoring duplicate libraries"）。
-# tk_core PUBLIC 链接了 tk_common/tk_rndis/tk_net/tk_usb，列它一个就够。
-# tk_capi PUBLIC 链接了 tk_version 与 tk_core，因此这两个都不用重复列出。
+# tk_rndis / tk_net both PUBLIC-link tk_common, so it does not need repeating
+# (otherwise the linker prints "ignoring duplicate libraries").
+# tk_core PUBLIC-links tk_common/tk_rndis/tk_net/tk_usb, so listing it alone is
+# enough.
+# tk_capi PUBLIC-links tk_version and tk_core, so neither needs repeating.
 target_link_libraries(tetherkit_tests PRIVATE tetherkit_base doctest tk_capi)
-# src/capi 目录：capi_support.h 是实现内部头，不对外安装，但要能被测试直接覆盖。
+# The src/capi directory: capi_support.h is an implementation-internal header,
+# not installed publicly, but it must be includable directly by the tests.
 target_include_directories(tetherkit_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}"
                                                    "${PROJECT_SOURCE_DIR}/src/capi")
 
 # ------------------------------------------------------------------------------
-# CTest 注册
+# CTest registration
 #
-# ⚠️ 这里踩过一个「整套测试静默失效却全绿」的坑，务必注意两点：
+#  This repo once had a pitfall where the whole suite ran zero cases and read
+# green. Two things to watch:
 #
-#  1. **过滤参数不能加引号。** 写成 `--test-suite="${_suite}"` 时，CMake 会把
-#     引号当作参数内容原样传下去（实测 ctest -V 显示传的是
-#     `"--test-suite="rndis.state_machine""`），doctest 匹配不到任何用例 ——
-#     于是「跑了 0 个用例」，而 doctest 对零匹配返回退出码 0，ctest 就报
-#     「Passed」。真实的失败被完全吞掉。
+#  1. **The filter argument must not be quoted.** Written as
+#     `--test-suite="${_suite}"`, CMake passes the quote marks through as
+#     argument content (verified with ctest -V: it passes
+#     `"--test-suite="rndis.state_machine""`), doctest matches zero cases --
+#     so "0 cases ran", and doctest returns exit code 0 on zero matches, so
+#     ctest reports "Passed". The real failures were swallowed entirely.
 #
-#  2. 因此再加一道保险：给每个用例设 **FAIL_REGULAR_EXPRESSION**，只要输出里
-#     出现「assertions: 0」就判失败。将来谁再打错 suite 名字会立刻红掉。
-#     这里**必须**用 FAIL_ 而不是 PASS_REGULAR_EXPRESSION —— 后者会
-#     **取代**退出码判定（CMake 的文档行为），一设上去真实的断言失败反而被
-#     忽略掉，等于把刚修好的坑又挖回来。FAIL_ 是叠加在退出码之上的。
+#  2. Hence an extra safety net: each case sets **FAIL_REGULAR_EXPRESSION** so
+#     that any "assertions: 0" in the output fails the test. A mistyped suite
+#     name will go red immediately from now on.
+#     This **must** be FAIL_ rather than PASS_REGULAR_EXPRESSION -- the latter
+#     **replaces** the exit-code check (documented CMake behavior), so once set,
+#     a genuine assertion failure would be ignored instead, digging the pit
+#     right back open. FAIL_ is additive on top of the exit code.
 #
-# 另外单独注册一个 `all` 用例跑整个二进制作为**权威结果** —— 即使某个 suite
-# 忘了加进下面的列表，它也会把失败暴露出来。
+# A separate `all` case that runs the entire binary is registered as the
+# **authoritative result** -- even if a suite gets forgotten in the list below,
+# it will expose the failure.
 # ------------------------------------------------------------------------------
 add_test(NAME all COMMAND tetherkit_tests)
 
@@ -78,7 +87,7 @@ set(TETHERKIT_TEST_SUITES
     capi.net_config)
 
 foreach(_suite IN LISTS TETHERKIT_TEST_SUITES)
-  # 注意：--test-suite= 后面**不要**加引号，见上方说明。
+  # Note: do **not** put quotes after --test-suite=, see the explanation above.
   add_test(NAME "${_suite}" COMMAND tetherkit_tests --test-suite=${_suite})
   set_tests_properties("${_suite}" PROPERTIES FAIL_REGULAR_EXPRESSION "assertions: +0 \\|")
 endforeach()

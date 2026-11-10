@@ -1,74 +1,84 @@
 import Foundation
 
-// 界面文案的语言切换。
+// User-facing strings and language switching for the GUI and the helper.
 //
-// ★ 为什么不用 Localizable.strings / String(localized:) ★
+// Why not Localizable.strings / String(localized:):
 //
-//   标准做法要把 .lproj 目录打进 bundle，而本工程有三个互相独立的产物形态：
-//     * `swift build` 出来的裸可执行文件（开发时直接跑）；
-//     * Scripts/build-gui.sh 手工拼出来的 TetherKit.app；
-//     * 装到 /Library/PrivilegedHelperTools 的 **裸** helper 可执行文件。
-//   最后这个是致命的：helper 旁边没有、也不该有一个资源 bundle，而它同样要
-//   产生给用户看的文字（提示、错误）。走 bundle 的话 helper 只能永远输出
-//   开发语言，或者得在安装脚本里再搬一套资源过去。
+//   The standard approach bundles .lproj directories, and this project ships
+//   three independent artifact shapes:
+//     * the bare executable that `swift build` produces (run during dev);
+//     * the TetherKit.app assembled by Scripts/build-gui.sh;
+//     * the **bare** helper executable that lives in
+//       /Library/PrivilegedHelperTools.
+//   The last one is fatal: no resource bundle sits next to the helper, and
+//   none should, yet it still produces user-facing text (prompts, errors).
+//   Going through bundles means the helper either speaks the build language
+//   forever or the installer has to ship a second copy of the resources.
 //
-//   把文案编进二进制就没有这些问题：三种形态行为完全一致，安装脚本不用动，
-//   也不存在「装到别的机器上找不到 .lproj 于是全变英文」这类运行期故障。
-//   顺带和 C++ 侧（include/tetherkit/common/messages.def）是同一个心智模型。
+//   Compiling the strings into the binary has none of those problems: all
+//   three shapes behave identically, install scripts stay untouched, and
+//   there is no "installed on another machine, .lproj missing, everything
+//   falls back to the development language" class of runtime failure. It also
+//   mirrors the C++ side (include/tetherkit/common/messages.def): one mental
+//   model.
 //
-//   代价是用不上 Xcode 的字符串目录编辑器 —— 而这个工程本来就没有 Xcode
-//   工程文件，代价为零。
+//   The cost is Xcode's string-catalog editor -- this repo has no Xcode
+//   project file anyway, so the cost is zero.
 //
-// ★ 加一条文案 ★
+// Adding a message:
 //
-//   1. 在 LocalizedStrings.swift 的 `L10nKey` 里加一个 case；
-//   2. 在同文件的 `localizations` switch 里补上中英两版。
-//   switch 是穷尽的，**漏了编译不过** —— 这比 C++ 那边的 X-macro 还强一档。
+//   1. Add a case to `L10nKey` in LocalizedStrings.swift;
+//   2. add its text to the `localizations` switch in the same file.
+//   The switch is exhaustive: a missing entry is a compile error -- one notch
+//   stronger than the C++ X-macro side.
 
-/// 用户能选的语言偏好。`system` 表示跟随 macOS。
+/// The language preference the user can pick. `system` follows macOS.
 public enum LanguagePreference: String, CaseIterable, Codable, Sendable {
     case system
-    case chinese
     case english
 }
 
-/// 实际生效的语言。偏好为 `system` 时由 `L10n` 解析成这两者之一。
+/// The language actually in effect. The `system` preference resolves into one
+/// of these through `L10n`.
 public enum Language: String, CaseIterable, Codable, Sendable {
-    case chinese
     case english
 
-    /// 与 C ABI 的 `tk_language_t` 对齐（TK_LANGUAGE_ENGLISH = 0、CHINESE = 1）。
-    public var cValue: Int32 { self == .chinese ? 1 : 0 }
+    /// Aligned with the C ABI's tk_language_t (TK_LANGUAGE_ENGLISH = 0). A
+    /// language is one more enum value; on the wire, foreign values are
+    /// ignored by every consumer, so callers keep working and stay in English.
+    public var cValue: Int32 { 0 }
 }
 
-/// 文案查表与语言状态。
+/// The string table and language state.
 ///
-/// 状态是**进程级**的：日志与提示会从多个线程产生，做成线程局部只会让同一次
-/// 会话的输出出现两种语言。读远多于写，用一把小锁足够 —— 每次查表多一次
-/// 无争用的加锁，相对 SwiftUI 一次渲染的开销可以忽略。
+/// State is **process-wide**: logs and prompts come from multiple threads,
+/// and thread-local state would split a single session's output across
+/// languages. Reads far outnumber writes; one small lock is enough -- one
+/// uncontended lock per table lookup is noise next to one SwiftUI render.
 public enum L10n {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var storedPreference: LanguagePreference = .system
     nonisolated(unsafe) private static var storedLanguage: Language = resolve(.system)
 
-    /// 当前生效的语言。
+    /// The language actually in effect.
     public static var language: Language {
         lock.lock()
         defer { lock.unlock() }
         return storedLanguage
     }
 
-    /// 当前的偏好设置（可能是 `.system`）。
+    /// The current preference (possibly `.system`).
     public static var preference: LanguagePreference {
         lock.lock()
         defer { lock.unlock() }
         return storedPreference
     }
 
-    /// 应用一个偏好，并返回解析后实际生效的语言。
+    /// Applies a preference and returns the language that becomes effective.
     ///
-    /// 调用方拿到返回值后**还要**把它推给 libtetherkit（见
-    /// `TetherKitLibrary.setLanguage`），否则库产生的日志会和界面语言不一致。
+    /// After taking the return value, the caller must **also** push it into
+    /// libtetherkit (see `TetherKitLibrary.setLanguage`), or library logs and
+    /// the interface language drift apart.
     @discardableResult
     public static func apply(_ preference: LanguagePreference) -> Language {
         let resolved = resolve(preference)
@@ -79,52 +89,65 @@ public enum L10n {
         return resolved
     }
 
-    /// macOS 当前的首选语言落到我们支持的两种上。
+    /// macOS's current preferred language, mapped onto the languages we ship.
     ///
-    /// 看 `Locale.preferredLanguages` 而不是 `Locale.current`：后者受区域格式
-    /// 设置影响（有人把地区设成中国但界面语言是英文），前者才是「界面该用哪种
-    /// 语言」的那份列表。
+    /// Reads `Locale.preferredLanguages` rather than `Locale.current`: the
+    /// latter follows the region-format setting (someone can have the region
+    /// set to China while the interface language is English); the former is
+    /// the actual list of interface languages.
     public static var systemLanguage: Language {
-        let preferred = Locale.preferredLanguages.first ?? "en"
-        return preferred.lowercased().hasPrefix("zh") ? .chinese : .english
+        localeLanguage(Locale.preferredLanguages.first ?? "en")
+    }
+
+    /// Maps a locale string (`"zh_CN.UTF-8"`, `"en_US"`, `"C"`, ...) to a
+    /// language.
+    ///
+    /// English is the only shipped language, so every input resolves to it.
+    /// This is where a language's prefix rule lands later (prefix match, case
+    /// insensitive) -- kept separate from the preference walk so the rule can
+    /// be unit-tested directly, exactly like LanguageFromLocaleString on the
+    /// C++ side (see the checklist at the top of messages.def).
+    static func localeLanguage(_ locale: String) -> Language {
+        .english
     }
 
     private static func resolve(_ preference: LanguagePreference) -> Language {
         switch preference {
         case .system: return systemLanguage
-        case .chinese: return .chinese
         case .english: return .english
         }
     }
 
-    /// 取一条文案在当前语言下的原文（未做参数替换）。
+    /// The raw (unsubstituted) text of a message in the current language.
     public static func text(_ key: L10nKey) -> String {
-        let (chinese, english) = key.localizations
-        return language == .chinese ? chinese : english
+        text(key, in: language)
     }
 
-    /// 取一条文案在**指定**语言下的原文。测试用它逐语言核对占位符。
+    /// The raw text of a message in the given language. Tests use it to check
+    /// specific tables; this is the one function a new language changes (the
+    /// single string becomes a per-language table again).
     public static func text(_ key: L10nKey, in language: Language) -> String {
-        let (chinese, english) = key.localizations
-        return language == .chinese ? chinese : english
+        key.localizations
     }
 }
 
-/// 取一条文案，并按 `String(format:)` 的规则替换参数。
+/// Looks up a message and substitutes arguments per `String(format:)`.
 ///
-/// 做成全局函数而不是 `L10n.text(...)`：调用点有两百多处、绝大多数在 SwiftUI 的
-/// 视图体里，那里每多一个字都会挤掉真正重要的布局代码。名字短到一个字母也不会
-/// 歧义 —— 见到 `L(` 就知道是「这里有一条要翻译的文案」。
+/// A global function rather than `L10n.text(...)`: the two hundred-plus call
+/// sites are mostly inside SwiftUI view bodies, where every character of
+/// boilerplate crowds out the actual layout code. A one-letter name stays
+/// unambiguous -- `L(` reads as "there is a translatable string here".
 ///
-/// 占位符用 printf 风格（`%@` 字符串、`%d` 整数、`%.1f` 浮点）。需要换语序时
-/// 用带位置的形式：`%1$@`、`%2$d`。
+/// Placeholders are printf-style (`%@` strings, `%ld` integers, `%.1f`
+/// floats). To reorder arguments, use positional forms: `%1$@`, `%2$ld`.
 public func L(_ key: L10nKey, _ arguments: CVarArg...) -> String {
     let pattern = L10n.text(key)
     return arguments.isEmpty ? pattern : String(format: pattern, arguments: arguments)
 }
 
-/// 同上，但指定语言。给 helper 用 —— 它按 App 推过来的语言渲染，而不是按
-/// 自己的进程状态（root 进程没有「用户偏好」这回事）。
+/// Same, but in a specified language. For the helper -- it renders in the
+/// language the App pushed, not its own process state (a root process has no
+/// "user preference" concept).
 public func L(_ key: L10nKey, in language: Language, _ arguments: CVarArg...) -> String {
     let pattern = L10n.text(key, in: language)
     return arguments.isEmpty ? pattern : String(format: pattern, arguments: arguments)

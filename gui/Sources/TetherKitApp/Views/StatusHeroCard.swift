@@ -1,10 +1,13 @@
 import SwiftUI
 import TetherKitIPC
 
-/// 主状态卡：整个界面的视觉与操作重心。
+/// The main status card: the visual and operational center of the whole
+/// interface.
 ///
-/// 一屏之内回答四个问题：现在通不通、通到哪张网卡、什么 IP、要不要断开。
-/// 其余细节都往下面的卡片里放 —— 用户九成的时间只看这一块。
+/// It answers four questions on one screen: is it connected, through
+/// which interface, with which IP, and do I want to disconnect. All the
+/// remaining detail goes into the cards below -- nine times out of ten
+/// the user only looks at this one.
 struct StatusHeroCard: View {
     var model: AppModel
 
@@ -137,16 +140,21 @@ struct StatusHeroCard: View {
         .buttonStyle(.borderedProminent)
         .controlSize(.large)
         .tint(isRunning ? .red : .accentColor)
-        // 没有设备时不让点「连接」—— 点了必然失败，不如直接说明白。
+        // Do not allow clicking "Connect" when there is no device -- the
+        // click is guaranteed to fail, so it is better to say so
+        // plainly.
         .disabled(model.isBusy || isTransitional || (!isRunning && model.devices.isEmpty))
         .help(model.devices.isEmpty && !isRunning ? L(.connectDisabledHint) : "")
     }
 }
 
-/// 状态圆环。
+/// The status ring.
 ///
-/// 运行中时外圈缓慢旋转、内圈呼吸 —— 这是界面上唯一的动效，用来表达「它在活着
-/// 干活」。其余状态一律静止，避免把注意力浪费在没有信息量的动画上。
+/// While running, the outer ring turns slowly and the inner ring
+/// breathes -- this is the only animation in the interface, and it
+/// expresses "it is alive and working". Every other state stays
+/// motionless, to avoid spending attention on animation that carries no
+/// information.
 private struct StatusRing: View {
     let status: SessionStatus
     let accent: Color
@@ -168,7 +176,8 @@ private struct StatusRing: View {
                 .stroke(accent.opacity(0.25), lineWidth: 3)
                 .frame(width: 64, height: 64)
 
-            // 过渡态用一段旋转的弧表示「正在进行中，进度不可知」。
+            // The transitional state uses a rotating arc to say "in
+            // progress, progress unknowable".
             Circle()
                 .trim(from: 0, to: isWorking ? 0.25 : (isActive ? 1.0 : 0.0))
                 .stroke(accent, style: StrokeStyle(lineWidth: 3, lineCap: .round))

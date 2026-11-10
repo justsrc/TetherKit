@@ -1,8 +1,9 @@
-// RNDIS 编解码的微基准。
+// Micro-benchmarks for RNDIS encode/decode.
 //
-// 这两条路径每帧都要走一次，是除系统调用之外唯一按帧计费的 CPU 成本：
-//   TX：PacketMessageWriter 把以太帧包成 RNDIS_PACKET_MSG（含多包聚合与对齐）
-//   RX：PacketMessageReader 从一个 bulk IN 传输里逐帧拆出来
+// Both paths run once per frame and are the only per-frame CPU costs besides system calls:
+//   TX: PacketMessageWriter wraps Ethernet frames into RNDIS_PACKET_MSG (including
+//       multi-packet aggregation and alignment)
+//   RX: PacketMessageReader extracts frames one by one from a bulk IN transfer
 #include "bench_rndis.h"
 
 #include <cstddef>
@@ -29,12 +30,13 @@ std::vector<std::byte> MakeFrame(std::uint32_t length) {
   return frame;
 }
 
-/// TX 编码：把 `frames_per_transfer` 帧聚合进一个传输。
+/// TX encode: aggregates `frames_per_transfer` frames into one transfer.
 ///
-/// 度量单位是**帧**而不是传输，这样不同聚合度的数字可以直接横向比较。
+/// The measurement unit is frames rather than transfers so numbers at different aggregation
+/// levels can be compared directly.
 std::uint64_t BenchEncode(std::uint64_t frame_iterations, std::uint32_t frame_bytes,
                           std::uint32_t frames_per_transfer, std::uint32_t alignment_bytes) {
-  // 传输缓冲要装得下 frames_per_transfer 个满帧。
+  // The transfer buffer must fit frames_per_transfer full frames.
   const std::size_t capacity =
       static_cast<std::size_t>(frames_per_transfer) *
           (rndis::kPacketMsgHeaderBytes + frame_bytes + alignment_bytes) +
@@ -59,20 +61,21 @@ std::uint64_t BenchEncode(std::uint64_t frame_iterations, std::uint32_t frame_by
     }
     const std::uint32_t produced = writer.Finish();
     DoNotOptimize(produced);
-    // ★ 必须同时强制观测**目标缓冲的内容**。只 DoNotOptimize(Finish() 的返回值)
-    // 时，编译器发现这块缓冲此后再也没人读，就会把 TryAppend 里那次 memcpy 整个
-    // 消除掉 —— 于是测出来 14.5 ns/帧，比裸 memcpy 1514 字节（25 ns）还快，
-    // 一眼就知道不对。加上 ClobberMemory 才是真实成本。
+    // The contents of the destination buffer must also be forced into observation. If only
+    // DoNotOptimize(Finish()'s return value) is used, the compiler sees that this buffer is
+    // never read again and eliminates the memcpy inside TryAppend entirely -- measuring
+    // 14.5 ns/frame, faster than a bare memcpy of 1514 bytes (25 ns), which is obviously
+    // wrong. Adding ClobberMemory gives the real cost.
     DoNotOptimize(transfer.data()[0]);
     ClobberMemory();
   }
   return encoded;
 }
 
-/// RX 解码：从一个已聚合好的传输里逐帧拆出来。
+/// RX decode: extracts frames one by one from an already-aggregated transfer.
 std::uint64_t BenchDecode(std::uint64_t frame_iterations, std::uint32_t frame_bytes,
                           std::uint32_t frames_per_transfer) {
-  // 先用编码器造一个真实的多包传输，再反复解它。
+  // First build a real multi-packet transfer with the encoder, then decode it repeatedly.
   const std::size_t capacity =
       static_cast<std::size_t>(frames_per_transfer) *
           (rndis::kPacketMsgHeaderBytes + frame_bytes + 8) +
@@ -114,7 +117,8 @@ std::uint64_t BenchDecode(std::uint64_t frame_iterations, std::uint32_t frame_by
   return decoded;
 }
 
-/// 编码 + 解码往返，模拟「主机发出去、设备原样发回来」的完整 CPU 成本。
+/// Encode + decode round trip, simulating the full CPU cost of "host sends it out, device
+/// sends it back unchanged".
 std::uint64_t BenchRoundTrip(std::uint64_t frame_iterations, std::uint32_t frame_bytes,
                              std::uint32_t frames_per_transfer) {
   const std::size_t capacity =
@@ -146,7 +150,7 @@ std::uint64_t BenchRoundTrip(std::uint64_t frame_iterations, std::uint32_t frame
     if (packed == 0) {
       break;
     }
-    ClobberMemory();  // 见 BenchEncode 里的说明：防止 memcpy 被跨迭代消除
+    ClobberMemory();  // see the note in BenchEncode: prevent memcpy elimination across iterations
 
     rndis::PacketMessageReader reader(std::span<const std::byte>{transfer.data(), transfer_bytes},
                                      rndis::kDefaultMtu + rndis::kEthernetHeaderBytes);
@@ -164,42 +168,44 @@ std::uint64_t BenchRoundTrip(std::uint64_t frame_iterations, std::uint32_t frame
 void RegisterRndisBenchmarks(Runner& runner) {
   constexpr std::uint64_t kFrameOps = 1'000'000;
 
-  // 聚合度对每帧成本的影响 —— 这是 --max-transfer-kb 这个调优旋钮的依据。
+  // Aggregation level affects per-frame cost -- this is the basis for the --max-transfer-kb
+  // tuning knob.
   for (const std::uint32_t per_transfer : {1U, 4U, 10U}) {
-    runner.Add("RNDIS 编码",
-               std::format("1514 字节 × 每传输 {} 帧", per_transfer),
+    runner.Add("RNDIS encode", std::format("1514 bytes x {} frames per transfer", per_transfer),
                Config{.ops_per_round = kFrameOps, .bytes_per_op = kFullFrameBytes},
                [per_transfer](std::uint64_t n) {
                  return BenchEncode(n, kFullFrameBytes, per_transfer, 1);
                });
   }
-  runner.Add("RNDIS 编码", "64 字节 × 每传输 10 帧",
+  runner.Add("RNDIS encode", "64 bytes x 10 frames per transfer",
              Config{.ops_per_round = kFrameOps, .bytes_per_op = kSmallFrameBytes},
              [](std::uint64_t n) { return BenchEncode(n, kSmallFrameBytes, 10, 1); });
-  // 对齐要求（PacketAlignmentFactor）会引入额外的 memset 与 MessageLength 回填。
-  runner.Add("RNDIS 编码", "1514 字节 × 每传输 10 帧 × 对齐 128",
+  // Alignment requirements (PacketAlignmentFactor) introduce extra memset and MessageLength
+  // backfilling.
+  runner.Add("RNDIS encode", "1514 bytes x 10 frames per transfer x 128-byte alignment",
              Config{.ops_per_round = kFrameOps, .bytes_per_op = kFullFrameBytes},
              [](std::uint64_t n) { return BenchEncode(n, kFullFrameBytes, 10, 128); });
 
-  // 解码刻意**不填 bytes_per_op**（于是吞吐列显示「—」）：解码器是**零拷贝**的，
-  // 它只解析头部并返回指向传输缓冲内部的视图，一个字节都不搬。给它算「Gbps」
-  // 会得到上万这种荒谬数字，且与编码的吞吐不可比 —— 编码那边是真的在 memcpy。
+  // Decoding deliberately does not set bytes_per_op (so the throughput column shows "-"):
+  // the decoder is zero-copy, it only parses headers and returns views pointing into the
+  // transfer buffer without moving any bytes. Computing Gbps for it would yield absurd
+  // numbers in the tens of thousands and would not be comparable to encoding, where
+  // memcpy actually happens.
   for (const std::uint32_t per_transfer : {1U, 4U, 10U}) {
-    runner.Add("RNDIS 解码（零拷贝）",
-               std::format("1514 字节 × 每传输 {} 帧", per_transfer),
-               Config{.ops_per_round = kFrameOps},
-               [per_transfer](std::uint64_t n) {
+    runner.Add("RNDIS decode (zero-copy)",
+               std::format("1514 bytes x {} frames per transfer", per_transfer),
+               Config{.ops_per_round = kFrameOps}, [per_transfer](std::uint64_t n) {
                  return BenchDecode(n, kFullFrameBytes, per_transfer);
                });
   }
-  runner.Add("RNDIS 解码（零拷贝）", "64 字节 × 每传输 10 帧",
+  runner.Add("RNDIS decode (zero-copy)", "64 bytes x 10 frames per transfer",
              Config{.ops_per_round = kFrameOps},
              [](std::uint64_t n) { return BenchDecode(n, kSmallFrameBytes, 10); });
 
-  runner.Add("RNDIS 编解码往返", "1514 字节 × 每传输 10 帧",
+  runner.Add("RNDIS encode/decode round trip", "1514 bytes x 10 frames per transfer",
              Config{.ops_per_round = kFrameOps, .bytes_per_op = kFullFrameBytes},
              [](std::uint64_t n) { return BenchRoundTrip(n, kFullFrameBytes, 10); });
-  runner.Add("RNDIS 编解码往返", "64 字节 × 每传输 10 帧",
+  runner.Add("RNDIS encode/decode round trip", "64 bytes x 10 frames per transfer",
              Config{.ops_per_round = kFrameOps, .bytes_per_op = kSmallFrameBytes},
              [](std::uint64_t n) { return BenchRoundTrip(n, kSmallFrameBytes, 10); });
 }

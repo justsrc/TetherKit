@@ -1,20 +1,23 @@
-// 测试用：在一个作用域内把界面语言钉死，退出时还原。
+// Test helper: pin the interface language within a scope, restore on exit.
 //
-// ★ 为什么需要它 ★
+// Why it exists:
 //
-//   凡是断言「错误消息里提到了 XXX」的用例，都依赖当前语言。而语言是**进程级
-//   状态**，默认值（英文）还可能被别的用例改掉 —— 不钉死的话，这类用例的成败
-//   就取决于 doctest 的执行顺序，是最难查的那种间歇性失败。
+//   Any test case along the lines of "the error message mentions XYZ"
+//   depends on the current language. Language is process-wide state and its
+//   default can be overwritten by other test cases, so without pinning, such
+//   assertions depend on doctest's execution order -- the nastiest kind of
+//   flaky failure to chase.
 //
-//   所以：只要断言里出现了面向用户的字面文字，就在用例开头放一个
-//   `const ScopedLanguage guard{Language::kChinese};`。
+// So: any test case that asserts user-facing literal text opens with
+// `const ScopedLanguage guard{Language::kEnglish};`.
 #pragma once
 
 #include "tetherkit/common/i18n.h"
 
 namespace tetherkit::testing {
 
-/// 作用域内切换语言，析构时还原成进入前的值。
+/// Switches the language within the scope; restores the entry value in the
+/// destructor.
 class ScopedLanguage {
  public:
   explicit ScopedLanguage(Language language) noexcept : previous_(GetLanguage()) {

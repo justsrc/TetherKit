@@ -1,9 +1,11 @@
-// 日志捕获：把库内部的日志行缓冲起来，供 GUI 轮询取走。
+// Log capture: buffers the library's internal log lines for the GUI to poll.
 //
-// 为什么不用回调直通 Swift：日志会从 libusb 事件线程、控制线程、两条数据路径
-// 线程上来，而且是在日志互斥锁**内部**产生的。让 Swift 闭包在那个上下文里跑，
-// 既要跨线程 marshal，又有「闭包里不小心又打了一条日志 → 自等死锁」的雷。
-// 缓冲 + 轮询把这两个问题一次性消掉。
+// Why not a callback straight into Swift: the logs arrive from the libusb
+// event thread, the control thread and the two data path threads, and they
+// are produced **inside** the log mutex. Running a Swift closure in that
+// context means both marshalling across threads and the landmine of "the
+// closure logs one more line -> self-deadlock". Buffering plus polling kills
+// both problems at once.
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -19,21 +21,24 @@ namespace {
 using tetherkit::capi::CopyText;
 using tetherkit::capi::WallNanos;
 
-/// 环形缓冲容量。
+/// Capacity of the ring buffer.
 ///
-/// 取 256 的依据：GUI 每 500 ms 拉一次，而库在稳态下每 5 秒才打一行统计。
-/// 256 条足以扛住启动序列那一波密集日志（约 30 行）与任何突发告警，
-/// 同时把常驻内存控制在 256 × 552 B ≈ 138 KiB。
+/// Why 256: the GUI pulls every 500 ms, while the library logs one statistics
+/// line every 5 seconds in steady state. 256 entries are enough to absorb the
+/// dense burst of the startup sequence (about 30 lines) and any sudden flood
+/// of warnings, while keeping the resident memory at 256 x 552 B ~ 138 KiB.
 constexpr std::size_t kLogRingCapacity = 256;
 
-/// 定长环形缓冲。写满时丢**最旧**的 —— 宿主卡住时，最新的现场比开头有用。
+/// Fixed-size ring buffer. When it fills, the **oldest** entry is dropped --
+/// when the host is stuck, the newest scene is more useful than the beginning.
 class LogRing {
  public:
   void Push(tk_log_level_t level, std::string_view thread_name,
             std::string_view message) noexcept {
     const std::lock_guard<std::mutex> guard(mutex_);
     if (count_ == kLogRingCapacity) {
-      // 覆盖最旧的一条：读指针前移，逻辑上等于把它丢掉。
+      // Overwrite the oldest entry: advance the read pointer, which is
+      // logically the same as dropping it.
       head_ = (head_ + 1) % kLogRingCapacity;
       --count_;
       ++dropped_;
@@ -75,23 +80,25 @@ class LogRing {
  private:
   std::mutex mutex_;
   std::array<tk_log_record_t, kLogRingCapacity> records_{};
-  /// 下一条待读记录的下标。
+  /// Index of the next record to read.
   std::size_t head_ = 0;
   std::size_t count_ = 0;
   std::uint64_t dropped_ = 0;
 };
 
-/// 进程级单例。用函数内静态量而非全局对象，避免静态初始化顺序问题 ——
-/// 日志汇可能在任何翻译单元的静态构造期间就被触发。
+/// A process-wide singleton. A function-local static rather than a global
+/// object, to avoid static initialization order problems -- the log sink may
+/// be triggered during the static construction of any translation unit.
 LogRing& Ring() noexcept {
   static LogRing ring;
   return ring;
 }
 
-/// 安装给 tetherkit::SetLogSink 的回调。
+/// Installs the callback for tetherkit::SetLogSink.
 ///
-/// 它运行在日志互斥锁内部，因此实现里只允许「拷贝 + 加一把自己的锁」，
-/// 绝不能再打日志（会自等死锁）。
+/// It runs inside the log mutex, so the implementation may only "copy plus
+/// take one lock of its own", and must never log again (that would deadlock
+/// on itself).
 void SinkTrampoline(tetherkit::LogLevel level, std::string_view thread_name,
                     std::string_view message, void* /*user*/) noexcept {
   Ring().Push(static_cast<tk_log_level_t>(level), thread_name, message);
@@ -112,13 +119,17 @@ void tk_enable_log_capture(bool enabled) {
     return;
   }
 
-  // 顺序很重要：**先**摘掉日志汇，**再**清空缓冲。
+  // The order matters: **first** remove the log sink, **then** clear the
+  // buffer.
   //
-  // 反过来的话，摘除之前正在打日志的线程会把新记录塞进刚清空的缓冲里，
-  // 关闭捕获后反而留着几条残留。
+  // The other way round, a thread that was logging before the removal pushes
+  // a new record into the just-cleared buffer, and a few leftovers survive
+  // the disabling of the capture.
   //
-  // 另外，这里刻意不持有 LogRing 的锁去调 SetLogSink —— SetLogSink 要拿日志
-  // 互斥锁，而日志汇路径是「日志锁 → LogRing 锁」，反向持锁会构成锁序倒置。
+  // Also, this deliberately does not hold the LogRing lock while calling
+  // SetLogSink -- SetLogSink takes the log mutex, and the log sink path is
+  // "log lock -> LogRing lock", so taking them in the reverse order would
+  // invert the lock order.
   tetherkit::SetLogSink(nullptr, nullptr);
   Ring().Clear();
 }

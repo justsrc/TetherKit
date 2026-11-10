@@ -1,560 +1,794 @@
-# GUI 实现备忘
+# GUI implementation notes
 
-本文记录 TetherKit 图形界面**已经实现了什么、为什么这么实现、哪些地方碰不得**。
+This document records what the TetherKit graphical interface **has
+implemented, why it is implemented that way, and which parts must not be
+touched**.
 
-配套阅读：[GUI-SPIKE.md](GUI-SPIKE.md) 记录的是动手之前的可行性验证（尤其是被
-排除的三条路线）；本文记录的是落地之后的结构与约束。**改 GUI 相关代码前先读
-这两篇**，能省掉重新踩一遍坑的时间。
-
----
-
-## 1. 进程与信任模型
-
-```
-┌─────────────────────────────┐         ┌──────────────────────────────┐
-│  TetherKit.app  (uid 501)   │         │  tetherkit-helper  (uid 0)   │
-│                             │   XPC   │                              │
-│  · SwiftUI 界面             │ ──────► │  · 持有 RNDIS 会话           │
-│  · 弹系统授权框取凭据       │         │  · 建/销毁 feth、开 BPF      │
-│  · 定时拉状态刷界面         │ ◄────── │  · 配 IP（ipconfig / route） │
-│  · 不碰 USB、不碰网卡       │         │  · 复核每次调用的凭据        │
-└─────────────────────────────┘         └──────────────────────────────┘
-                                              ▲
-                                              │ 按需拉起（MachServices）
-                                        ┌─────┴──────┐
-                                        │  launchd   │
-                                        └────────────┘
-```
-
-**helper 的 root 来自 launchd，跟用户按没按指纹毫无关系。** 它一启动就是 root，
-任何能连上 Mach 服务的进程都能发请求。所以「谁在调用」必须由 helper 自己回答 ——
-每个特权方法都要求附带一份 App 刚拿到的 `AuthorizationRef` 外部形式，并当场复核。
-
-安全性建立在**凭据复核**而不是**代码签名校验**上。后者（SMJobBless 的做法）依赖
-证书的 designated requirement，而源码分发下每台机器编出的 cdhash 都不同，写死的
-DR 必然对不上。凭据复核对开源工具是更合适的模型：谁编译的都一样安全。
-
-> **一句必须记住的话：授权 ≠ root。**
-> `AuthorizationCopyRights` 成功不改变进程的任何东西，uid / euid 一个都没动。
-> 它只产出一张「用户在某时刻确认过」的凭据。顺序不能反：不是「先弹框拿到
-> root」，而是「先有常驻的 root helper，弹框拿到凭据后交给它复核」。
+Companion reading: [GUI-SPIKE.md](GUI-SPIKE.md) records the feasibility spike
+from before the work started (in particular the three routes that were ruled
+out); this document records the structure and the constraints after it landed.
+**Read both of them before changing any GUI code** -- it saves re-learning the
+pitfalls the hard way.
 
 ---
 
-## 2. 目录结构
+## 1. Process and trust model
 
 ```
-include/tetherkit/capi/tetherkit_c.h   全项目唯一的 extern "C" 边界
-src/capi/                              C ABI 实现
-├── capi_support.{h,cc}                定长缓冲拷贝、错误翻译、网卡名校验
-├── core_foundation_support.{h,cc}     CF / SCDynamicStore 的最小 RAII 封装
-├── environment.cc                     版本、环境预检、设备枚举（免 root）
-├── log_ring.cc                        日志环形缓冲
-├── net_config.cc                      DHCP / 静态 IP / 状态回读
-├── orphan_cleanup.cc                  feth 落盘登记与孤儿清理
-├── process_runner.{h,cc}              posix_spawn 执行外部工具（不过 shell）
-└── session.cc                         会话生命周期、状态快照、事件轮询
++---------------------------------------------------+         +-------------------------------------------+
+|  TetherKit.app  (uid 501)                         |         |  tetherkit-helper  (uid 0)                |
+|                                                   |   XPC   |                                           |
+|  - SwiftUI interface                              | ------> |  - holds the RNDIS session                |
+|  - pops the system auth dialog for a credential   |         |  - creates/destroys feth, opens BPF       |
+|  - polls the state on a timer to refresh the UI   | <------ |  - configures the IP (ipconfig / route)   |
+|  - never touches USB, never touches the interface |         |  - re-checks the credential on every call |
++---------------------------------------------------+         +-------------------------------------------+
+                                                                    ^
+                                                                    | started on demand (MachServices)
+                                                              +-----+------+
+                                                              |  launchd   |
+                                                              +------------+
+```
+
+**The helper's root comes from launchd and has nothing to do with whether the
+user touched their fingerprint.** It is root from the moment it starts, and any
+process that can reach the Mach service can send requests. So "who is calling"
+has to be answered by the helper itself -- every privileged method requires the
+external form of the `AuthorizationRef` the App just obtained, and the helper
+re-checks it on the spot.
+
+Security rests on **credential re-checking**, not on **code-signature
+verification**. The latter (the SMJobBless approach) depends on the
+certificate's designated requirement, and under source distribution the cdhash
+produced on each machine differs, so a hard-coded DR can never match. Credential
+re-checking is the better model for an open-source tool: whoever built it, it
+is equally safe.
+
+> **One sentence to remember: authorization != root.**
+> A successful `AuthorizationCopyRights` changes nothing about the process; not
+> one of uid / euid moves. It only produces a credential that says "the user
+> confirmed at some moment". The order cannot be reversed: it is not "pop the
+> dialog and get root", but "have a resident root helper first, pop the dialog,
+> then hand the credential to it for re-checking".
+
+---
+
+## 2. Directory layout
+
+```
+include/tetherkit/capi/tetherkit_c.h   the only extern "C" boundary in the project
+src/capi/                              C ABI implementation
+|-- capi_support.{h,cc}                fixed-size buffer copies, error translation, interface name checks
+|-- core_foundation_support.{h,cc}     minimal RAII wrappers for CF / SCDynamicStore
+|-- environment.cc                     version, environment preflight, device enumeration (no root needed)
+|-- log_ring.cc                        log ring buffer
+|-- net_config.cc                      DHCP / static IP / status read-back
+|-- orphan_cleanup.cc                  on-disk feth registry and orphan cleanup
+|-- process_runner.{h,cc}              runs external tools through posix_spawn (never through a shell)
+`-- session.cc                         session lifecycle, status snapshots, event polling
 
 gui/
-├── Package.swift                      SwiftPM 工程
-├── Sources/
-│   ├── CTetherKit/                    C ABI 的模块映射（头是符号链接）
-│   ├── TetherKitIPC/                  App 与 helper 共享：协议、模型、授权、文案表
-│   ├── TetherKitCore/                 C ABI 的 Swift 封装
-│   ├── TetherKitHelper/               特权 helper
-│   ├── TetherKitUIModel/              主窗口页面模型（SidebarPage：固定取色与
-│   │                                  会话状态取色、持久化选择解析）—— 独立
-│   │                                  library 是为了可单测（可执行 target 不能
-│   │                                  被 @testable import）
-│   └── TetherKitApp/                  SwiftUI 界面（含主窗口管理与各页面视图）
-├── Tests/TetherKitIPCTests/           授权凭据生命周期 + 文案表占位符一致性
-├── Tests/TetherKitUIModelTests/       页面 tint 语义 + 持久化选择解析
-├── Resources/                         Info.plist、LaunchDaemon plist
-└── Scripts/                           构建 / 安装 / 卸载脚本
+|-- Package.swift                      SwiftPM project
+|-- Sources/
+|   |-- CTetherKit/                    module map for the C ABI (the headers are symlinks)
+|   |-- TetherKitIPC/                  shared by the App and the helper: protocol, models, authorization, string table
+|   |-- TetherKitCore/                 Swift wrapper of the C ABI
+|   |-- TetherKitHelper/               privileged helper
+|   |-- TetherKitUIModel/              main window page model (SidebarPage: fixed colors and
+|   |                                  session state colors, persisted selection parsing) -- a
+|   |                                  separate library so that it can be unit tested (an executable
+|   |                                  target cannot be @testable imported)
+|   `-- TetherKitApp/                  SwiftUI interface (main window management and the page views)
+|-- Tests/TetherKitIPCTests/           authorization credential lifecycle + string table placeholder consistency
+|-- Tests/TetherKitUIModelTests/       page tint semantics + persisted selection parsing
+|-- Resources/                         Info.plist, LaunchDaemon plist
+`-- Scripts/                           build / install / uninstall scripts
 ```
 
 ---
 
-## 3. 数据流
+## 3. Data flow
 
-| 方向 | 机制 | 周期 |
+| Direction | Mechanism | Period |
 |---|---|---|
-| 库 → helper：状态 | `tk_session_status_get` 拷贝快照 | 按需 |
-| 库 → helper：事件 | `tk_session_poll_events` 取环形队列 | 随状态查询搭车 |
-| 库 → helper：日志 | `tk_drain_logs` 取环形队列 | 每次 `drainFeed` |
-| helper → App | XPC，JSON 编码的 Codable | 500 ms |
+| library -> helper: status | `tk_session_status_get` copies a snapshot | on demand |
+| library -> helper: events | `tk_session_poll_events` takes from the ring queue | rides along with the status query |
+| library -> helper: logs | `tk_drain_logs` takes from the ring queue | every `drainFeed` |
+| helper -> App | XPC, JSON-encoded Codable | 500 ms |
 
-**全链路没有一个回调穿过语言边界。** 这是刻意的：底层的回调会从 libusb 事件
-线程与控制线程上来，跨语言要 marshal；更要命的是重入 —— 在回调里调停机会自等
-死锁（`Stop()` 要 join 控制线程）。一律改成「库内排队、宿主轮询」。
+**Not a single callback crosses the language boundary anywhere in the chain.**
+This is deliberate: the low-level callbacks arrive from the libusb event
+thread and from the control thread, so crossing languages means marshalling;
+worse is re-entrancy -- calling stop from inside a callback self-waits into a
+deadlock (`Stop()` joins the control thread). Everything is changed to "queue
+inside the library, the host polls".
 
 ---
 
-## 4. 关键实现约束（改代码时别破坏这些）
+## 4. Key implementation constraints (do not break these when changing the code)
 
 ### 4.1 C ABI
 
-- **不跨边界传所有权。** 输出一律写进调用方提供的定长结构体。唯一例外是
-  `tk_session_t*`，创建 / 销毁配对明确。
-- **定长缓冲的截断必须落在 UTF-8 字符边界上。** 错误消息全是中文，按字节硬切
-  会让 Swift 侧 `String(cString:)` 整串变成替换字符。两个方向都要管：C 侧是
-  `capi_support.h` 的 `CopyText`，Swift 侧是 `CInterop.swift`。
-- **C 枚举与 C++ 枚举靠顺序一致直接强转**，`session.cc` 里有一组
-  `static_assert` 把它焊死。中间插入一个枚举值会静默错位，且毫无报错。
-- **`tk_session` 的成员声明顺序有约束**：`events` 必须在 `runtime` 之前，
-  销毁时 `runtime` 才会先 join 控制线程。反过来就是 use-after-free。
+- **No ownership crosses the boundary.** Output always goes into the
+  fixed-length struct the caller provides. The only exception is `tk_session_t*`,
+  whose create / destroy pairing is explicit.
+- **Truncation of a fixed-length buffer must land on a UTF-8 character
+  boundary.** The error messages can contain non-ASCII characters, and cutting
+  them hard at a byte boundary turns the whole `String(cString:)` on the Swift
+  side into replacement characters. Both directions need care: on the C side it
+  is `CopyText` in `capi_support.h`, on the Swift side it is `CInterop.swift`.
+- **The C enums and the C++ enums are cast directly on the strength of a
+  matching order**, and a set of `static_assert`s in `session.cc` welds that
+  down. Inserting an enum value in the middle shifts them silently, with no
+  error at all.
+- **The member declaration order of `tk_session` is constrained**: `events` must
+  come before `runtime`, so that on destruction `runtime` joins the control
+  thread first. The other way round is a use-after-free.
 
-### 4.2 Runtime 线程模型
+### 4.2 Runtime threading model
 
-`Runtime` 自己拥有一条控制线程，**启动序列、保活循环、停机拆除全部在它上面跑**。
-这不只是为了让 `Start()` 非阻塞，更是把 `StateMachine` 的「所有方法同线程调用」
-从口头约定变成结构性保证 —— 优雅停机要发同步控制消息，而 libusb 的同步 API 在
-事件线程上会返回 `LIBUSB_ERROR_BUSY`。
+`Runtime` owns its own control thread; **the start sequence, the keep-alive
+loop and the shutdown teardown all run on it**. This is not just about making
+`Start()` non-blocking; it turns the `StateMachine`'s "every method is called from
+the same thread" from a verbal convention into a structural guarantee -- a
+graceful shutdown has to send a synchronous control message, and libusb's
+synchronous API returns `LIBUSB_ERROR_BUSY` when it is called from the event
+thread.
 
-宿主线程**只**通过 `Snapshot()` 读状态，绝不碰那些组件指针 —— 否则 `Stop()` 里的
-`reset()` 与宿主的读会构成数据竞争，表现为随机崩溃。
+The host thread reads the state **only** through `Snapshot()` and never touches
+those component pointers -- otherwise the `reset()` inside `Stop()` and the
+host's reads form a data race, which shows up as random crashes.
 
-`RequestStop()` 保持只写一个原子（异步信号安全），代价是最多晚一个循环周期
-（≤250 ms）被看到；`Stop()` 额外用条件变量唤醒控制线程，所以界面上按「断开」
-是立刻响应的。
+`RequestStop()` stays a single atomic write (async-signal-safe), at the cost of
+being seen up to one loop period late (<=250 ms); `Stop()` additionally wakes
+the control thread with a condition variable, so pressing "Disconnect" in the
+interface responds immediately.
 
-### 4.3 网卡配置
+### 4.3 Interface configuration
 
-- **地址一律经 `ipconfig` 下发，不要改回裸 `SIOCAIFADDR`。** 裸 ioctl 配出来的
-  地址内核认、configd 不认 —— 不会有服务、不会有 scoped DNS、不会有默认路由。
-  这一条已在 GUI-SPIKE 第 3.2 / 6.3 节实测确认。
-- **外部工具用 `posix_spawn` 传 argv 数组，不过 shell。** 参数虽然都校验过，
-  但只要经过 `/bin/sh`，防线就依赖「校验有没有漏」这一条。
-- **先读空管道再 `waitpid`。** 反过来是经典的 pipe 死锁：子进程写满 64 KiB
-  缓冲后阻塞在 `write`，我们阻塞在 `waitpid`。`process_runner.cc` 有对应测试。
-- **网卡名只接受 `feth<数字>`。** 这不是洁癖 —— 挡的是「误把 en0 传进来，
-  把用户的 Wi-Fi 配置冲掉」这类事故。
-- **`SCDynamicStore` 句柄必须是进程级长命的。** 动态存储里的值由设置它的会话
-  持有，会话一释放值就没了。用临时 store 会出现「写入返回成功、读回来是空」
-  这种极难查的现象。
+- **Always push the addresses through `ipconfig`; do not go back to a bare
+  `SIOCAIFADDR`.** An address configured with the bare ioctl is accepted by
+  the kernel but not by configd -- no service, no scoped DNS, no default route.
+  This was measured and confirmed in sections 3.2 / 6.3 of GUI-SPIKE.
+- **Run the external tools through `posix_spawn` with an argv array, never
+  through a shell.** The arguments are all validated, but as soon as they pass
+  through `/bin/sh` the defense rests on a single question: "was the validation
+  complete?"
+- **Drain the pipe before `waitpid`.** The other way round is the classic pipe
+  deadlock: the child fills the 64 KiB buffer and blocks in `write` while we
+  block in `waitpid`. `process_runner.cc` has a matching test.
+- **Interface names are only accepted in the form `feth<number>`.** This is not
+  fastidiousness -- it blocks accidents of the "someone passes en0 and wipes
+  out the user's Wi-Fi configuration" kind.
+- **The `SCDynamicStore` handle must be process-lifetime.** The values in the
+  dynamic store are held by the session that set them; once the session is
+  released the values are gone. A temporary store produces the extremely
+  hard-to-diagnose phenomenon "the write returns success, the read comes back
+  empty".
 
-### 4.4 授权复核（`TetherKitIPC/Authorization.swift`）
+### 4.4 Authorization re-check (`TetherKitIPC/Authorization.swift`)
 
-三条一旦写错就是漏洞的细节，都写在那个文件的注释里：
+Three details that turn into a vulnerability the moment they are written wrong;
+all of them are documented in the comments of that file:
 
-1. helper 侧复核时**绝不能带 `.interactionAllowed`** —— daemon 没有 UI 会话，
-   真让它能弹框，等于任何进程都能随意触发系统授权框骚扰用户。
-2. **`AuthorizationFree` 不能带 `.destroyRights`** —— 凭据归 App 所有，helper
-   只是借来核对，带上会把 App 那边的授权一起作废。
-3. **探测类方法不要求授权** —— 否则「helper 没装」和「授权没过」两种失败会混在
-   一起，没法给用户准确提示。
+1. On the helper side, the re-check must **never** carry
+   `.interactionAllowed` -- a daemon has no UI session, and letting it pop a
+   dialog would let any process trigger the system authorization dialog at
+   will to harass the user.
+2. **`AuthorizationFree` must not carry `.destroyRights`** -- the credential
+   belongs to the App, the helper only borrows it to check, and carrying it
+   would void the App's authorization as well.
+3. **The probe methods do not require authorization** -- otherwise the two
+   failures "the helper is not installed" and "the authorization did not pass"
+   get mixed together and the user cannot be given an accurate message.
 
-取凭据（App 侧，**要**带 `.interactionAllowed`）与复核（helper 侧，**不**带）
-刻意写在同一个文件里：它们的差别只有一个标志位，改一边时另一边就在眼前。
+Obtaining the credential (App side, **with** `.interactionAllowed`) and
+re-checking it (helper side, **without**) are deliberately kept in the same
+file: they differ by a single flag, so when one side is changed the other is
+right in front of you.
 
-第四条，**实际踩过一次**：
+A fourth one, **actually hit in practice**:
 
-4. **`AuthorizationMakeExternalForm` 产出的 32 字节不是凭据本身，只是指向
-   securityd 里那份授权的一把钥匙。** App 侧一旦在 XPC 往返完成**之前**释放
-   `AuthorizationRef`（尤其是带 `.destroyRights`），helper 还原时就会失败，
-   报 `errAuthorizationDenied (-60005)`。
+4. **The 32 bytes produced by `AuthorizationMakeExternalForm` are not the
+   credential itself; they are only a key pointing at the authorization inside
+   securityd.** If the App side releases the `AuthorizationRef` **before** the
+   XPC round trip **completes** (especially with `.destroyRights`), the helper
+   fails to restore it and reports `errAuthorizationDenied (-60005)`.
 
-   而这个错误码从代码上完全看不出「是被自己提前销毁的」—— 它看起来像是用户
-   授权被拒。所以凭据由 `AuthorizationToken` 持有、`AuthorizationBroker
-   .withAuthorization` 用 `withExtendedLifetime` 保证它活到调用结束。
-   **不要裸接住 `requestAuthorization()` 的返回值再用** —— ARC 完全可以在最后
-   一次读 `externalForm` 之后就把令牌释放掉。
+   And from the code alone this error code gives no hint of "it was destroyed
+   early by ourselves" -- it looks like the user denied the authorization. So
+   the credential is held by `AuthorizationToken`, and
+   `AuthorizationBroker.withAuthorization` uses `withExtendedLifetime` to
+   guarantee that it lives until the call ends. **Do not bare-catch the return
+   value of `requestAuthorization()` and use it afterwards** -- ARC is free to
+   release the token right after the last read of `externalForm`.
 
-   `gui/Tests/TetherKitIPCTests/AuthorizationTests.swift` 把这个行为钉住了，
-   两条用例都不弹授权框，可以进 CI。
+   `gui/Tests/TetherKitIPCTests/AuthorizationTests.swift` nails this behaviour
+   down; neither of the two cases pops an authorization dialog, so it can go
+   into CI.
 
-**令牌必须缓存复用，否则每个操作都要用户重新认证一次。**
-`system.privilege.admin` 的实测参数（`security authorizationdb read`）：
+**The token must be cached and reused, otherwise every operation makes the user
+authenticate again.** The measured parameters of `system.privilege.admin`
+(`security authorizationdb read`):
 
-| 字段 | 值 | 含义 |
+| Field | Value | Meaning |
 |---|---|---|
-| `shared` | `false` | 凭据**不跨 AuthorizationRef 共享**。每次 `AuthorizationCreate` 建新 ref 就必然重新认证 |
-| `timeout` | `300` | 但同一个 ref 上的凭据 5 分钟内有效 |
+| `shared` | `false` | The credential is **not shared across AuthorizationRefs**. Every new ref created by `AuthorizationCreate` necessarily re-authenticates. |
+| `timeout` | `300` | But a credential on the same ref stays valid for 5 minutes. |
 
-所以 App 缓存 `AuthorizationToken` 复用：第一次操作弹一次框，之后 5 分钟内
-「配网络」「断开」都不再打扰用户。过期后 helper 的复核会失败并把应答的第二个
-参数置为 `true`，App 据此丢弃缓存、重新弹一次框、把这次操作重试一遍。
+So the App caches the `AuthorizationToken` and reuses it: the first operation
+pops one dialog, and for the next 5 minutes neither "configure the network" nor
+"disconnect" bothers the user any more. Once it expires, the helper's re-check
+fails and sets the second parameter of the reply to `true`; the App then drops
+the cache, pops the dialog once more and retries the operation.
 
-### 4.5 关于 Touch ID：这条路走不通（已验证）
+### 4.5 About Touch ID: this road does not work (verified)
 
-**结论：`AuthorizationCopyRights` 弹出的系统授权框不支持指纹，只能输密码。**
-这是 API 层面的限制，不是实现问题。别再花时间试了。
+**Conclusion: the system authorization dialog popped by
+`AuthorizationCopyRights` supports no fingerprint, only a password.** This is a
+limitation of the API, not an implementation problem. Do not spend more time
+trying.
 
-验证过程（本机 Touch ID 硬件存在、`bioutil -r` 显示已录入并启用）：
+The verification process (this machine has Touch ID hardware, `bioutil -r` shows
+it enrolled and enabled):
 
-1. 写了个最小的探针 App 请求 `system.privilege.admin`，读取 SecurityAgent
-   窗口的文本，得到的是 **「输入密码允许此操作。」** —— 界面上没有任何生物识别
-   入口。
-2. 对比系统自己的 `system.preferences` 规则，`class` / `group` /
-   `authenticate-user` 完全相同，只有 `shared` 与 `timeout` 不同 ——
-   而那两个字段只影响凭据缓存，不影响认证方式。所以换个权利名没有用。
-3. 在 SDK 里找 LocalAuthentication 与 Authorization Services 之间的桥：
-   `AuthorizationTags.h` 的环境项只有 username / password / shared / prompt /
-   icon，**没有 LAContext**。唯一出现 `GetLAContext` 的地方是
-   `AuthorizationPlugin.h` —— 那是给**编写 SecurityAgent 插件**用的回调，
-   而且注释写明它返回的是智能卡 PIN（`LACredentialCTKPIN`），不是 Touch ID。
+1. Wrote a minimal probe app that requests `system.privilege.admin`, read the
+   text of the SecurityAgent window, and got **"Enter password to allow this
+   operation."** -- there is no biometric entry point anywhere in the interface.
+2. Compared it with the system's own `system.preferences` rule: `class` /
+   `group` / `authenticate-user` are exactly the same, only `shared` and
+   `timeout` differ -- and those two fields only affect the credential cache,
+   not the authentication method. So a different right name does not help.
+3. Looked in the SDK for a bridge between LocalAuthentication and the
+   Authorization Services: the environment items in `AuthorizationTags.h` are
+   only username / password / shared / prompt / icon, **no LAContext**. The
+   only place `GetLAContext` appears is `AuthorizationPlugin.h` -- that is a
+   callback for **writing a SecurityAgent plugin**, and its comment says it
+   returns a smart card PIN (`LACredentialCTKPIN`), not a Touch ID.
 
-`LAContext.evaluatePolicy` 确实能弹指纹，但它产出的结果**无法转换成 helper
-可以复核的凭据** —— 换成它就等于放弃了整个信任模型。真要做，只剩「自己写一个
-SecurityAgent 插件装进 /Library/Security/SecurityAgentPlugins」这条路，
-代价与风险都和这个项目完全不成比例。
+`LAContext.evaluatePolicy` really can pop a fingerprint prompt, but the result
+it produces **cannot be converted into a credential the helper can
+re-check** -- switching to it would mean giving up the entire trust model. If
+you really want to do it, the only road left is "write your own SecurityAgent
+plugin and install it into /Library/Security/SecurityAgentPlugins", and both
+the cost and the risk are wildly out of proportion for this project.
 
-可行的替代是**减少弹框频率**，也就是上面的令牌缓存。若还嫌频繁，可以在
-`install-helper.sh` 里用 `security authorizationdb write` 装一条自己的权利，
-把 `timeout` 调长、`shared` 设为 true —— 但那仍然是密码框，只是问得更少。
+The workable alternative is to **reduce how often the dialog pops**, which is the
+token caching described above. If that still feels too frequent, you can use
+`security authorizationdb write` in `install-helper.sh` to install a right of
+your own, lengthen `timeout` and set `shared` to true -- but that is still a
+password box, it just asks less often.
 
-### 4.6 XPC 接口修订号
+### 4.6 XPC interface revision number
 
-`HelperConstants.protocolRevision` 每次改动 `TetherKitHelperProtocol` 都要加一。
-当前是 **3**（1 初版；2 特权方法应答加上「是否授权失败」；3 新增 `setLanguage`）。
-helper 把它编进 `helperVersion` 的应答，App 一连上就比对。
+`HelperConstants.protocolRevision` must be incremented every time
+`TetherKitHelperProtocol` changes. It is currently **3** (1: the first
+version; 2: the reply of a privileged method carries "did the authorization
+fail"; 3: adds `setLanguage`). The helper encodes it in the `helperVersion`
+reply, and the App compares it as soon as it connects.
 
-**为什么不新增一个专门的方法来报版本**：新增方法本身就是一次协议变更，旧
-helper 根本没有它 —— 那就又回到了「对不上还查不出来」。只有复用旧 helper 也
-一定会应答的方法，才能可靠识别出旧 helper。旧 helper 返回的串里没有分隔符，
-解析出的修订号是 0，界面据此显示「特权组件需要更新」。
+**Why not add a dedicated method just to report the version**: adding a method
+is itself a protocol change, and the old helper simply does not have it -- that
+puts us back to "mismatched and undetectable". Only a method that even an old
+helper is guaranteed to answer can reliably identify an old helper. The string
+returned by an old helper contains no separator, the parsed revision number
+comes out as 0, and the interface uses that to show "the privileged helper
+needs updating".
 
-### 4.7 Swift 侧
+### 4.7 The Swift side
 
-- **XPC 的错误块与 reply 块可能都被调用**（请求已发出后连接才断），而
-  `CheckedContinuation` 兑现两次是直接崩溃。`HelperClient` 里每次调用都用
-  `ContinuationGuard` 包一层。
-- **连接断掉后必须丢弃缓存的 `NSXPCConnection`**，否则后续调用一直打在死连接
-  上，表现为「helper 明明装好了却连不上」。
-- **helper 里凡是可能耗时的操作都异步回复**（启动会话要 USB 握手，DHCP 要等
-  租约最多 10 秒）。在 XPC 队列上阻塞会把同一条连接上后续的状态轮询一起卡住，
-  界面表现成整个卡死。
-- **速率的分母用库那边的单调时钟差**，不是界面定时器周期 —— 两次拉取之间的真实
-  间隔会被调度拉长，用固定周期当分母会把速率算高。
-- **C 的定长 char 数组在 Swift 里是元组**，不能下标也不能直接转 String，统一走
-  `CInterop.swift`。读用「扫到 NUL 或扫到底」，不用 `String(cString:)` —— 后者
-  在缓冲被写满、没有 NUL 时会越界读。
-- **非负值的 C 枚举被导入成 `UInt32`**，而结构体字段是 `int32_t`，比较前必须
-  显式转换。
-- **主窗口由 AppKit 直接管理（`MainWindowManager`），不再走 SwiftUI 的 Window
-  场景。** 两个原因：一是 SwiftUI 会在菜单栏模式下「擅自重建」Window 场景、
-  主窗口莫名冒回来（`applicationShouldHandleReopen` 不走，插桩确认没被调用，
-  没有干净的委托口子可堵）—— 自己管窗口之后这条路就没了；二是 macOS 26 的
-  窗口 chrome 由 `LC_BUILD_VERSION` 的 SDK 决定：SwiftPM 链出来的 `sdk 14.0`
-  全机器都是 legacy 三灯（14×16pt 按钮框、20pt 间距、内只画约 12pt 圆），加
-  `-platform_version macos 14.0.0 26.5.0` 并保持 minos 14.0 即可拿回 stock
-  大灯（两个方面均见 AGENTS.md 第 7 节第 19–21 条）。主窗口因此是
-  `fullSizeContentView` + 透明隐藏标题栏的普通 NSWindow，内容由
-  NSHostingView 承载；App 启动与菜单栏「打开主窗口」都走
-  `MainWindowManager.shared.present(model)`，关闭 = orderOut，回到菜单栏
-  模式（`NSWindowDelegate.windowWillClose` 里退到 accessory 策略）。
-- **dev 裸跑现在照常弹窗。** 窗口由 delegate 在
-  `applicationDidFinishLaunching` 创建并 `makeKeyAndOrderFront`，不再依赖
-  SwiftUI 的实例化时机，也不需要菜单栏手动救回。
-  `TetherKitApplication.init()` 的 `.prohibited → .regular` 自检保留：
-  它管的是未激活进程的正常激活语义。
-- **轮询是自适应的**：会话在跑 / 正在启停 / 窗口开着 → 500 ms；纯后台待机 →
-  2 秒。窗口重新打开时立刻补一次刷新，避免第一眼看到陈旧数据。
+- **The XPC error block and the reply block may both be invoked** (the
+  connection dropped after the request went out), and fulfilling a
+  `CheckedContinuation` twice is a straight crash. Every call in
+  `HelperClient` is wrapped in a `ContinuationGuard`.
+- **The cached `NSXPCConnection` must be discarded after the connection
+  drops**, otherwise every later call keeps hitting the dead connection, which
+  shows up as "the helper is clearly installed but cannot be reached".
+- **Every operation in the helper that might take time replies asynchronously**
+  (starting a session needs a USB handshake, DHCP waits for a lease for up to
+  10 seconds). Blocking on the XPC queue stalls the later status polls on the
+  same connection, and the interface looks completely frozen.
+- **The denominator of the rate is the monotonic clock delta on the library
+  side**, not the interface timer period -- the real interval between two
+  fetches is stretched by the scheduling, and using a fixed period as the
+  denominator computes the rate too high.
+- **A fixed-length C char array is a tuple in Swift**; it cannot be
+  subscripted and cannot be turned into a String directly, so everything goes
+  through `CInterop.swift`. Read it by "scan to the NUL or to the end", not
+  with `String(cString:)` -- the latter reads out of bounds when the buffer is
+  full and has no NUL.
+- **A non-negative C enum is imported as `UInt32`** while the struct field is
+  `int32_t`, so an explicit conversion is required before comparing.
+- **The main window is managed directly by AppKit (`MainWindowManager`), no
+  longer through a SwiftUI Window scene.** Two reasons: first, SwiftUI will
+  "recreate the Window scene on its own" in menu bar only mode and the main
+  window mysteriously comes back (`applicationShouldHandleReopen` is not taken;
+  instrumentation confirmed that it is never called, and there is no clean
+  delegate hook to block it) -- managing the window yourself removes that road
+  entirely; second, on macOS 26 the window chrome is decided by the SDK in
+  `LC_BUILD_VERSION`: a SwiftPM-linked `sdk 14.0` gives the whole machine the
+  legacy traffic lights (14x16pt button frames, 20pt spacing, only a roughly
+  12pt circle drawn inside), and adding `-platform_version macos 14.0.0 26.5.0`
+  while keeping minos 14.0 gets the stock traffic lights back (both aspects are
+  in items 19-21 of section 7 of AGENTS.md). The main window is therefore an
+  ordinary NSWindow with `fullSizeContentView` plus a transparent, hidden title
+  bar, its content hosted by an NSHostingView; both the App startup and the
+  menu bar's "Open the main window" go through
+  `MainWindowManager.shared.present(model)`, closing = orderOut, back to menu
+  bar only mode
+  (`NSWindowDelegate.windowWillClose` falls back to the accessory policy).
+- **A bare dev run now pops the window as usual.** The window is created by
+  the delegate in `applicationDidFinishLaunching` and `makeKeyAndOrderFront`-ed,
+  no longer depending on the instantiation timing of SwiftUI and no longer
+  needing a manual rescue from the menu bar. The `.prohibited -> .regular`
+  self-check in `TetherKitApplication.init()` is kept: it governs the normal
+  activation semantics of a process that is not active yet.
+- **The polling is adaptive**: a running session / starting or stopping / the
+  window open -> 500 ms; purely idle in the background -> 2 seconds. When the
+  window is reopened, a refresh is issued immediately so that the first glance
+  is not stale data.
 
-### 4.7b 界面语言
+### 4.7b Interface language
 
-文案表编译进二进制，不走 `.lproj`。理由写在 `TetherKitIPC/Localization.swift`
-顶部，核心是 **helper 是装在 `/Library/PrivilegedHelperTools` 的裸可执行文件**，
-旁边没有、也不该有资源 bundle，而它同样要产生给用户看的文字。
+The string table is compiled into the binary, it does not go through `.lproj`.
+The reason is written at the top of `TetherKitIPC/Localization.swift`, and its
+core is that **the helper is a bare executable installed in
+`/Library/PrivilegedHelperTools`**, with no resource bundle next to it, and
+there should not be one, yet it still has to produce user-facing text of its
+own.
 
-改语言时必须**同时**更新三处，缺一处就会出现「界面英文、日志中文」：
+The table currently holds a single column (English) and the GUI language menu
+offers "Follow system" and "English"; the multi-language plumbing is
+deliberately kept so that adding a language later stays a bounded five-touch
+change (the checklist lives at the top of
+`include/tetherkit/common/messages.def`).
 
-| 处 | 怎么改 | 不改的后果 |
+When the language changes, **all three** places must be updated together, and
+missing one of them produces "the interface in one language, the log in
+another":
+
+| Place | How to change it | Consequence of not changing it |
 |---|---|---|
-| Swift 文案表 | `L10n.apply(_:)` | 界面不变 |
-| libtetherkit | `TetherKitLibrary.setLanguage(_:)` → `tk_set_language` | 日志卡里的库日志还是旧语言 |
-| helper | XPC 的 `setLanguage(_:)` | helper 的提示与它那边的库日志还是旧语言 |
+| Swift string table | `L10n.apply(_:)` | the interface does not change |
+| libtetherkit | `TetherKitLibrary.setLanguage(_:)` -> `tk_set_language` | the library logs in the log card stay in the old language |
+| helper | the XPC `setLanguage(_:)` | the helper's messages and the library logs on its side stay in the old language |
 
-三处都在 `AppModel.applyLanguage` 里一起做，别在别处单独调其中一个。helper
-之所以要单独告知：它以 root 跑在 launchd 下，看不到用户的语言偏好。
+All three are done together in `AppModel.applyLanguage`; do not call one of
+them on its own somewhere else. The helper has to be told separately because it
+runs as root under launchd and cannot see the user's language preference.
 
-两条 SwiftUI 特有的坑（都实测踩过）：
+Two SwiftUI specific pitfalls (both hit in practice):
 
-- **切语言不会让任何 `@Observable` 属性看起来变过**，视图体因此不会重算。
-  对策是把语言变化本身变成可观察的值（`AppModel.languageRevision` 每次加一），
-  再当 identity 用：`.id(model.languageRevision)`，强制重建整棵树。
-- **`.commands { }` 里的每个 `Button` 各自是独立表达式**，只有读过可观察值的
-  那个会重算。实测切完语言只有语言菜单自己变了，旁边的「检查更新…」还是旧
-  语言。修法是把这一组包进同一个 View（`AppMenuItems`），在它的 body 里读一次
-  revision。同理，**存文案的 `static let` 只求值一次**，一律改成计算属性。
+- **Switching the language does not make any `@Observable` property look
+  changed**, so the view bodies do not recompute. The countermeasure is to
+  make the language change itself an observable value
+  (`AppModel.languageRevision` increments every time), and then use it as an
+  identity: `.id(model.languageRevision)`, which forces the whole tree to be
+  rebuilt.
+- **Each `Button` inside `.commands { }` is its own expression**, so only the
+  one that reads an observable value recomputes. In practice, after switching
+  the language only the language menu itself changed, while "Check for
+  Updates…" next to it was still in the old language. The fix is to wrap that
+  group in a single View (`AppMenuItems`) and read the revision once in its
+  body. The same goes for the **`static let` members that hold text**: they
+  are evaluated only once, so turn them all into computed properties.
 
-### 4.8 打包
+### 4.8 Packaging
 
-- **拷 dylib 必须用 `cp -a`，不能用 `install`。** `libtetherkit.dylib` 与
-  `libtetherkit.0.dylib` 是软链，`install` 会各拷一份独立的真实文件，之后
-  `install_name_tool` 只改到其中一份，而按 `@rpath` 加载的恰好是没改到的那份。
-- **`install_name_tool` 改完字节必须重签。** arm64 要求有效签名，改字节会让原
-  签名失效，之后加载被内核直接拒绝（`Killed: 9`），日志里看不出原因。
-- **libusb 是 `libtetherkit.dylib` 的依赖，不是可执行文件的。** 对着可执行文件
-  查 `otool -L` 会得到空结果，整段处理被静默跳过 —— 装完看起来正常，实际仍依赖
-  Homebrew。
-- **发布产物里必须删掉指向构建目录的 rpath。** 它是绝对路径，在开发机上一定
-  存在，dyld 会优先用它，内嵌的副本永远得不到验证 —— 等换台机器才暴露。
-  `build-gui.sh` 会删；`Package.swift` 里也把它排在最后作为第二道保险。
-- **bash 里变量后面紧跟中文标点必须写 `${VAR}`。** UTF-8 locale 下全角标点的
-  首字节（0xEF）会被 `isalnum()` 判为真、吸进变量名。C locale 下不复现。
+- **Copying the dylib must use `cp -a`, never `install`.** `libtetherkit.dylib`
+  and `libtetherkit.0.dylib` are symlinks; `install` copies a separate real
+  file for each, and afterwards `install_name_tool` only changes one of them
+  -- while the one that is loaded via `@rpath` is exactly the one that was not
+  changed.
+- **After `install_name_tool` has changed the bytes, the signature must be
+  redone.** arm64 requires a valid signature; changing the bytes invalidates
+  the original signature and the load is then rejected by the kernel outright
+  (`Killed: 9`), with no reason visible in the log.
+- **libusb is a dependency of `libtetherkit.dylib`, not of the executable.**
+  Running `otool -L` against the executable yields an empty result, the whole
+  step is silently skipped -- after the install everything looks normal, yet
+  it still depends on Homebrew.
+- **The rpath that points at the build directory must be removed from the
+  release artifacts.** It is an absolute path, it certainly exists on the
+  development machine, dyld prefers it, and the embedded copy is therefore
+  never validated -- it only shows up on a different machine. `build-gui.sh`
+  removes it; `Package.swift` also puts it last as a second line of defence.
+- **In bash, a variable immediately followed by Chinese punctuation must be
+  written as `${VAR}`.** Under a UTF-8 locale the lead byte of the full-width
+  punctuation (0xEF) is judged true by `isalnum()` and absorbed into the
+  variable name. It does not reproduce under the C locale.
 
-### 4.9 App 内一键安装特权组件（AEWP）
+### 4.9 One-click installation of the privileged helper inside the App (AEWP)
 
-helper 缺失或版本不匹配时，界面给一个「安装 / 更新特权组件」按钮，点一下、
-输一次管理员密码就装好 —— 不用打开终端。机制（`HelperInstaller.swift`）：
+When the helper is missing or its version does not match, the interface offers
+an "Install the helper" or "Update the helper" button: click it, type the
+administrator password once, and it is installed -- no need to open a terminal.
+The mechanism (`HelperInstaller.swift`):
 
-- **载荷内嵌在 .app 里**：`Contents/Library/HelperTools/` 平铺放着 helper
-  二进制、dylib、plist 和安装 / 卸载脚本，`build-gui.sh` 组装。装的时候整目录
-  拷走，安装源天然跟着 .app 走。旧的 `dist/helper/` 布局已废除。
-- **提权走 `AuthorizationExecuteWithPrivileges`（AEWP）**：它接的正是
-  AuthorizationRef，所以 App 缓存的授权令牌（4.4 节）直接复用 —— 5 分钟窗口内
-  一次框都不弹；装完接着点「连接」也不再弹。osascript 方案被排除就是因为它
-  自建授权会话，接不上这份缓存。SMJobBless / SMAppService 早已排除（SPIKE 3.3）。
-- **AEWP 已废弃但可用（macOS 26 实测）**：符号可解析，setuid 执行载体
-  `/usr/libexec/security_authtrampoline` 仍在。代码用 dlsym 运行时解析而不是
-  直接链接：将来系统移除它时降级成「请用终端安装」，而不是 dyld 绑定失败。
-- **AEWP 的执行对象必须是二进制，不能是脚本**：AEWP 给子进程的凭据是
-  euid=0 / ruid=普通用户，而 bash 在 euid ≠ ruid 且未带 `-p` 时会把 euid 降回
-  ruid —— 直接 AEWP 安装脚本，脚本开头的 root 检查必然报「需要 root 权限」
-  （**真机踩过**）。所以 App 拉起的是载荷里 helper 二进制的 `--install` 模式
-  （`InstallerMode.swift`）：setuid(0) 把凭据归一化成与 sudo 完全相同的真
-  root，dup2 把 stderr 并进 stdout（AEWP 的管道只接 stdout），再 exec 同目录
-  的 `install-helper.sh`。脚本按「脚本所在目录 → 仓库产物」自动定位载荷，
-  终端与 App 两个入口共用一份实现。
-- **成败不看退出码**：AEWP 不给 pid 也不给退出码，只有一根连到子进程 stdout
-  的管道。判定标准是「读到 EOF 后能否真的连上匹配版本的 helper」——
-  `AppModel.installHelper()` 用 XPC 往返兜底确认，失败时把脚本输出的末尾
-  （剥掉 ANSI 色码）放进弹窗。
-- **弹框之前先自检**：载荷不在（`swift run` 的裸可执行文件）或 AEWP 不在，
-  都要在要密码**之前**报出来，并引导回终端脚本。
-- **卸载走同一条链**：「管理」页的「卸载特权组件…」（低调的 caption 行 ——
-  极低频动作不抢注意力，但必须存在于主界面）→ 确认框 → `--uninstall` →
-  `uninstall-helper.sh`。成败判定方向相反：等的是「连不上」。卸载后界面
-  自然回到安装引导页，随时可重装。
+- **The payload is embedded in the .app**: `Contents/Library/HelperTools/`
+  holds the helper binary, the dylib, the plist and the install / uninstall
+  scripts flat, assembled by `build-gui.sh`. At install time the whole
+  directory is copied away, so the install source naturally travels with the
+  .app. The old `dist/helper/` layout is abolished.
+- **The privilege escalation goes through `AuthorizationExecuteWithPrivileges`
+  (AEWP)**: it takes exactly the AuthorizationRef, so the authorization token
+  cached by the App (section 4.4) is reused directly -- within the 5-minute
+  window not a single dialog pops; clicking "Connect" right after the install
+  does not pop one either. The osascript route was ruled out precisely because
+  it creates its own authorization session and cannot hook into this cache.
+  SMJobBless / SMAppService were ruled out long ago (SPIKE 3.3).
+- **AEWP is deprecated but usable (measured on macOS 26)**: the symbol still
+  resolves, and the setuid trampoline `/usr/libexec/security_authtrampoline`
+  is still there. The code resolves it with dlsym at runtime instead of linking
+  it directly: if the system ever removes it, the app degrades into "please
+  install from a terminal" instead of failing to bind at dyld time.
+- **The execution target of AEWP must be a binary, not a script**: the
+  credential AEWP gives the child process is euid=0 / ruid=the normal user,
+  and bash (zsh and dash likewise) drops the euid back to the ruid when
+  euid != ruid and `-p` is not given -- the old rule against setuid scripts.
+  AEWP-ing the install script directly yields, on a real machine, the script's
+  own "root privileges required" error (**hit in practice**). So what the App
+  launches is the `--install` mode of the helper binary in the payload
+  (`InstallerMode.swift`): setuid(0) normalizes the credential into exactly
+  the same real root as sudo, dup2 merges stderr into stdout (AEWP's pipe only
+  picks up stdout), and then it execs the `install-helper.sh` in the same
+  directory. The script locates the payload by "the directory the script is in
+  -> the repository artifacts", so the terminal and the App share one
+  implementation.
+- **Success is not judged by the exit code**: AEWP gives neither a pid nor an
+  exit code, only a pipe connected to the child's stdout. The criterion is
+  "after reading EOF, can we really connect to a helper of the matching
+  version" -- `AppModel.installHelper()` confirms it with an XPC round trip as
+  a backstop, and on failure it puts the tail of the script output (with the
+  ANSI colour codes stripped) into the dialog.
+- **Self-check before the dialog**: if the payload is missing (the bare
+  executable of `swift run`) or AEWP is gone, that has to be reported **before**
+  the password is requested, and the user guided back to the terminal script.
+- **The uninstall goes through the same chain**: the "Uninstall the privileged
+  helper?" (a low-key caption line on the "Manage" page -- a very rare
+  action must not steal the attention, but it must exist in the main
+  interface) -> confirmation dialog -> `--uninstall` -> `uninstall-helper.sh`.
+  The success criterion runs the other way: what is waited for is "cannot
+  connect". After the uninstall the interface naturally returns to the install
+  guide page, and it can be reinstalled at any time.
 
-### 4.10 检查更新（只查不换）
+### 4.10 Update check (check only, never replace)
 
-`UpdateChecker.swift` 请求 GitHub 的 `releases/latest`，和 Info.plist 里的
-版本号（CMakeLists 单一来源）做语义化比较。**刻意不做自动下载替换**：
-免证书分发下，下载物带 quarantine，替换完的 .app 会被 Gatekeeper 拦死 ——
-和不能走 Cask 是同一堵墙。真正的更新通道是 `brew upgrade` 或源码重编。
+`UpdateChecker.swift` requests GitHub's `releases/latest` and does a semantic
+comparison against the version number in Info.plist (CMakeLists is the single
+source of truth). **The automatic download and replace is deliberately not
+done**: under certificate-free distribution the download carries quarantine,
+and the replaced .app gets blocked by Gatekeeper -- the same wall that rules
+out a Cask. The real update channel is `brew upgrade` or rebuilding from the
+source.
 
-- 入口两个：App 菜单「检查更新…」（结果弹窗，带可复制的 brew 命令与
-  发布页链接）；自动检查每天至多一次，发现新版在「管理」页的特权组件行点亮
-  「有新版 x.y.z」，绝不弹窗打断。提示跨启动记忆（defaults），升级完成后
-  因版本比较自然熄灭。
-- 隐私：只访问 GitHub 公开 API，失败静默；
-  `defaults write com.tetherkit.app updateCheckDisabled -bool YES` 彻底关闭。
-- `swift run` 的裸可执行文件没有 Info.plist 版本号，检查自动跳过。
-- 发版纪律：检查读的是 GitHub Releases，**每个版本必须打 `vX.Y.Z` tag 并
-  发布 Release**，否则查不到。
-- 查到新版后的落地由既有机制接力：`brew upgrade` 换掉 App，重启后
-  `protocolRevision` 不匹配触发「更新特权组件」一键重装（4.6 / 4.9 节）。
+- Two entry points: the App menu's "Check for Updates…" (a result dialog
+  with a copyable brew command and a link to the release page); the automatic
+  check runs at most once a day, and when a new version is found the
+  privileged helper row on the "Manage" page lights up "x.y.z is available" --
+  it never pops a dialog to interrupt. The hint is remembered across the
+  launches (defaults) and goes out by itself after the upgrade because of the
+  version comparison.
+- Privacy: only the public GitHub API is accessed, and the failures are
+  silent; `defaults write com.tetherkit.app updateCheckDisabled -bool YES`
+  turns it off completely.
+- The bare executable of `swift run` has no Info.plist version number, so the
+  check skips itself automatically.
+- Release discipline: the check reads the GitHub Releases, so **every version
+  must be tagged `vX.Y.Z` and published as a Release**, otherwise it is not
+  found.
+- When a new version is found, the existing mechanisms take over:
+  `brew upgrade` replaces the App, and after the restart the
+  `protocolRevision` mismatch triggers the one-click "update the privileged
+  helper" reinstall (sections 4.6 / 4.9).
 
-### 4.11 页面切换为何零动画（macOS 26 的插值链）
+### 4.11 Why the page switch has zero animation (the interpolation chain of macOS 26)
 
-侧栏换页要求逐像素不动。此前 macOS 26 上点击换页时新页短暂放大约 8-10% 再缩回，
-且**只有点击触发**（定时器驱动同一状态完全纯净）。两层根因（AGENTS.md 第 7 节
-第 22、23 条）叠加，单堵任何一层都只让跳变变快、不能根除 —— 三重钳制，缺一不可：
+Switching pages in the sidebar has to be pixel-exact. Previously, on macOS 26,
+clicking to switch pages briefly scaled the new page up by about 8-10% and then
+back down, and **only a click triggered it** (the same state driven by a timer
+was completely clean). Two layers of root cause (items 22 and 23 in section 7 of
+AGENTS.md) stack up; blocking either one alone only makes the jump faster and
+does not eliminate it -- three clamps, none of them optional:
 
-1. **`SidebarRow`：`InstantButtonStyle`（`PrimitiveButtonStyle`）** —— 系统默认
-   样式会为按下 / 标签状态创建**按钮激活上下文**（带动画的事务）；它用
+1. **`SidebarRow`: `InstantButtonStyle` (`PrimitiveButtonStyle`)** -- the
+   default system style creates a **button activation context** (a transaction
+   with an animation) for the pressed / label state; it uses
    `.transaction { animation = nil }` + `.contentShape(Rectangle)` +
-   `.simultaneousGesture(TapGesture().onEnded { trigger() })` 彻底不创建
-   （对 configuration 调 `trigger()` 不是 `action()`）。
-2. **`SidebarShell.select`：状态写入跳出激活拍** —— `DispatchQueue.main.async`
-   到下一拍写入，写处再挂 instant 事务（`animation = nil` +
-   `disablesAnimations = true`）兜底；content/pageBody 同挂
-   `.transition(.identity)`，进出场永不插值。
-3. **`MainWindowManager`：掐断 resize 事件源** —— macOS 26 把「内容尺寸变化」
-   与「窗口 frame 动画」同步（WWDC25-256、release notes 61158194）；
-   `NSHostingView` 默认 `sizingOptions` 会把每页固有尺寸推进窗口（页高不同 →
-   每次换页一次 resize）。`hosting.sizingOptions = []` 在**附加 contentView
-   之前**设置；min/max 钉成固定尺寸。
+   `.simultaneousGesture(TapGesture().onEnded { trigger() })` to create none at
+   all (it calls `trigger()` on the configuration, not `action()`).
+2. **`SidebarShell.select`: the state write jumps out of the activation
+   beat** -- `DispatchQueue.main.async` writes on the next beat, and the write
+   site carries an instant transaction (`animation = nil` +
+   `disablesAnimations = true`) as a backstop; content/pageBody also carry
+   `.transition(.identity)`, so the entry and the exit never interpolate.
+3. **`MainWindowManager`: cut off the resize event source** -- macOS 26
+   synchronizes the "content size change" with the "window frame animation"
+   (WWDC25-256, release notes 61158194); the default `sizingOptions` of
+   `NSHostingView` pushes each page's intrinsic size into the window (different
+   page heights -> one resize per page switch). `hosting.sizingOptions = []` is
+   set **before the contentView is attached**; min/max are pinned to a fixed
+   size.
 
-**为什么单独堵一层不够**：transition 只在事务带动画时插值，激活上下文永远带
-动画；`disablesAnimations` 只拦新的隐式 `.animation` 写入（objc.io 的
-Transaction / transitions 两篇）—— 唯一「完全不插值」的环境是带 nil 动画的
-下一拍事务，即第 2 条。
+**Why blocking one layer alone is not enough**: a transition only interpolates
+when the transaction carries an animation, and an activation context always
+carries an animation; `disablesAnimations` only blocks new implicit `.animation`
+writes (the two objc.io articles on Transaction / transitions) -- the only
+environment that "does not interpolate at all" is the next beat transaction
+with a nil animation, which is item 2 above.
 
-**不变式**：视图侧改侧栏选中的新代码路径**必须走 `select()`**（保持跳出激活拍），
-不许在激活事务内直接写 `storedPage` —— 每多一个换页入口，这条都得跟着保持。
-唯一例外是窗口认领路径（`SidebarMainWindow` 的方向键与 Return 认领）：窗口层
-拿不到 shell 的模型，经 `ButtonTurn.write` 直写存储键，且刻意不复锚 AX 焦点
-（不调 `syncAXFocus`）—— 同为跳拍写，与该不变式语义一致。
-窗口侧：delegate 的 `windowDidBecomeMain` / `windowDidResize` 幂等重新钉
-min/max —— 实测 macOS 26 窗口展示后不久会把 min/max **重置为未设**，伴随一次
-+32pt 的 chrome settle（调用栈 `_setFrameCommon:display:fromServer:`）；
-`styleMask` 从不含 `.resizable`（min/max 只防程序化改动），幂等写法同时防
-`windowDidResize` 自递归。
+**The invariant**: every new code path on the view side that changes the
+sidebar selection **must go through `select()`** (keeping the jump out of the
+activation beat); writing `storedPage` directly inside an activation
+transaction is forbidden -- every additional page switch entry point has to
+keep this. The only exception is the window claim path (the arrow keys and the
+Return claim of `SidebarMainWindow`): the window layer has no access to the
+shell's model, so it writes the storage key directly through
+`ButtonTurn.write`, and deliberately does not re-anchor the AX focus (it does
+not call `syncAXFocus`) -- a jump out write as well, semantically consistent
+with the invariant. On the window side: the delegate's `windowDidBecomeMain` /
+`windowDidResize` idempotently re-pins min/max -- measured, macOS 26 resets
+min/max to "not set" shortly after the window is shown, accompanied by a +32pt
+chrome settle (call stack `_setFrameCommon:display:fromServer:`); the
+`styleMask` never contains `.resizable` (min/max only guard against
+programmatic changes), and the idempotent form also prevents `windowDidResize`
+from recursing into itself.
 
-**无障碍按压（VoiceOver 的 AXPress）**：按压轮内 `NSApp.currentEvent == nil`，
-且 macOS 26.5 会把该轮内排进 `DispatchQueue.main.async` /
-`Task { @MainActor }` 的块**全部丢弃**（正文不跑），同步写则存活。所以
-`select()` 按 `NSApp.currentEvent` 的事件类型分流：鼠标/键盘轮内维持
-「跳出拍再写」的本节铁律，无障碍按压轮直接同步写。键盘轮内直写还有第二个
-坑：换页重渲染会把同一按键事件重新派发，一次按键双步进页。完整排查记录
-见 AGENTS.md 第 7 节坑 24。
+**The accessibility press (VoiceOver's AXPress)**: within the press round
+`NSApp.currentEvent == nil`, and macOS 26.5 **discards everything** that was
+queued into `DispatchQueue.main.async` / `Task { @MainActor }` within that
+round (the body never runs), while a synchronous write survives. So `select()`
+splits on the event type of `NSApp.currentEvent`: inside a mouse/keyboard round
+it keeps the iron rule of this section, "jump out of the beat and then write",
+and in an accessibility press round it writes synchronously. A direct write
+inside a keyboard round has a second pitfall: the re-render after the page
+switch re-dispatches the same key event, so one keypress advances two pages.
+The complete investigation record is in pitfall 24 in section 7 of AGENTS.md.
 
-**键盘（激活管线，round 6）**：real FKA 的 Space 与方向键被
-universalaccessd 在 HID 层拦截（合成的 NSEvent 到不了那层），Space
-转成对焦点行的进程外 AXPress —— 落到行
-`.accessibilityAction(.default)`，并由 `ButtonTurn.writeDirect`
-直写（进程外 AX 轮次里残留的 `NSApp.currentEvent` 会骗跳拍，被
-26.5 丢弃）；Return 原样通过，在 `SidebarMainWindow`
-的 `performKeyEquivalent` 拦截（条件：辅助功能面板 FKA 开
-（`SelfAccessibility.isFullKeyboardAccessOn`，真值勘误见坑 24
-round 7）、自进程系统级 AX 焦点解析出行标题、field editor 未激活），
-未匹配时穿透至聚焦行自身的 `.onKeyPress(.return)` 兜底。
-`NSApp.isFullKeyboardAccessEnabled` 读的是旧偏好
-`AppleKeyboardUIMode`（键盘导航），不是辅助功能面板的 FKA 开关，
-面板开关关掉时行上残留的 AX 焦点会让裸 Space/Return 静默跳页
-（round 7 真机回归）。方向键：侧栏在 `performKeyEquivalent`
-先行认领裸方向键直切页面（条件 FKA-off、第一响应者非文本输入框；
-`.function` 位不算和弦，禁令须是显式修饰键集合），认领后容器
-不再二次步进；容器保留方向键 `.onKeyPress` 作为冒泡兜底；FKA-on 时方向键归 HID 层。其余细节：
-`ButtonTurn.write`，LogCard 的层级筛选与清空按钮走同一条路，点击
-驱动的换筛选/清空不再带激活事务的插值。
+**The keyboard (the activation pipeline, round 6)**: with a real FKA the Space
+and the arrow keys are intercepted by universalaccessd at the HID layer (a
+synthesized NSEvent never reaches that layer), and the Space becomes an
+out-of-process AXPress on the focused row -- it lands on the row's
+`.accessibilityAction(.default)` and is written directly by
+`ButtonTurn.writeDirect` (the `NSApp.currentEvent` left over from an
+out-of-process AX round fools the beat detection and is discarded by 26.5);
+the Return passes through unchanged and is intercepted in the
+`performKeyEquivalent` of `SidebarMainWindow` (condition: the accessibility
+panel's FKA is on (`SelfAccessibility.isFullKeyboardAccessOn`, the ground
+truth correction is in pitfall 24 round 7), the system-wide AX focus of the
+own process resolves to the row title, and no field editor is active), and
+when nothing matches it falls through to the focused row's own
+`.onKeyPress(.return)` backstop. `NSApp.isFullKeyboardAccessEnabled` reads the
+old preference `AppleKeyboardUIMode` (keyboard navigation), not the
+accessibility panel's FKA switch; with the panel switch off, the AX focus left
+on a row makes a bare Space/Return silently switch pages (a real machine
+regression in round 7). The arrow keys: the sidebar claims the bare arrow keys
+in `performKeyEquivalent` first and switches the page directly (conditions:
+FKA off, the first responder is not a text input; the `.function` bit is not a
+chord, so the ban has to be an explicit modifier key set), after the claim the
+container does not step a second time; the container keeps the arrow key
+`.onKeyPress` as a bubbling backstop; with FKA on the arrow keys belong to the
+HID layer. For the rest of the details: `ButtonTurn.write`; the level filter
+and the clear button of the LogCard go through the same path, and a
+click-driven filter change / clear no longer carries the interpolation of an
+activation transaction.
 
-**焦点应答同步与自愈探索（round 8，自愈逻辑已在 round 11 superseded）**：行的键盘参与按辅助功能面板真值
-门控（round 11 定型：每行声明
-`.focusable(SelfAccessibility.isFullKeyboardAccessOn || isSelected)`，容器不再挂 focusable）；
-`.focused`／`.accessibilityFocused` 双引擎逐行绑定，键盘引擎落点
-经 `onChange(of: focusedRow)` 同步为 AX 应答 —— 这是进程内挪 AX
-焦点的唯一受支持通道，外部写 `kAXFocusedUIElement` 是 no-op（坑
-24 round 8 ①）。（历史探索 / superseded）：Round 8 曾尝试在轮询重渲染后通过
-`.onChange(of: model.status.monotonicNanos)` 与 involvement gate 进行自读系统应答自愈。
-该机制在 Round 11 原生架构中已完全停用（移除相关自愈代码，焦点由 SwiftUI 原生引擎管理）。
-FKA-off 契约收窄为**仅方向键**（r8 曾用 `.focusable(false)`，后在 r9/r11 重构）。
-层级筛选从 segmented 改 `.menu`：segmented 在键盘导航与真 FKA 下按键无响应，`.menu` 的
-弹出菜单是键盘可操作的正统替代；弹出菜单运行在
-`NSEventTrackingRunLoopMode`，无头环境无法合成开合/提交（硬件
-清单项），菜单存在性以 CGWindowList 差分取证（坑 24 round 8
-④）；筛选绑定改走 `ButtonTurn.routed`（`ButtonTurn` 一并移入
-TetherKitUIModel，commit 语义有单测）。
+**The focus response synchronization and the self-healing exploration (round 8,
+the self-healing logic was superseded in round 11)**: the keyboard
+participation of the rows is gated on the ground truth of the accessibility
+panel (the shape settled in round 11: every row declares
+`.focusable(SelfAccessibility.isFullKeyboardAccessOn || isSelected)`, and the
+container no longer carries focusable); the `.focused` / `.accessibilityFocused`
+dual engines are bound row by row, and the landing point of the keyboard engine
+is synchronized into the AX response via `onChange(of: focusedRow)` -- this is
+the only supported channel for moving the AX focus inside the process, writing
+`kAXFocusedUIElement` from the outside is a no-op (pitfall 24 round 8 (1)).
+(Historical exploration / superseded): Round 8 once tried to self-heal the
+system response after the polling re-render via
+`.onChange(of: model.status.monotonicNanos)` and an involvement gate. That
+mechanism was completely switched off in the Round 11 native architecture (the
+related self-healing code was removed, the focus is now managed by the SwiftUI
+native engine). The FKA-off contract was narrowed to **the arrow keys only**
+(r8 used `.focusable(false)`, later restructured in r9/r11). The level filter
+changed from segmented to `.menu`: segmented does not respond to the keyboard
+under keyboard navigation and under a real FKA, and the `.menu` popup is the
+orthodox keyboard-operable alternative; the popup runs in
+`NSEventTrackingRunLoopMode`, and a headless environment cannot synthesize
+opening and committing it (a hardware checklist item), so the existence of the
+menu is proven by a CGWindowList diff (pitfall 24 round 8 (4)); the filter
+binding now goes through `ButtonTurn.routed` (`ButtonTurn` was moved into
+TetherKitUIModel as well, its commit semantics have unit tests).
 
-**Tab 重入侧栏与 Return 的行级后背（round 9，真机复检）**：用户真机
-复检推翻 r8 的 FKA-off「仅方向键」契约 —— 键盘导航下 Tab 永远摸不到
-侧栏（行被 `.focusable(false)` 请出 Tab 环），且只要有控件持有焦点，
-窗口对方向键的认领前置失效、方向键搁浅。契约改为：**Tab 在两种模式
-下都可达侧栏；Space/Return 在 FKA-off 里对行保持 inert；方向键从行
-焦点继续切页**。三处落地：行 `.focusable(true)` 常量化（条件修饰链
-再少一处，AX 身份更稳；r8 探针矩阵的期望项「Tab 永不落行」从此作
-废，未来矩阵先改期望）；行 Button 动作统一走 `rowSelect`，FKA-off
-时按 `NSApp.currentEvent` 的类型分流 —— 键盘驱动的原生激活（现场
-keyDown）丢弃、鼠标事件放行（`currentEvent` 的读取有两处 —— 此处与
-`ButtonTurn.write` 的跳拍判定 —— 都只作否定/分流信号用：AXPress 轮
-会残留旧事件，见坑 24 round 6）；窗口方向键
-认领在第一响应者非文本输入框时步进页面。Return 补行级后背：真机 FKA 下窗口认领依赖的 AX 自读解析不出
-行（合成探针全过 —— 无头环境绕不开 HID 层，这一环只能真机验），
-聚焦行自己挂 `.onKeyPress(.return)`（FKA-on 门，直调 `rowSelect`，
-零 AX-read 依赖）；小键盘 Enter（keycode 76）仍只有窗口认领覆盖
-（SwiftUI `KeyPress.Key` 无小键盘变体)。真机复检清单随之更新：
-FKA-off —— Tab 触达侧栏行、Space/Return inert、行焦点下方向键切页；
-FKA-on —— Tab 后 Return 也换页。
+**Tab re-entering the sidebar and the row level fallback for the Return (round
+9, real machine re-check)**: the user's real machine re-check overturned the
+r8 FKA-off "arrow keys only" contract -- under keyboard navigation Tab could
+never reach the sidebar (the rows were `.focusable(false)`, which excludes
+them from the Tab ring), and as long as any control held the focus, the
+window's arrow key claim preconditions failed and the arrow keys stalled. The
+contract changed to: **Tab reaches the sidebar in both modes; Space/Return
+stay inert on the rows with FKA off; the arrow keys keep switching pages from
+the row focus**. Three landings: the rows' `.focusable(true)` became a
+constant (one condition less, a steadier AX identity; the r8 probe matrix's
+expectation "Tab never lands on a row" is void from now on, so change the
+expectation before running the matrix again); the actions of the row Buttons
+all go through `rowSelect`, and with FKA off they split on the type of
+`NSApp.currentEvent` -- the keyboard driven native activation (the live
+keyDown) is discarded, mouse events are let through (`currentEvent` is read in
+two places -- here and in the beat detection of `ButtonTurn.write` -- and both
+are used only as a negative / routing signal: an AXPress round leaves the old
+event behind, see pitfall 24 round 6); the window's arrow key claim steps the
+page when the first responder is not a text input. The Return gets the row
+level fallback: under a real FKA the AX self-read that the window's claim
+depends on cannot resolve the row (the synthesized probe passes everything --
+a headless environment cannot get around the HID layer, and only a real machine
+can verify that link), so the focused row itself carries
+`.onKeyPress(.return)` (an FKA-on gate, calling `rowSelect` directly, with
+zero AX-read dependency); the keypad Enter (keycode 76) is still only covered
+by the window claim (SwiftUI's `KeyPress.Key` has no keypad variant). The real
+machine re-check list is updated accordingly: FKA off -- Tab reaches the
+sidebar rows, Space/Return inert, the arrow keys switch the pages from the row
+focus; FKA on -- the Return after a Tab also switches the page.
 
-**自驱键盘环探索（round 10，已在 round 11 废弃 / superseded）**：round 9 的「Tab 两种模式
-可达」在早期探索中曾误判 FKA-off 下侧栏行不可达，round 10 尝试了由 AppKit 截获
-裸 Tab、在 `AppModel.sidebarRingRow` 上维护自驱键盘环的方案。但该方案存在 AppKit
-截获容易侵占内容按钮焦序、且引入复杂状态机的问题。**该自驱键盘环方案已在 round 11 被完整移除
-并废弃**（`sidebarRingRow`、`SidebarFocusBridge` 均已删除），最终定型为 round 11 的纯原生架构。
+**The self-driven keyboard ring exploration (round 10, removed and superseded
+in round 11)**: round 9's "Tab reachable in both modes" had been misjudged in
+the early exploration as "the sidebar rows are unreachable with FKA off", and
+round 10 tried a scheme in which AppKit intercepts the bare Tab and a
+self-driven keyboard ring is maintained on `AppModel.sidebarRingRow`. But that
+scheme had the problems that the AppKit interception easily encroaches on the
+focus order of the content buttons and that it introduces a complex state
+machine. **That self-driven keyboard ring scheme was completely removed and
+abandoned in round 11** (`sidebarRingRow` and `SidebarFocusBridge` are both
+deleted), and the final shape is the purely native architecture of round 11.
 
-**原生焦点环与全态方向键（round 11，最终定型架构）**：
-1. **Tab 循环双向贯通**：r10 尝试的 AppKit 层自驱截获 Tab 会侵占内容按钮的自然焦序，而纯 SwiftUI 下之前侧栏被跳过的根因是 `rows` 容器上绑定的 `.focusable(SelfAccessibility.isFullKeyboardAccessOn)` 在 FKA-off 时将侧栏整组阻断。移除容器 focusable，选中行在 FKA-off 下使用 `.focusable(isSelected)`（FKA-on 下各行均可聚焦），Tab 形成「侧栏选中项 ↔ 内容各按钮」的双向可达循环，Tab 遍寻内容各按钮后平滑回至侧栏。
-2. **方向键全态切页**：原 `handleArrowKey` 守卫要求 `firstResponder == nil || firstResponder === contentView`，一旦用户按下 Tab 导致内容按钮（如 `SwiftUIAppKitButton` / `KeyViewProxy`）获焦，方向键即被误拦。改以 `!isFirstResponderEditableText` 为放行条件：只要第一响应者不是文本输入框（需保留光标移动），无论焦点在侧栏还是内容按钮，上下方向键均随时步进选区换页，换页后焦点重置自愈，用户绝不被卡在当前页。容器 `.onKeyPress` 保留上下方向键作为冒泡兜底。
-3. **Return 认领与行级后背**：FKA-on 下，窗口 `performKeyEquivalent` 在第一响应者不是 field editor 时，尝试读取系统级 FKA 焦点轨道（`SelfAccessibility.systemWideFocusedDescription()`）。⚠️ **TCC 权限说明**：自进程 UIElement 检查免权限，但通过 `AXUIElementCreateSystemWide()` 读取跨进程系统级焦点元素受 macOS TCC（辅助功能）门禁控制；应用默认不弹窗索权，未授予辅助功能权限时 `AXIsProcessTrusted()` 为假，系统级读取直接静默返回 nil，事件自然穿透至聚焦行自身的 `.onKeyPress(.return)` 兜底换页（无需任何系统权限）。
-4. **视觉反馈与窗口失焦**：行获焦且窗口处于活跃态（`controlActiveState == .key`）时展示 1pt accent 描边与浅灰底，窗口切至后台时描边自动隐去；选区跟随方向键同步移动。
+**The native focus ring and the arrow keys in every state (round 11, the final
+architecture)**:
 
-**验证（无头，不靠肉眼）**：`NSEvent` mouseDown/mouseUp +
-`NSWindow.sendEvent` 合成点击走真实响应链（无需 Accessibility / 录屏权限）；
-对自己进程可用 `AXUIElement` 读按钮几何自检命中（自家进程无 TCC 弹窗），命中
-12/12；每次点击抓 20 张间隔 35ms 的上部内容带帧 = 240 帧，YAVG 配对分析 ——
-每次换页恰好**一个单帧跳变**、无衰减序列（若仍有 0.2-0.3s 的 settle，会出现
-5-8 个连续中幅配对），点击路径零 `didResize`。⚠️ CA 动画键探针全程
-`animLayers=0`：**SwiftUI 插值对 CALayer 不可见，只有位图捕获能看到**，别拿
-「有没有 CA 动画」当判据。AX 注意点：常量导入为 `String`（传给 AX API 要
-`as CFString`）；`CFArray` 元素用 `CFArrayGetValueAtIndex` + `unsafeBitCast`
-取，配 `AXValueGetTypeID()` 检查。
+1. **The Tab cycle is connected in both directions**: the AppKit level
+   self-driven interception of Tab tried in r10 encroaches on the natural focus
+   order of the content buttons, while the root cause of the sidebar being
+   skipped before, under pure SwiftUI, was the
+   `.focusable(SelfAccessibility.isFullKeyboardAccessOn)` bound to the `rows`
+   container, which blocks the whole sidebar group when FKA is off. Remove the
+   focusable of the container, the selected row uses `.focusable(isSelected)`
+   when FKA is off (with FKA on every row is focusable), Tab then forms a
+   bidirectional reachable cycle of "the sidebar selection <-> the content
+   buttons", and after Tab has walked through all the content buttons it
+   returns smoothly to the sidebar.
+2. **The arrow keys switch the pages in every state**: the old
+   `handleArrowKey` guard demanded
+   `firstResponder == nil || firstResponder === contentView`, and as soon as
+   the user pressed Tab and a content button (such as `SwiftUIAppKitButton` /
+   `KeyViewProxy`) took the focus, the arrow keys were wrongly blocked. The
+   pass condition is now `!isFirstResponderEditableText`: as long as the first
+   responder is not a text input (where the caret has to keep moving), the up
+   and down arrow keys step the selection and switch the pages at any time,
+   whether the focus is in the sidebar or on a content button, and after the
+   switch the focus is reset and self-heals, so the user is never stuck on the
+   current page. The container keeps the up and down `.onKeyPress` as a
+   bubbling backstop.
+3. **The Return claim and the row level fallback**: with FKA on, when the
+   first responder is not a field editor, the window's `performKeyEquivalent`
+   tries to read the system-wide FKA focus track
+   (`SelfAccessibility.systemWideFocusedDescription()`). Warning: **the TCC
+   permission note**: inspecting a UIElement of the own process needs no
+   permission, but reading the cross-process system-wide focus element through
+   `AXUIElementCreateSystemWide()` is gated by the macOS TCC (Accessibility);
+   the app does not prompt for it by default, and when the Accessibility
+   permission has not been granted `AXIsProcessTrusted()` is false, the
+   system-wide read silently returns nil, and the event naturally falls through
+   to the focused row's own `.onKeyPress(.return)` backstop which switches the
+   page (no system permission required).
+4. **The visual feedback and the window losing the focus**: when a row has the
+   focus and the window is active (`controlActiveState == .key`), a 1pt accent
+   stroke and a light gray background are shown; when the window goes to the
+   background the stroke hides itself; the selection moves along with the arrow
+   keys.
 
-无碍项：`LogCard` 自动滚动（`withAnimation(.easeOut 0.15)`）与 `StatusHeroCard`
-的 repeatForever 呼吸动画都拥有自己的事务，`select()` 的钳制不影响它们
-（实测通过）。
+**The verification (headless, not by eye)**: a synthesized click of `NSEvent`
+mouseDown/mouseUp + `NSWindow.sendEvent` goes through the real response chain
+(no Accessibility / screen recording permission needed); `AXUIElement` can be
+used against the own process to read the button geometry and self-check the
+hit (no TCC prompt for one's own process), 12/12 hits; for each click, 20
+frames of the upper content band are captured at 35ms intervals = 240 frames,
+and a YAVG pairing analysis shows that every page switch is exactly **a single
+frame jump**, with no decaying sequence (if a 0.2-0.3s settle were still
+there, 5-8 consecutive medium amplitude pairs would appear), and the click
+path has zero `didResize`. Warning: the CA animation key probe stays at
+`animLayers=0` throughout: **the SwiftUI interpolation is invisible to
+CALayer, only a bitmap capture can see it** -- do not use "is there a CA
+animation" as the criterion. AX notes: the constants are imported as `String`
+(cast them to `as CFString` when passing them to the AX API); the `CFArray`
+elements are taken with `CFArrayGetValueAtIndex` + `unsafeBitCast`, checked
+against `AXValueGetTypeID()`.
+
+Not affected: the auto-scroll of the `LogCard`
+(`withAnimation(.easeOut 0.15)`) and the repeatForever breathing animation of
+the `StatusHeroCard` own their transactions, so the clamps of `select()` do not
+affect them (verified in practice).
 
 ---
 
-## 5. 已实现 / 未实现
+## 5. Implemented / not implemented
 
-### 已实现
+### Implemented
 
-| 能力 | 位置 |
+| Capability | Where |
 |---|---|
-| 环境预检（root、feth sysctl、MTU 上限） | `tk_check_environment` |
-| 设备枚举 + 厂商名/产品名/序列号 | `tk_list_devices` |
-| 会话生命周期（非阻塞启动、状态快照、事件） | `tk_session_*` |
-| 日志捕获与轮询 | `tk_drain_logs` |
-| DHCP / 静态 IP / 撤销 | `tk_net_apply`、`tk_net_clear` |
-| 真实生效状态回读（地址、网关、DNS、主默认路由） | `tk_net_query` |
-| 孤儿 feth 清理 | `tk_cleanup_orphan_interfaces` |
-| 特权 helper + 凭据复核 | `gui/Sources/TetherKitHelper` |
-| App 内一键安装 / 更新 / 卸载特权组件 | `gui/Sources/TetherKitApp/HelperInstaller.swift` |
-| 检查更新（只查不换，每日自动 + 手动菜单） | `gui/Sources/TetherKitApp/UpdateChecker.swift` |
-| Finder 别名自动维护（首次启动建立，聚焦可搜可启动；brew postinstall 有沙箱建不了） | `gui/Sources/TetherKitApp/FinderAlias.swift` |
-| SwiftUI 界面（侧边栏五页：连接 / 网络 / 吞吐 / 日志 / 管理，`SidebarShell` 分页；日志页列表填满页高） | `gui/Sources/TetherKitApp/Views/SidebarShell.swift` |
-| 菜单栏实时速率 + 后台运行（仅菜单栏模式） | `gui/Sources/TetherKitApp/Views/MenuBarPanel.swift` |
-| dev 自截工具（App 窗口自捕成 PNG，无屏幕权限迭代循环） | `gui/Sources/TetherKitApp/Views/UiSelfCapture.swift` |
-| 中英双语（运行期可切，界面 / 库日志 / helper 提示三处同步） | `gui/Sources/TetherKitIPC/Localization.swift`、`tk_set_language` |
+| Environment preflight (root, feth sysctls, MTU ceiling) | `tk_check_environment` |
+| Device enumeration + vendor name / product name / serial number | `tk_list_devices` |
+| Session lifecycle (non-blocking start, status snapshot, events) | `tk_session_*` |
+| Log capture and polling | `tk_drain_logs` |
+| DHCP / static IP / clearing | `tk_net_apply`, `tk_net_clear` |
+| Read-back of the really effective state (address, gateway, DNS, main default route) | `tk_net_query` |
+| Orphan feth cleanup | `tk_cleanup_orphan_interfaces` |
+| Privileged helper + credential re-check | `gui/Sources/TetherKitHelper` |
+| One-click install / update / uninstall of the privileged helper inside the App | `gui/Sources/TetherKitApp/HelperInstaller.swift` |
+| Update check (check only, never replace; daily automatic + manual menu) | `gui/Sources/TetherKitApp/UpdateChecker.swift` |
+| Automatic Finder alias maintenance (created on the first launch, searchable and launchable in Spotlight; the brew postinstall cannot create it because of the sandbox) | `gui/Sources/TetherKitApp/FinderAlias.swift` |
+| SwiftUI interface (five sidebar pages: Connect / Network / Throughput / Log / Manage, paged by `SidebarShell`; the list of the log page fills the page height) | `gui/Sources/TetherKitApp/Views/SidebarShell.swift` |
+| Live rate in the menu bar + background running (menu bar only mode) | `gui/Sources/TetherKitApp/Views/MenuBarPanel.swift` |
+| Dev self capture tool (the App captures its own window into a PNG, so the iteration loop needs no screen recording permission) | `gui/Sources/TetherKitApp/Views/UiSelfCapture.swift` |
+| English user-facing strings (the runtime language switch is kept, and the interface / the library log / the helper messages are switched together) | `gui/Sources/TetherKitIPC/Localization.swift`, `tk_set_language` |
 
-### 未实现 / 已知限制
+### Not implemented / known limitations
 
-| 项 | 说明 |
+| Item | Explanation |
 |---|---|
-| **静态 IP 的 DNS 未经真机验证** | IPConfiguration 只在 DHCP 模式发布 DNS。静态模式我们往它建立的服务上补一个 DNS 键，能否被 IPMonitor 采纳未经验证。因此 `tk_net_query` 一律**回读**真实生效的解析器，界面显示回读结果 —— 赌错了也只是 DNS 不生效，不会有破坏 |
-| **端到端已在真实设备上跑通（DHCP 路径）** | 2026-07-28 用 Android 手机验证：插上 → App 连接 → feth0 经 DHCP 拿到手机网段地址 → 主机与手机双向 ping 通 → iperf3 打出 RX 325 / TX 235 Mbps。**「能上公网」这一步没能验证** —— 本机有 VPN 占着默认路由，走 tether 的流量被劫走，这是测试环境问题不是 GUI 问题。App 退出后会话仍由 helper 持有（后台运行模式，符合设计） |
-| **授权只能输密码，没有指纹** | 系统 API 的限制，不是缺陷。已验证并记录在第 4.5 节。缓解手段是令牌缓存：5 分钟内只问一次 |
-| **热插拔** | `Context::SupportsHotplug()` 存在但未接入；目前靠界面每 2 秒重新枚举 |
-| **IPv6** | 网卡配置只覆盖 IPv4 |
-| **多会话** | helper 同一时刻只允许一个会话 |
-| **App 图标** | 尚无 `.icns`，用系统默认图标 |
-| **只有中文与英文** | 文案表是编译进二进制的两列（不是 `.lproj`，理由见 `Localization.swift` 顶部）。加第三种语言要改 `Language` 枚举与两处 switch，不是加一个目录就行 |
+| **The DNS of the static IP is not verified on a real device** | IPConfiguration publishes DNS only in DHCP mode. In static mode we add a DNS key to the service it created, and whether IPMonitor adopts it has not been verified. Therefore `tk_net_query` always **reads back** the resolver that is really in effect, and the interface shows the read-back result -- if we guessed wrong, at worst the DNS does not take effect, nothing is broken. |
+| **End to end already works on a real device (the DHCP path)** | Verified on 2026-07-28 with an Android phone: plug it in -> the App connects -> feth0 gets an address in the phone's subnet via DHCP -> the host and the phone can ping each other in both directions -> iperf3 measures RX 325 / TX 235 Mbps. **The step "can it reach the public internet" could not be verified** -- a VPN on this machine holds the default route and hijacks the tethered traffic, which is a problem of the test environment and not of the GUI. After the App quits the session is still held by the helper (background running mode, as designed). |
+| **The authorization can only take a password, no fingerprint** | A limitation of the system API, not a defect. Verified and recorded in section 4.5. The mitigation is the token cache: it asks only once every 5 minutes. |
+| **Hot plug** | `Context::SupportsHotplug()` exists but is not wired up; for now the interface re-enumerates every 2 seconds. |
+| **IPv6** | The interface configuration only covers IPv4. |
+| **Multiple sessions** | The helper allows only one session at a time. |
+| **App icon** | There is no `.icns` yet, the default system icon is used. |
+| **English only, for now** | The string table is compiled into the binary as a single column (not `.lproj`, the reason is at the top of `Localization.swift`). The multi-language plumbing is deliberately kept, so adding another language means changing the `Language` enum and two switch statements, it is not just a matter of adding a directory. |
 
 ---
 
-## 6. 构建与安装
+## 6. Build and install
 
 ```bash
-# 1. C++ 部分（产出 libtetherkit.dylib）
+# 1. The C++ part (produces libtetherkit.dylib)
 cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
 cmake --build build -j
 
-# 2. GUI（等价于直接跑 ./gui/Scripts/build-gui.sh）
+# 2. The GUI (equivalent to running ./gui/Scripts/build-gui.sh directly)
 cmake --build build --target gui
 
-# 3. 运行。首次会引导安装特权组件：点按钮、输一次管理员密码即可（见 4.9 节）。
-#    终端替代：sudo ./gui/Scripts/install-helper.sh
+# 3. Run. On the first launch it walks you through installing the privileged
+#    helper: click the button, type the administrator password once (see
+#    section 4.9).
+#    Terminal alternative: sudo ./gui/Scripts/install-helper.sh
 open dist/TetherKit.app
 ```
 
-开发时也可以直接用 SwiftPM，不经过打包脚本：
+During development you can also use SwiftPM directly, without going through
+the packaging script:
 
 ```bash
 export TETHERKIT_LIB_DIR="$PWD/build/lib"
 swift build --package-path gui
-swift test  --package-path gui     # TetherKitIPC + TetherKitUIModel 的单元测试
+swift test  --package-path gui     # the unit tests of TetherKitIPC + TetherKitUIModel
 ```
 
-卸载：「管理」页的「卸载特权组件…」按钮（见 4.9 节），或：
+Uninstall: the "Uninstall the privileged helper?" button on the "Manage" page
+(see section 4.9), or:
 
 ```bash
 sudo ./gui/Scripts/uninstall-helper.sh
 ```
 
-排障入口：
+Troubleshooting entry points:
 
-| 现象 | 先看哪里 |
+| Symptom | Where to look first |
 |---|---|
-| 界面一直显示「需要先安装特权组件」 | `launchctl print system/com.tetherkit.helper` |
-| helper 起不来 | `/var/log/tetherkit-helper.log` |
-| 连接失败 | 界面里的「运行日志」面板（可一键复制） |
-| 装完还是依赖 Homebrew | `otool -L dist/TetherKit.app/Contents/Frameworks/libtetherkit.0.*.dylib` |
-| 点「连接」报「无法还原授权凭据（-60005）」 | App 侧提前释放了 AuthorizationRef，见第 4.4 节第 4 条 |
-| 界面显示「特权组件需要更新」 | 改过 XPC 协议但没重装 helper，点「更新特权组件」（或跑安装脚本） |
-| 点「安装特权组件」报「不带安装载荷」 | 跑的是 `swift run` 的裸可执行文件，载荷只在 build-gui.sh 组装的 .app 里；用终端脚本装 |
-| 授权框只有密码、没有指纹 | 这是系统 API 的限制，不是缺陷，见第 4.5 节 |
-| 设备拔掉重插后点「连接」报「会话已经在运行了」 | helper 是旧版（失败态旧会话未被清理），重装 helper |
-| 双击访达图标没反应 | 已修复：`applicationShouldHandleReopen` 里重新呈现主窗口（AppKit 自管窗口之后才拿得到这个回调） |
+| The interface keeps showing "The privileged helper must be installed" | `launchctl print system/com.tetherkit.helper` |
+| The helper does not come up | `/var/log/tetherkit-helper.log` |
+| The connection fails | the "Log" panel in the interface (one click to copy) |
+| After the install it still depends on Homebrew | `otool -L dist/TetherKit.app/Contents/Frameworks/libtetherkit.0.*.dylib` |
+| Clicking "Connect" reports "Cannot restore the authorization credential (-60005)" | The App side released the AuthorizationRef too early, see item 4 in section 4.4 |
+| The interface shows "The privileged helper needs updating" | The XPC protocol was changed but the helper was not reinstalled; click "Update the helper" (or run the install script) |
+| Clicking "Install the helper" reports "This copy of TetherKit carries no installer payload" | The bare executable of `swift run` is running; the payload exists only in the .app assembled by build-gui.sh; install it with the terminal script |
+| The authorization box only takes a password, no fingerprint | This is a limitation of the system API, not a defect, see section 4.5 |
+| After unplugging and replugging the device, clicking "Connect" reports "A session is already running" | The helper is an old version (a failed state old session was not cleaned up); reinstall the helper |
+| Double-clicking the Finder icon does nothing | Already fixed: the main window is presented again in `applicationShouldHandleReopen` (this callback only became available once AppKit managed the window itself) |

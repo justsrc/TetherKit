@@ -9,13 +9,16 @@
 namespace tetherkit::usb {
 namespace {
 
-/// 事件循环单次 handle_events 的阻塞上限。
+/// Upper bound on how long a single handle_events call may block in the event
+/// loop.
 ///
-/// 为什么可以用这么长的超时：darwin 后端给所有 bulk transfer 打了
-/// USBI_TRANSFER_OS_HANDLES_TIMEOUT（超时由 IOKit 负责），而
-/// libusb_get_next_timeout 会跳过带该标志的 transfer —— 所以只要在飞的都是
-/// bulk，它恒返回「无超时」，事件线程完全靠 event pipe 唤醒即可。
-/// 这里给 250 ms 只是为了让 RequestStop() 能在一个周期内被看到。
+/// Why such a long timeout is fine: the darwin backend marks every bulk
+/// transfer with USBI_TRANSFER_OS_HANDLES_TIMEOUT (IOKit owns the timeout),
+/// and libusb_get_next_timeout skips transfers carrying that flag -- so as
+/// long as everything in flight is bulk, it always reports "no timeout" and
+/// the event thread can rely purely on the event pipe to wake it.
+/// The 250 ms here exists only so that RequestStop() is seen within one
+/// cycle.
 constexpr long kEventLoopTimeoutSeconds = 0;
 constexpr long kEventLoopTimeoutMicros = 250'000;
 
@@ -42,8 +45,9 @@ Context::~Context() {
   RequestStop();
 
   if (event_thread_.joinable()) {
-    // libusb_interrupt_event_handler 会往 event pipe 写一个字节，让阻塞在
-    // handle_events 里的线程立刻返回。没有它就得等满一个超时周期。
+    // libusb_interrupt_event_handler writes one byte to the event pipe so the
+    // thread blocked in handle_events returns immediately. Without it we
+    // would have to wait out a full timeout period.
     if (context_ != nullptr) {
       ::libusb_interrupt_event_handler(context_);
     }
@@ -86,16 +90,18 @@ void Context::RunEventLoop() noexcept {
   timeout.tv_usec = kEventLoopTimeoutMicros;
 
   while (!stop_requested_.load(std::memory_order_acquire)) {
-    // 用带超时的版本而非 libusb_handle_events()：后者内部超时固定 60 秒，
-    // 停机响应太慢；也不用 libusb_handle_events_completed()，因为我们的退出
-    // 条件是自己的原子标志而非某个 transfer 的完成。
+    // Use the timeout-taking variant rather than libusb_handle_events(): the
+    // latter's internal timeout is fixed at 60 seconds, far too slow for
+    // shutdown. Not libusb_handle_events_completed() either, because our exit
+    // condition is our own atomic flag, not some transfer's completion.
     const int rc = ::libusb_handle_events_timeout_completed(context_, &timeout, nullptr);
 
     if (rc == LIBUSB_SUCCESS || rc == LIBUSB_ERROR_INTERRUPTED) {
       continue;
     }
     if (rc == LIBUSB_ERROR_NO_DEVICE) {
-      // 设备拔了。不是事件循环的错，交给上层的重连逻辑处理，这里继续跑。
+      // The device was unplugged. Not the event loop's fault; upper-level
+      // reconnect logic handles it, so keep running here.
       TETHERKIT_DEBUG_TR(Msg::kUsbEventLoopNoDevice);
       continue;
     }

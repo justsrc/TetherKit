@@ -2,27 +2,32 @@ import CTetherKit
 import Foundation
 import TetherKitIPC
 
-/// libtetherkit 的进程级接口：版本、环境预检、设备枚举、日志。
+/// Process-wide interface to libtetherkit: version, environment preflight,
+/// device enumeration, and logging.
 ///
-/// 这一组**不需要 root**，App 与 helper 都能调。
+/// This group does not require root; both the App and the helper can call it.
 public enum TetherKitLibrary {
-    /// 一次最多枚举多少台设备。
+    /// Maximum number of devices enumerated in one call.
     ///
-    /// 16 是个不会被碰到的上限：一台机器同时插 16 台 RNDIS 设备已经离谱了，
-    /// 而定长数组换来的是「不用管内存」。真超了 tk_list_devices 会如实汇报总数，
-    /// 我们只是不展示多出来的部分。
+    /// 16 is a limit that will never be hit: 16 RNDIS devices plugged into one
+    /// machine at the same time is already absurd, and a fixed array buys "no
+    /// memory management". If it really is exceeded, tk_list_devices reports the
+    /// true total; we simply do not show the extra entries.
     private static let deviceCapacity = 16
 
-    /// 一次最多取走多少条日志。
+    /// Maximum number of log entries drained in one call.
     ///
-    /// 与 C 侧环形缓冲的容量（256）一致：小了会永远取不完积压，大了没意义。
+    /// Matches the C-side ring buffer capacity (256): smaller would never fully
+    /// drain a backlog; larger is meaningless.
     private static let logCapacity = 256
 
-    /// 把界面语言同步给 libtetherkit。
+    /// Sync the UI language to libtetherkit.
     ///
-    /// 必须调 —— 否则会出现「界面是英文、日志卡里的库日志是中文」这种割裂。
-    /// 已经排队的日志不会被重新渲染（它们在产生的那一刻就已经是字符串了），
-    /// 所以越早调越好；语言切换时新产生的日志立刻就是新语言。
+    /// Must be called -- otherwise the UI would be in one language while library
+    /// logs in the log card would be in another. Logs already queued are not
+    /// re-rendered (they became strings at the moment they were produced), so the
+    /// sooner this is called the better; after a language switch, newly produced
+    /// logs are immediately in the new language.
     public static func setLanguage(_ language: Language) {
         tk_set_language(language.cValue)
     }
@@ -35,7 +40,8 @@ public enum TetherKitLibrary {
                 String(fixedCArray: info.libusb))
     }
 
-    /// 运行环境预检。永远成功 —— 「环境不合格」是结果，不是失败。
+    /// Runtime environment preflight. Always succeeds -- "environment not
+    /// acceptable" is a result, not a failure.
     public static func checkEnvironment() -> EnvironmentReport {
         var raw = tk_environment_t()
         _ = tk_check_environment(&raw)
@@ -50,10 +56,11 @@ public enum TetherKitLibrary {
             libusbVersion: version.libusb)
     }
 
-    /// 枚举 RNDIS 设备。
+    /// Enumerate RNDIS devices.
     ///
-    /// - Parameter readStrings: 是否读取厂商名 / 产品名 / 序列号。这需要打开
-    ///   设备，会话运行期间设备已被独占，那时应传 false 免得白试一遍。
+    /// - Parameter readStrings: Whether to read manufacturer / product / serial.
+    ///   This requires opening the device; while a session is running the device
+    ///   is held exclusively, so pass false then to avoid a pointless attempt.
     public static func listDevices(readStrings: Bool = true) throws -> [DeviceDescriptor] {
         var buffer = [tk_device_info_t](repeating: tk_device_info_t(), count: deviceCapacity)
         var count = 0
@@ -76,9 +83,9 @@ public enum TetherKitLibrary {
         }
     }
 
-    // MARK: - 日志
+    // MARK: - Logs
 
-    /// 打开日志捕获并设定级别。
+    /// Enable log capture and set the level.
     public static func startLogCapture(level: LogLevel = .info) {
         tk_set_log_level(level.rawValue)
         tk_enable_log_capture(true)
@@ -88,7 +95,8 @@ public enum TetherKitLibrary {
         tk_enable_log_capture(false)
     }
 
-    /// 取走已缓冲的日志。返回条目与「因缓冲写满被丢弃的条数」。
+    /// Drain buffered logs. Returns the entries and the number dropped because
+    /// the buffer was full.
     public static func drainLogs() -> (entries: [LogEntry], dropped: UInt64) {
         var buffer = [tk_log_record_t](repeating: tk_log_record_t(), count: logCapacity)
         var dropped: UInt64 = 0
@@ -104,12 +112,14 @@ public enum TetherKitLibrary {
         return (Array(entries), dropped)
     }
 
-    // MARK: - 孤儿网卡
+    // MARK: - Orphan interfaces
 
-    /// 清理进程被强杀后残留在内核里的 feth 接口。需要 root。
+    /// Clean up feth interfaces left in the kernel after the process was killed.
+    /// Requires root.
     ///
-    /// helper 应在启动时无条件调一次：上一次运行若被 SIGKILL，网卡还留在内核里，
-    /// 而 RAII 与信号处理都救不了那种情况。
+    /// The helper should call this unconditionally on startup: if the previous
+    /// run was killed with SIGKILL, interfaces remain in the kernel, and neither
+    /// RAII nor signal handlers can recover from that case.
     @discardableResult
     public static func cleanupOrphanInterfaces() throws -> Int {
         var removed = 0

@@ -1,15 +1,18 @@
 import CTetherKit
 import Foundation
 
-// C 的定长 char 数组在 Swift 里被导入成**元组**（`char[16]` → 16 个 CChar 的
-// 元组），既不能下标访问也不能直接和 String 互转。这里集中处理这件事，
-// 避免每个字段都写一遍不安全的指针操作。
+// C fixed-size char arrays are imported into Swift as tuples (`char[16]` -> a
+// tuple of 16 CChars), which cannot be subscripted or converted to/from String
+// directly. This is handled centrally here to avoid repeating unsafe pointer
+// operations for every field.
 
 extension String {
-    /// 从 C 的定长 char 数组（导入为元组）读出字符串。
+    /// Read a string from a C fixed-size char array (imported as a tuple).
     ///
-    /// 不用 `String(cString:)`：那要求缓冲一定有 NUL 结尾，一旦 C 侧写满了整个
-    /// 缓冲就会越界读。这里改成「扫到 NUL 或扫到底」，两种情况都安全。
+    /// Does not use `String(cString:)`: that requires the buffer to be
+    /// NUL-terminated, which would read past the end if the C side filled the
+    /// entire buffer. This scans until NUL or the end, which is safe in both
+    /// cases.
     init<T>(fixedCArray tuple: T) {
         var mutableCopy = tuple
         self = withUnsafeBytes(of: &mutableCopy) { raw in
@@ -19,26 +22,29 @@ extension String {
     }
 }
 
-/// 把字符串写进 C 的定长 char 数组，保证 NUL 结尾。
+/// Write a string into a C fixed-size char array, guaranteeing NUL termination.
 ///
-/// 超长时截断，且**截断落在 UTF-8 字符边界上** —— 按字节硬切会在缓冲末尾留下
-/// 半个字符，C 侧再读出来就是一串替换字符。（C 侧的 CopyText 有同样的处理，
-/// 两个方向都得管。）
+/// Truncates when too long, and truncation falls on a UTF-8 character boundary
+/// -- cutting on a raw byte would leave half a character at the end of the
+/// buffer, which would read back on the C side as replacement characters. (C's
+/// CopyText handles this the same way; both directions must take care of it.)
 func setFixedCArray<T>(_ tuple: inout T, to string: String) {
     withUnsafeMutableBytes(of: &tuple) { raw in
         writeCString(string, into: raw)
     }
 }
 
-/// 把字符串写进一段原始缓冲，NUL 结尾 + UTF-8 边界安全截断。
+/// Write a string into a raw buffer with NUL termination and UTF-8-boundary-safe
+/// truncation.
 private func writeCString(_ string: String, into raw: UnsafeMutableRawBufferPointer) {
     guard raw.count > 0 else { return }
     for index in raw.indices { raw[index] = 0 }
 
     let utf8 = Array(string.utf8)
     var length = min(utf8.count, raw.count - 1)
-    // length < utf8.count 说明截断了；若切点落在多字节序列中间（续接字节的高两位
-    // 是 0b10），一路退到该序列的起点。
+    // length < utf8.count means truncation occurred; if the cut falls inside a
+    // multibyte sequence (continuation bytes have the top two bits 0b10), walk
+    // back to the start of that sequence.
     while length > 0, length < utf8.count, utf8[length] & 0xC0 == 0x80 {
         length -= 1
     }
@@ -47,9 +53,11 @@ private func writeCString(_ string: String, into raw: UnsafeMutableRawBufferPoin
     }
 }
 
-/// 把字符串写进 C 的二维定长数组的第 row 行（如 `char dns[4][46]`）。
+/// Write a string into row `row` of a C 2D fixed-size array (for example
+/// `char dns[4][46]`).
 ///
-/// 二维数组在 Swift 里是「元组的元组」，没法用下标，只能按字节偏移定位。
+/// A 2D array is imported into Swift as a "tuple of tuples" and cannot be
+/// subscripted, so it must be located by byte offset.
 func setFixedCArrayRow<T>(_ tuple: inout T, row: Int, stride: Int, to string: String) {
     withUnsafeMutableBytes(of: &tuple) { raw in
         let start = row * stride
@@ -58,7 +66,7 @@ func setFixedCArrayRow<T>(_ tuple: inout T, row: Int, stride: Int, to string: St
     }
 }
 
-/// 读 C 的二维定长数组的第 row 行。
+/// Read row `row` of a C 2D fixed-size array.
 func fixedCArrayRow<T>(_ tuple: T, row: Int, stride: Int) -> String {
     var mutableCopy = tuple
     return withUnsafeBytes(of: &mutableCopy) { raw in
@@ -69,7 +77,8 @@ func fixedCArrayRow<T>(_ tuple: T, row: Int, stride: Int) -> String {
     }
 }
 
-/// 把 6 字节 MAC 元组渲染成 "aa:bb:cc:dd:ee:ff"；全 0 时返回空串。
+/// Render a 6-byte MAC tuple as "aa:bb:cc:dd:ee:ff"; returns an empty string
+/// when all zeros.
 func formatMAC<T>(_ tuple: T) -> String {
     var mutableCopy = tuple
     return withUnsafeBytes(of: &mutableCopy) { raw in

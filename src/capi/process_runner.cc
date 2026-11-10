@@ -15,7 +15,7 @@ extern char** environ;  // NOLINT(cppcoreguidelines-avoid-non-const-global-varia
 namespace tetherkit::capi {
 namespace {
 
-/// 读满一个管道直到对端关闭。
+/// Reads a pipe until the far end closes it.
 std::string ReadAll(int fd) {
   std::string content;
   std::array<char, 4096> buffer{};
@@ -25,7 +25,8 @@ std::string ReadAll(int fd) {
       content.append(buffer.data(), static_cast<std::size_t>(count));
       continue;
     }
-    // count == 0 是 EOF；EINTR 要重试，其余错误当作读完。
+    // count == 0 is EOF; EINTR has to be retried, every other error is
+    // treated as "done reading".
     if (count < 0 && errno == EINTR) {
       continue;
     }
@@ -36,10 +37,11 @@ std::string ReadAll(int fd) {
 
 Result<ProcessResult> Spawn(std::string_view executable,
                             const std::vector<std::string>& arguments) {
-  // ---- 组装 argv ----
+  // ---- Assemble argv ----
   //
-  // posix_spawn 要 char* const[]，而我们只有 const 字符串。这些指针在
-  // posix_spawn 返回前不会被修改，按 POSIX 规定这样传是合法的。
+  // posix_spawn wants a char* const[], but we only have const strings. These
+  // pointers are not modified before posix_spawn returns, and POSIX says
+  // passing them that way is legal.
   const std::string executable_path{executable};
   std::vector<char*> argv;
   argv.reserve(arguments.size() + 2);
@@ -49,7 +51,7 @@ Result<ProcessResult> Spawn(std::string_view executable,
   }
   argv.push_back(nullptr);
 
-  // ---- 建管道收输出 ----
+  // ---- Create the pipe to collect the output ----
   std::array<int, 2> pipe_fds{-1, -1};
   if (::pipe(pipe_fds.data()) != 0) {
     return std::unexpected(Error::FromErrno(0, Tr(Msg::kCapiPipeFailed)));
@@ -61,7 +63,8 @@ Result<ProcessResult> Spawn(std::string_view executable,
     ::close(pipe_fds[1]);
     return std::unexpected(Error::FromErrno(rc, Tr(Msg::kCapiSpawnFileActionsFailed)));
   }
-  // 子进程：关掉读端，把写端接到 stdout 与 stderr，然后关掉原始写端。
+  // Child: close the read end, dup the write end onto stdout and stderr, then
+  // close the original write end.
   ::posix_spawn_file_actions_addclose(&actions, pipe_fds[0]);
   ::posix_spawn_file_actions_adddup2(&actions, pipe_fds[1], STDOUT_FILENO);
   ::posix_spawn_file_actions_adddup2(&actions, pipe_fds[1], STDERR_FILENO);
@@ -71,8 +74,9 @@ Result<ProcessResult> Spawn(std::string_view executable,
   const int spawn_rc =
       ::posix_spawn(&child, executable_path.c_str(), &actions, nullptr, argv.data(), environ);
   ::posix_spawn_file_actions_destroy(&actions);
-  // 父进程必须立刻关掉写端，否则 ReadAll 永远等不到 EOF —— 自己还握着一个
-  // 写端，管道就不会关。这是最经典的 pipe 死锁。
+  // The parent must close the write end immediately, otherwise ReadAll waits
+  // for EOF forever -- we still hold a write end ourselves, so the pipe never
+  // closes. This is the most classic pipe deadlock.
   ::close(pipe_fds[1]);
 
   if (spawn_rc != 0) {
@@ -81,8 +85,9 @@ Result<ProcessResult> Spawn(std::string_view executable,
         Error::FromErrno(spawn_rc, Tr(Msg::kCapiExecFailed, executable_path)));
   }
 
-  // 必须**先读空管道再 waitpid**：反过来的话，子进程写满管道缓冲（64 KiB）后
-  // 会阻塞在 write 上，而我们阻塞在 waitpid 上，双方都不动。
+  // The pipe must be **drained before waitpid**: the other way round, the
+  // child fills the pipe buffer (64 KiB), blocks in write(), and we block in
+  // waitpid() -- neither side moves.
   ProcessResult result;
   result.output = ReadAll(pipe_fds[0]);
   ::close(pipe_fds[0]);
@@ -98,7 +103,8 @@ Result<ProcessResult> Spawn(std::string_view executable,
   if (WIFEXITED(status)) {
     result.exit_code = WEXITSTATUS(status);
   } else if (WIFSIGNALED(status)) {
-    // 被信号打死：用 128+signo 表示，和 shell 的惯例一致，便于对着日志排查。
+    // Killed by a signal: reported as 128+signo, following the shell
+    // convention, which makes reading the log easier.
     result.exit_code = 128 + WTERMSIG(status);
   } else {
     result.exit_code = -1;

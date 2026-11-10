@@ -2,22 +2,28 @@ import AppKit
 import SwiftUI
 import TetherKitIPC
 
-/// TetherKit 的图形界面入口。
+/// The graphical interface entry point of TetherKit.
 ///
-/// App 以**普通用户身份**运行，不需要任何特权。所有需要 root 的事（建虚拟网卡、
-/// 开 BPF、配 IP）都交给 tetherkit-helper，每次调用附带一份用户确认过的授权
-/// 凭据。详见 docs/GUI-ARCHITECTURE.md。
+/// The app runs as an **ordinary user** and needs no privileges of its own.
+/// Everything that requires root (creating the virtual interface, opening
+/// BPF, configuring the IP) is handed to tetherkit-helper, each call
+/// carrying an authorization credential the user confirmed. See
+/// docs/GUI-ARCHITECTURE.md.
 ///
-/// ★ 后台运行模式 ★
+/// Background running mode:
 ///
-///   关闭主窗口不退出：App 退到「仅菜单栏」（accessory 激活策略，程序坞图标
-///   一并隐藏），菜单栏项继续显示实时速率。会话本来就跑在 helper 里，App 的
-///   存在与否都不影响它 —— 但只要 App 活着，用户就有一个随时能看一眼的入口。
+///   Closing the main window does not quit: the app drops to "menu bar
+///   only" (the accessory activation policy hides the dock icon too), and
+///   the menu bar item keeps showing live rates. The session runs in the
+///   helper anyway, so whether the app exists does not affect it -- but as
+///   long as the app lives, the user has an entry point they can glance at
+///   any time.
 ///
-///   轮询在窗口关闭后**不**停（菜单栏靠它喂数据），只是在「窗口关着且会话
-///   没跑」时放慢到 2 秒一次，见 AppModel.pollDelay。
+///   Polling does **not** stop when the window closes (the menu bar feeds
+///   on it); it only slows down to once every 2 seconds while "the window
+///   is closed and no session is running", see AppModel.pollDelay.
 ///
-/// ★ Window ownership ★
+/// Window ownership
 ///
 ///   The main window is an AppKit-managed window (`MainWindowManager`):
 ///   a plain NSWindow (fullSizeContentView, transparent, title hidden)
@@ -30,10 +36,14 @@ struct TetherKitApplication: App {
     @NSApplicationDelegateAdaptor(TetherKitAppDelegate.self) private var appDelegate
 
     init() {
-        // CI 冒烟与手动补建用的模式：建完 Finder 别名即退，不进 GUI。
-        // 恒 exit 0 —— 别名建不上（受管机器之类）不该把流程判失败，结果打给
-        // stdout。（brew 的 postinstall 也在沙箱里、写不了 /Applications ——
-        // 实测确认 —— 所以正常安装路径靠下面的首次启动自动建立。）
+        // The mode used by the CI smoke test and for manual rebuilds:
+        // create the Finder alias and exit, never entering the GUI.
+        // Always exit 0 -- failing to create the alias (a managed machine
+        // and the like) must not fail the flow, and the result goes to
+        // stdout. (The brew postinstall also runs in a sandbox and cannot
+        // write /Applications -- confirmed by measurement -- so the normal
+        // install path relies on the automatic creation at first launch
+        // below.)
         if CommandLine.arguments.dropFirst().contains("--install-finder-alias") {
             print(FinderAlias.ensure(for: Bundle.main.bundleURL))
             exit(0)
@@ -48,8 +58,9 @@ struct TetherKitApplication: App {
             NSApplication.shared.setActivationPolicy(.regular)
         }
         TetherKitAppDelegate.launchModel = model
-        // 正常启动：后台顺手校一遍 —— 缺了就补，brew upgrade 换了 Cellar
-        // 路径后目标漂移也会被重写。
+        // Normal launch: check it in the background as a side task -- add
+        // it if missing, and rewrite it if the target drifted after brew
+        // upgrade changed the Cellar path.
         let bundleURL = Bundle.main.bundleURL
         Task.detached(priority: .utility) {
             FinderAlias.ensure(for: bundleURL)
@@ -60,7 +71,7 @@ struct TetherKitApplication: App {
         // Persistent menu bar item: icon + live rate.
         // The .window style gives it a small panel, which can hold a
         // Language submenu and live values that menu items cannot.
-        // Commands live on this scene — there is no Window scene
+        // Commands live on this scene -- there is no Window scene
         // anymore; the main window belongs to AppKit (see
         // MainWindowManager).
         MenuBarExtra {
@@ -70,34 +81,42 @@ struct TetherKitApplication: App {
         }
         .menuBarExtraStyle(.window)
         .commands {
-            // 「新建窗口」对单窗口应用没有意义，去掉免得用户点了没反应。
+            // "New Window" makes no sense for a single-window app; drop
+            // it so the user does not click something that does nothing.
             CommandGroup(replacing: .newItem) {}
-            // ⌘W: no Window scene means no built-in system Close, so
+            // Cmd-W: no Window scene means no built-in system Close, so
             // this menu item hides the main window and drops to
             // menu-bar mode (same as the red close button).
             CommandGroup(after: .newItem) { FileMenuItems(model: model) }
-            // 「检查更新…」放在 App 菜单「关于」下面的惯例位置。
-            // 只查不换 —— 原因见 UpdateChecker.swift 的类型注释。
+            // "Check for Updates..." goes in the customary place under
+            // "About" in the app menu. It only checks and never replaces --
+            // the reason is in the type notes of UpdateChecker.swift.
             CommandGroup(after: .appInfo) { AppMenuItems(model: model) }
         }
     }
 }
 
-/// App 菜单里 TetherKit 自己的那几项。
+/// TetherKit's own items in the app menu.
 ///
-/// ★ 为什么要包成一个 View，而不是把 Button 直接摊在 CommandGroup 里 ★
+/// Why this is wrapped in a View instead of spreading the Buttons directly
+/// inside the CommandGroup:
 ///
-///   摊开写的话，每个 Button 的标签各自是一个独立的表达式，SwiftUI 只会在
-///   「它依赖的东西变了」时重算。而文案来自全局查表，`L(.menuCheckForUpdates)`
-///   不依赖任何 @Observable 属性 —— 于是切完语言，语言菜单自己变了（它读了
-///   `languagePreference`），旁边的「检查更新…」却还是旧语言。实测确认过。
+///   Spread out, each Button's label is an independent expression, and
+///   SwiftUI only re-evaluates it when "something it depends on changed".
+///   The strings come from a global table lookup, so
+///   `L(.menuCheckForUpdates)` depends on no @Observable property -- after
+///   a language switch the language menu updated itself (it reads
+///   `languagePreference`) while the "Check for Updates..." next to it
+///   kept the old language. Confirmed by measurement.
 ///
-///   包成一个 View 并在体里读一次 `languageRevision`，整组就一起重算了。
+///   Wrapping the group in a View and reading `languageRevision` once in
+///   its body re-evaluates the whole group together.
 private struct AppMenuItems: View {
     var model: AppModel
 
     var body: some View {
-        // 读它就是为了建立依赖，值本身用不上。
+        // Read it to establish the dependency; the value itself is not
+        // used.
         let _ = model.languageRevision
 
         Button(L(.menuCheckForUpdates)) {
@@ -110,11 +129,13 @@ private struct AppMenuItems: View {
     }
 }
 
-/// App 菜单里的语言选择。
+/// The language choice in the App menu.
 ///
-/// 每一项都直接写母语名字（「中文」/「English」），不跟随当前界面语言翻译 ——
-/// 语言菜单是给「现在看不懂界面」的人用的，把选项也翻译掉就等于没有出口。
-/// 「跟随系统」是唯一例外：它描述的是行为而非语言，所以随界面走。
+/// Every option shows its native name ("English") and is deliberately not
+/// translated with the interface: the menu exists for the person who cannot
+/// read the interface right now, so the way out must stay readable.
+/// "Follow system" is the one exception: it describes behavior, not a
+/// language, so it follows the interface.
 private struct LanguageMenu: View {
     var model: AppModel
 
@@ -122,7 +143,6 @@ private struct LanguageMenu: View {
         Menu(L(.languageMenuTitle)) {
             Picker(L(.languageLabel), selection: Bindable(model).languagePreference) {
                 Text(L(.languageSystem)).tag(LanguagePreference.system)
-                Text(verbatim: "中文").tag(LanguagePreference.chinese)
                 Text(verbatim: "English").tag(LanguagePreference.english)
             }
             .pickerStyle(.inline)
@@ -131,7 +151,7 @@ private struct LanguageMenu: View {
     }
 }
 
-/// File ▸ Close Window (⌘W).
+/// File > Close Window (Cmd-W).
 ///
 /// Same reason as AppMenuItems above: a flat Button in a CommandGroup
 /// picks its label from the global string table, which depends on no
@@ -159,13 +179,17 @@ struct MainWindowRoot: View {
         ContentView(model: model)
             .frame(width: Design.Window.width, height: Design.Window.height)
             .handleSelfCaptureRequest()
-            // 文案来自全局查表，改语言不会让任何 @Observable 属性「看起来」变了，
-            // SwiftUI 因此不会重算视图体。用一个显式的版本号做 identity，
-            // 强制整棵树重建 —— 语言切换是极低频动作，这点代价无所谓。
+            // The strings come from a global table lookup, so changing the
+            // language makes no @Observable property "look" changed and
+            // SwiftUI therefore does not re-evaluate the view body. An
+            // explicit revision number is used as the identity to force the
+            // whole tree to rebuild -- a language switch is an extremely
+            // rare action, so the cost does not matter.
             .id(model.languageRevision)
             .task {
-                // 轮询在这里启动（幂等）。窗口关闭后它继续跑 ——
-                // 这正是菜单栏能实时更新的前提。
+                // Polling starts here (idempotent). It keeps running
+                // after the window closes -- that is exactly what lets the
+                // menu bar update in real time.
                 model.start()
             }
     }
@@ -200,7 +224,7 @@ final class TetherKitAppDelegate: NSObject, NSApplicationDelegate {
         return true
     }
 
-    /// Never quit just because the last window closed — the app is a
+    /// Never quit just because the last window closed -- the app is a
     /// menu-bar accessory by design. Close hides the window; the
     /// menu-bar item stays live.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

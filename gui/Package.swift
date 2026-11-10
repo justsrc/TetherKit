@@ -1,40 +1,48 @@
 // swift-tools-version: 5.9
 //
-// TetherKit 的图形界面。
+// The graphical interface of TetherKit.
 //
-// ★ 为什么是 SwiftPM 而不是 CMake 或 Xcode 工程 ★
+// Why SwiftPM rather than CMake or an Xcode project:
 //
-//   * CMake 的 Swift 支持只在 Ninja / Xcode 生成器下可用，而本仓库用的是
-//     Unix Makefiles，硬换生成器会打扰现有的 C++ 构建流程；
-//   * Xcode 工程文件是不可读、不可靠地手写的 XML，进版本库只会带来合并冲突；
-//   * SwiftPM 只需要一个 Package.swift，`swift build` 即可，和源码分发
-//     （Homebrew formula）的路线也一致。
+//   * CMake's Swift support only works with the Ninja / Xcode generators,
+//     while this repository uses Unix Makefiles, and switching generators
+//     would disturb the existing C++ build flow;
+//   * An Xcode project file is XML that cannot be read or written
+//     reliably by hand, and putting it into version control only brings
+//     merge conflicts;
+//   * SwiftPM only needs a Package.swift, `swift build` is enough, and it
+//     matches the source distribution route (the Homebrew formula).
 //
-//   .app 包由 Scripts/build-gui.sh 组装 —— SwiftPM 只产出可执行文件，
-//   Info.plist、图标、内嵌 dylib 都在脚本里拼。
+//   The .app bundle is assembled by Scripts/build-gui.sh -- SwiftPM only
+//   produces the executable; the Info.plist, the icon and the embedded
+//   dylib are all put together in the script.
 //
-// ★ 怎么找到 libtetherkit ★
+// How libtetherkit is found:
 //
-//   C++ 侧先构建，产物在 <repo>/build/lib。路径通过环境变量传进来：
+//   The C++ side is built first, and its product lands in
+//   <repo>/build/lib. The path comes in through an environment variable:
 //
 //     export TETHERKIT_LIB_DIR=$PWD/build/lib
 //     swift build --package-path gui
 //
-//   Scripts/build-gui.sh 会替你设好。没设时退回仓库默认的 build/lib，
-//   这样在仓库里直接 `swift build` 也能用。
+//   Scripts/build-gui.sh sets it for you. Without it the repository
+//   default build/lib is used, so `swift build` inside the repository
+//   works too.
 import Foundation
 import PackageDescription
 
-/// libtetherkit 所在目录。
+/// The directory libtetherkit lives in.
 ///
-/// 用绝对路径：SwiftPM 的工作目录随调用方式变化，相对路径会在
-/// `swift build --package-path gui` 与 `cd gui && swift build` 之间给出不同结果。
+/// An absolute path: SwiftPM's working directory depends on how it is
+/// invoked, and a relative path would give different results between
+/// `swift build --package-path gui` and `cd gui && swift build`.
 let libraryDirectory: String = {
     if let fromEnvironment = ProcessInfo.processInfo.environment["TETHERKIT_LIB_DIR"],
        !fromEnvironment.isEmpty {
         return fromEnvironment
     }
-    // Package.swift 位于 <repo>/gui，因此 ../build/lib 就是默认产物目录。
+    // Package.swift sits in <repo>/gui, so ../build/lib is the default
+    // product directory.
     let packageDirectory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
     return packageDirectory
         .deletingLastPathComponent()
@@ -42,26 +50,37 @@ let libraryDirectory: String = {
         .path
 }()
 
-/// 链接 libtetherkit 所需的全部标志。
+/// All the flags needed to link libtetherkit.
 ///
-/// 这里必须用 unsafeFlags —— SwiftPM 没有「加一个库搜索路径」的安全接口。
-/// 本包是根包、不会被别人依赖，unsafeFlags 的限制不适用。
+/// This has to use unsafeFlags -- SwiftPM has no safe interface for
+/// "add a library search path". This package is a root package and will
+/// not be depended on by others, so the unsafeFlags restriction does not
+/// apply.
 let tetherkitLinkerSettings: [LinkerSetting] = [
     .unsafeFlags([
         "-L\(libraryDirectory)",
-        // rpath 必须用 -Xlinker 逐段传给链接器。
-        // 写成 gcc 风格的 "-Wl,-rpath,..." 会被 swiftc 当成自己的参数，
-        // 报「unknown argument」—— 这不是链接错误，而是驱动层就拒了。
+        // The rpath has to be passed to the linker in pieces via -Xlinker.
+        // Written in the gcc style "-Wl,-rpath,...", swiftc takes it as
+        // its own argument and reports "unknown argument" -- that is not
+        // a link error, the driver layer simply refuses it.
         //
-        // 三条 rpath 各有用途，**顺序有讲究**（dyld 按声明顺序逐条试）：
-        //   1. ../Frameworks —— 装进 .app 之后 dylib 在那里；
-        //   2. 可执行文件同级 —— helper 是裸可执行文件，dylib 就在它旁边；
-        //   3. 构建产物目录 —— 开发时 `swift run` 直接能跑。
+        // The three rpaths each have a purpose, and the **order matters**
+        // (dyld tries them one by one in declaration order):
+        //   1. ../Frameworks -- that is where the dylib is once the app
+        //      is installed into a .app;
+        //   2. next to the executable -- the helper is a bare executable
+        //      and the dylib sits right next to it;
+        //   3. the build product directory -- so `swift run` works
+        //      directly during development.
         //
-        // 构建目录必须排在**最后**：它是一个绝对路径，在开发机上一定存在。
-        // 排在前面的话，打好包的 .app 在本机加载的仍是构建目录里的那份，
-        // 内嵌的副本永远得不到验证 —— 等换台机器才暴露，而那时已经晚了。
-        // （Scripts/build-gui.sh 还会把这条 rpath 从发布产物里彻底删掉。）
+        // The build directory has to come **last**: it is an absolute
+        // path and therefore always exists on the development machine.
+        // Put it first and a packaged .app still loads the copy in the
+        // build directory on this machine, so the embedded copy never
+        // gets verified -- that only shows up on another machine, and by
+        // then it is too late.
+        // (Scripts/build-gui.sh also removes this rpath from the release
+        // artifacts entirely.)
         "-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks",
         "-Xlinker", "-rpath", "-Xlinker", "@executable_path",
         "-Xlinker", "-rpath", "-Xlinker", libraryDirectory,
@@ -73,8 +92,8 @@ let tetherkitLinkerSettings: [LinkerSetting] = [
 /// LC_BUILD_VERSION `sdk` stamp. SwiftPM links with
 /// `-target arm64-apple-macos14.0`, which stamps sdk 14.0 and forces
 /// the legacy chrome (compact, flat traffic lights) on every Tahoe
-/// machine. Xcode-linked apps stamp the SDK in use — Hand Mirror is
-/// minos 14.4 / sdk 26.5 — with the deployment target untouched.
+/// machine. Xcode-linked apps stamp the SDK in use -- Hand Mirror is
+/// minos 14.4 / sdk 26.5 -- with the deployment target untouched.
 /// Do the same here; minos stays 14.0 and the sdk stamp gates only
 /// the Tahoe appearance (verified: sdk 14.0 -> legacy lights,
 /// sdk 26.5 -> full-size glossy ones, same minos).
@@ -87,32 +106,36 @@ let tetherkitAppLinkerSettings: [LinkerSetting] = [
 
 let package = Package(
     name: "TetherKitGUI",
-    // macOS 14：@Observable 与 ContentUnavailableView 需要它。命令行部分仍然
-    // 支持 13.3，两者是各自独立的产物，不必对齐。
+    // macOS 14: @Observable and ContentUnavailableView need it. The
+    // command line part still supports 13.3; the two are independent
+    // artifacts and do not have to be aligned.
     platforms: [.macOS(.v14)],
     products: [
         .executable(name: "TetherKitApp", targets: ["TetherKitApp"]),
         .executable(name: "tetherkit-helper", targets: ["TetherKitHelper"]),
     ],
     targets: [
-        // C ABI 的模块映射。头文件是指向 include/tetherkit/capi/tetherkit_c.h
-        // 的符号链接，因此永远和 C++ 侧同步，不需要任何生成步骤。
+        // The module map for the C ABI. The header is a symbolic link
+        // to include/tetherkit/capi/tetherkit_c.h, so it stays in sync
+        // with the C++ side forever and needs no generation step.
         .target(name: "CTetherKit"),
 
-        // App 与 helper 共享的 XPC 协议与数据模型。
-        // 两边靠同一份源码保持一致，而不是各自抄一遍。
+        // The XPC protocol and the data models shared by the app and
+        // the helper. Both sides stay consistent through one shared
+        // source rather than each keeping its own copy.
         .target(name: "TetherKitIPC"),
 
-        // C ABI 的 Swift 封装：把 tk_* 翻译成 Swift 的类型与错误。
+        // The Swift wrapper of the C ABI: it turns tk_* into Swift types
+        // and errors.
         .target(name: "TetherKitCore",
                 dependencies: ["CTetherKit", "TetherKitIPC"],
                 linkerSettings: tetherkitLinkerSettings),
 
-        // 以 root 运行的特权 helper。
+        // The privileged helper, running as root.
         .executableTarget(name: "TetherKitHelper",
                           dependencies: ["TetherKitCore", "TetherKitIPC"]),
 
-        // 用户看到的 SwiftUI App（普通用户身份运行）。
+        // The SwiftUI app the user sees (running as an ordinary user).
         .executableTarget(name: "TetherKitApp",
                           dependencies: ["TetherKitCore", "TetherKitIPC", "TetherKitUIModel"],
                           linkerSettings: tetherkitAppLinkerSettings),

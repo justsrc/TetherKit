@@ -12,23 +12,25 @@
 namespace tetherkit::rndis {
 namespace {
 
-/// QUERY 定长 OID 时给的占位缓冲大小。
+/// Placeholder buffer size used when QUERYing a fixed-length OID.
 ///
-/// 对返回定长结果的 OID，InformationBufferLength 必须 >= 期望响应长度，否则微软
-/// ActiveSync 实现会回 RNDIS_STATUS_INVALID_LENGTH。Linux 查 MAC 时给的是 48，
-/// 这里沿用同一个「宽松但足够」的值作为多数定长 OID 的默认占位。
+/// For OIDs that return a fixed-length result, InformationBufferLength must be
+/// >= the expected response length or Microsoft's ActiveSync implementation
+/// replies with RNDIS_STATUS_INVALID_LENGTH. Linux passes 48 when querying the
+/// MAC; we reuse the same "loose but sufficient" value as the default
+/// placeholder for most fixed-length OIDs.
 constexpr std::uint32_t kFixedOidPlaceholderBytes = 48;
 
-/// 从可能不带 NUL 结尾的 ASCII 缓冲里取出字符串。
+/// Extract a string from an ASCII buffer that may lack a NUL terminator.
 [[nodiscard]] std::string ToPrintableString(std::span<const std::byte> bytes) {
   std::string text;
   text.reserve(bytes.size());
   for (const std::byte byte : bytes) {
     const auto character = static_cast<char>(byte);
     if (character == '\0') {
-      break;  // 有些设备确实带 NUL，遇到就停
+      break;  // some devices do NUL-terminate; stop when we see it
     }
-    // 过滤掉不可打印字符，避免把控制字符打进日志。
+    // Filter out non-printable characters so control chars never reach the log.
     text.push_back(character >= 0x20 && character < 0x7F ? character : '?');
   }
   return text;
@@ -63,8 +65,9 @@ StateMachine::StateMachine(ControlChannel& channel, StateMachineObserver& observ
 }
 
 std::uint32_t StateMachine::NextRequestId() noexcept {
-  // 跳过 0：某些设备把 RequestId == 0 当作无效值（FreeBSD 的实现干脆全填 0，
-  // 说明设备普遍不校验，但保守起见还是避开）。
+  // Skip 0: some devices treat RequestId == 0 as invalid (FreeBSD's
+  // implementation fills everything with 0, showing devices generally do not
+  // validate it, but we avoid it conservatively anyway).
   const std::uint32_t id = next_request_id_++;
   if (next_request_id_ == 0) {
     next_request_id_ = 1;
@@ -83,7 +86,7 @@ void StateMachine::TransitionTo(State next) {
 }
 
 // =============================================================================
-// 控制通道往返
+// Control channel round trips
 // =============================================================================
 
 Result<bool> StateMachine::PumpOnce(std::optional<MessageType> expected_reply,
@@ -92,7 +95,8 @@ Result<bool> StateMachine::PumpOnce(std::optional<MessageType> expected_reply,
                              channel_->ReceiveMessage());
 
   if (message.empty()) {
-    // 规范：设备尚无有效响应时返回 1 字节 0x00 而非 STALL。不是错误。
+    // Spec: the device returns a single 0x00 byte instead of STALL while it
+    // has no valid response yet. Not an error.
     return false;
   }
   MarkDeviceActivity();
@@ -103,31 +107,34 @@ Result<bool> StateMachine::PumpOnce(std::optional<MessageType> expected_reply,
                      name.empty() ? Text(Msg::kRndisUnknownMessage) : name, header.message_type,
                      header.message_length);
 
-  // ---- 设备主动推送的消息：分派掉，继续等我们要的那条 ----
+  // ---- Unsolicited device pushes: dispatch them and keep waiting for ours ----
   if (header.message_type == ToRaw(MessageType::kIndicateStatus)) {
     HandleIndicateStatus(message);
     return false;
   }
   if (header.message_type == ToRaw(MessageType::kKeepAlive)) {
-    // 设备发起的保活。**必须回复**，否则设备可能判定主机已死而断开。
+    // Device-initiated keep-alive. We **must reply**, otherwise the device may
+    // decide the host is dead and disconnect.
     TETHERKIT_RETURN_IF_ERROR(HandleDeviceKeepAlive(message));
     return false;
   }
 
-  // ---- 面向连接设备的消息：明确报不支持，而不是含糊的「未知消息」----
+  // ---- Messages from connection-oriented devices: report them as unsupported
+  // explicitly rather than with a vague "unknown message" ----
   if (IsCondis(header.message_type)) {
     return std::unexpected(Error::Generic(Tr(Msg::kRndisCondisMessageReceived,
                                              name.empty() ? Text(Msg::kRndisUnknown) : name)));
   }
 
-  // ---- 是我们等的那条吗 ----
+  // ---- Is this the one we are waiting for? ----
   if (expected_reply.has_value() && header.message_type == ToRaw(*expected_reply)) {
     out_response = message;
     return true;
   }
 
-  // 不是我们等的，也不是已知的推送消息。可能是上一次超时请求的迟到响应 ——
-  // 丢弃并继续（不能当致命错误，否则一次超时就会把链路判死）。
+  // Not the one we awaited, and not a known push. It may be a late response to
+  // a previously timed-out request -- drop it and continue (treating it as
+  // fatal would let a single timeout kill the link).
   TETHERKIT_WARN_TR(Msg::kRndisDiscardUnexpectedMessage,
                     name.empty() ? Text(Msg::kRndisUnknown) : name, header.message_type);
   return false;
@@ -137,15 +144,20 @@ Result<StateMachine::Exchange> StateMachine::Transact(std::span<const std::byte>
                                                       MessageType expected_reply) {
   TETHERKIT_RETURN_IF_ERROR(channel_->SendMessage(request));
 
-  // 先等中断端点的 RESPONSE_AVAILABLE 通知，再去取响应。
+  // Wait for the interrupt endpoint's RESPONSE_AVAILABLE notification first,
+  // then fetch the response.
   //
-  // 两类设备行为都要兼容：
-  //   * 规范做法是等通知；
-  //   * 但也存在「必须先被中断端点读过一次才会在控制端点上作答」的设备；
-  //   * 而 Linux 干脆完全忽略中断端点，直接轮询控制端点。
-  // 所以：有中断端点就先等一次通知（超时也不算错），然后无论如何都去轮询。
-  // 同样不能为 0（timeout=0 在 darwin 上是无限等待）。注意 response_poll_interval
-  // 可以被配成 0（测试里就是），所以这里必须用 max 兜底。
+  // Both device behaviors must be accommodated:
+  //   * the spec-conforming one waits for the notification;
+  //   * but some devices only answer on the control endpoint after the
+  //     interrupt endpoint has been read at least once;
+  //   * and Linux simply ignores the interrupt endpoint and polls the control
+  //     endpoint directly.
+  // So: if there is an interrupt endpoint, wait for one notification (a
+  // timeout is not an error either), then poll regardless.
+  // Never 0 either (timeout=0 means infinite wait on darwin). Note
+  // response_poll_interval may be configured as 0 (it is in tests), so max()
+  // must backstop it here.
   const std::uint32_t notification_timeout =
       std::max(kProbeOnlyTimeoutMillis,
                std::min(config_.control_timeout_millis, config_.response_poll_interval_millis * 4));
@@ -161,8 +173,9 @@ Result<StateMachine::Exchange> StateMachine::Transact(std::span<const std::byte>
     if (matched) {
       return Exchange{.response = response};
     }
-    // 还没准备好。睡一小会儿再试 —— 这里必须睡，否则会把控制端点打成忙轮询，
-    // 而 Apple Silicon 上每次控制传输本身就是毫秒级开销。
+    // Not ready yet. Sleep briefly and retry -- we must sleep here, otherwise
+    // the control endpoint turns into a busy-poll, and each control transfer
+    // costs milliseconds on Apple Silicon.
     std::this_thread::sleep_for(
         std::chrono::milliseconds(config_.response_poll_interval_millis));
   }
@@ -174,21 +187,22 @@ Result<StateMachine::Exchange> StateMachine::Transact(std::span<const std::byte>
 }
 
 // =============================================================================
-// 设备推送消息的处理
+// Handling unsolicited device pushes
 // =============================================================================
 
 void StateMachine::HandleIndicateStatus(std::span<const std::byte> message) {
   const auto indication = DecodeIndicateStatus(message);
   if (!indication) {
-    // 解析失败不该让链路死掉 —— 这是个纯通报消息。
+    // A parse failure must not kill the link -- this is a pure notification.
     TETHERKIT_WARN_TR(Msg::kRndisIndicateStatusParseFailed, indication.error().ToString());
     return;
   }
 
   const std::string_view status_name = StatusName(indication->status);
   if (indication->has_diagnostic_info) {
-    // 设备用 Rndis_Diagnostic_Info 告诉我们「你发过来的消息第 N 字节不合法」，
-    // 对排查我们自己的编码 bug 极有价值，所以单独打出来。
+    // The device uses Rndis_Diagnostic_Info to tell us "byte N of the message
+    // you sent is invalid", which is invaluable for tracking down our own
+    // encoding bugs, so we log it separately.
     TETHERKIT_WARN_TR(Msg::kRndisDeviceIndicatedWithDiagnostics,
                       status_name.empty() ? Text(Msg::kRndisUnknownStatus) : status_name,
                       indication->status, indication->diagnostic_status,
@@ -217,14 +231,16 @@ void StateMachine::HandleIndicateStatus(std::span<const std::byte> message) {
       break;
 
     default:
-      // 其它状态只记日志。特别是 kInvalidData —— 它说明我们发的消息有问题，
-      // 但不该据此断开链路（诊断信息已经打出来了）。
+      // Other statuses are only logged. In particular kInvalidData -- it means
+      // the message we sent was malformed, but we should not drop the link over
+      // it (the diagnostics have already been printed).
       break;
   }
 }
 
 Status StateMachine::HandleDeviceKeepAlive(std::span<const std::byte> message) {
-  // 设备发起的 KEEPALIVE_MSG 的 RequestId 在 offset 8，与主机发起时同布局。
+  // A device-initiated KEEPALIVE_MSG carries its RequestId at offset 8, with
+  // the same layout as when the host initiates it.
   if (message.size() < kKeepAliveMsgBytes) {
     return std::unexpected(Error::Generic(Tr(Msg::kRndisKeepAliveMsgTooShort)));
   }
@@ -238,7 +254,7 @@ Status StateMachine::HandleDeviceKeepAlive(std::span<const std::byte> message) {
 }
 
 // =============================================================================
-// OID 读写
+// OID reads and writes
 // =============================================================================
 
 Result<std::span<const std::byte>> StateMachine::QueryOid(Oid oid, std::uint32_t expected_bytes,
@@ -268,7 +284,8 @@ Result<std::span<const std::byte>> StateMachine::QueryOid(Oid oid, std::uint32_t
   if (complete.status != ToRaw(StatusCode::kSuccess)) {
     const std::string_view status_name = StatusName(complete.status);
     if (!fatal) {
-      // 可选 OID 返回 NOT_SUPPORTED 是完全正常的（例如 OID_GEN_PHYSICAL_MEDIUM）。
+      // An optional OID returning NOT_SUPPORTED is perfectly normal (e.g.
+      // OID_GEN_PHYSICAL_MEDIUM).
       TETHERKIT_DEBUG_TR(Msg::kRndisOptionalOidUnsupported, name,
                          status_name.empty() ? Text(Msg::kRndisUnknownStatus) : status_name);
       return std::span<const std::byte>{};
@@ -305,12 +322,13 @@ Status StateMachine::SetOidUint32(Oid oid, std::uint32_t value) {
 }
 
 // =============================================================================
-// 启动序列
+// Start-up sequence
 // =============================================================================
 
 Status StateMachine::CollectDeviceInfo() {
-  // ---- 物理介质：**可选 OID**，失败不致命 ----
-  // Linux 查它时 in_len 传 4，失败就当 UNSPECIFIED 继续。
+  // ---- Physical medium: **optional OID**, a failure is not fatal ----
+  // Linux passes in_len 4 when querying it and treats failure as UNSPECIFIED,
+  // then continues.
   if (const auto medium = QueryOid(Oid::kGenPhysicalMedium, 4, /*fatal=*/false);
       medium && !medium->empty()) {
     if (const auto value = ParseUint32(*medium)) {
@@ -318,8 +336,9 @@ Status StateMachine::CollectDeviceInfo() {
     }
   }
 
-  // ---- 永久 MAC：**致命** ----
-  // 这是主机侧 feth 要采用的地址，拿不到就没法正确搭建网卡。
+  // ---- Permanent MAC: **fatal** ----
+  // This is the address the host-side feth will adopt; without it we cannot
+  // build the interface correctly.
   {
     TETHERKIT_ASSIGN_OR_RETURN(
         const std::span<const std::byte> payload,
@@ -329,7 +348,7 @@ Status StateMachine::CollectDeviceInfo() {
     TETHERKIT_INFO_TR(Msg::kRndisPermanentMac, FormatMac(info_.permanent_address).data());
   }
 
-  // ---- 当前 MAC：不致命（多数设备与永久 MAC 相同）----
+  // ---- Current MAC: not fatal (most devices report the same as permanent) ----
   if (const auto payload =
           QueryOid(Oid::kEthernetCurrentAddress, kFixedOidPlaceholderBytes, /*fatal=*/false);
       payload && !payload->empty()) {
@@ -343,13 +362,14 @@ Status StateMachine::CollectDeviceInfo() {
     info_.has_current_address = true;
   }
 
-  // ---- 最大帧长：不致命（协商结果已经给了 MTU）----
+  // ---- Maximum frame size: not fatal (negotiation already gave us an MTU) ----
   if (const auto payload =
           QueryOid(Oid::kGenMaximumFrameSize, 4, /*fatal=*/false);
       payload && !payload->empty()) {
     if (const auto value = ParseUint32(*payload)) {
       info_.maximum_frame_size = *value;
-      // 设备说它最大只收 N 字节净荷，而我们协商出的 MTU 更大 —— 听设备的。
+      // The device says it accepts at most N bytes of payload while we
+      // negotiated a larger MTU -- the device wins.
       if (*value != 0 && *value < parameters_.mtu) {
         TETHERKIT_WARN_TR(Msg::kRndisMtuLoweredToDeviceFrameSize, *value, parameters_.mtu);
         parameters_.mtu = *value;
@@ -357,7 +377,7 @@ Status StateMachine::CollectDeviceInfo() {
     }
   }
 
-  // ---- 链路速率：不致命，仅用于日志 ----
+  // ---- Link speed: not fatal, logging only ----
   if (const auto payload = QueryOid(Oid::kGenLinkSpeed, 4, /*fatal=*/false);
       payload && !payload->empty()) {
     if (const auto value = ParseUint32(*payload)) {
@@ -365,7 +385,7 @@ Status StateMachine::CollectDeviceInfo() {
     }
   }
 
-  // ---- 媒体连接状态：不致命。**注意 0 表示已连接** ----
+  // ---- Media connection status: not fatal. **Note 0 means connected** ----
   if (const auto payload = QueryOid(Oid::kGenMediaConnectStatus, 4, /*fatal=*/false);
       payload && !payload->empty()) {
     if (const auto value = ParseUint32(*payload)) {
@@ -373,18 +393,20 @@ Status StateMachine::CollectDeviceInfo() {
       link_connected_ = info_.media_state == MediaState::kConnected;
     }
   } else {
-    // 查不到就假定已连接 —— 设备既然在跑 RNDIS，链路大概率是通的。
+    // If we cannot query it, assume connected -- a device running RNDIS has a
+    // good chance of having a working link.
     link_connected_ = true;
   }
 
-  // ---- 厂商信息：纯诊断用 ----
+  // ---- Vendor information: diagnostics only ----
   if (const auto payload = QueryOid(Oid::kGenVendorId, 4, /*fatal=*/false);
       payload && !payload->empty()) {
     if (const auto value = ParseUint32(*payload)) {
       info_.vendor_id = *value;
     }
   }
-  // 厂商描述是**变长** OID，expected_bytes 必须传 0。
+  // The vendor description is a **variable-length** OID, so expected_bytes
+  // must be 0.
   if (const auto payload = QueryOid(Oid::kGenVendorDescription, 0, /*fatal=*/false);
       payload && !payload->empty()) {
     info_.vendor_description = ToPrintableString(*payload);
@@ -405,7 +427,7 @@ Status StateMachine::Start() {
 
   TransitionTo(State::kInitializing);
 
-  // ---- 第 1 步：INITIALIZE ----
+  // ---- Step 1: INITIALIZE ----
   {
     TETHERKIT_ASSIGN_OR_RETURN(
         const std::uint32_t written,
@@ -435,7 +457,8 @@ Status StateMachine::Start() {
     }
     parameters_ = *negotiated;
 
-    // 设备汇报的聚合包数只是它的**宣称**，调用方可以不信任它（见配置项注释）。
+    // The packet count the device reports is only its **claim**; callers may
+    // distrust it (see the config field's comment).
     if (config_.max_tx_packets_per_message != 0 &&
         parameters_.max_packets_per_message > config_.max_tx_packets_per_message) {
       TETHERKIT_INFO_TR(Msg::kRndisMaxPacketsClamped, parameters_.max_packets_per_message,
@@ -450,14 +473,15 @@ Status StateMachine::Start() {
 
   TransitionTo(State::kInitialized);
 
-  // ---- 第 2~4 步：采集设备信息 ----
+  // ---- Steps 2-4: collect device information ----
   if (const auto status = CollectDeviceInfo(); !status) {
     SendHalt();
     TransitionTo(State::kUninitialized);
     return status;
   }
 
-  // ---- 第 5 步：设置包过滤 → 设备进入 data-initialized，数据开始流动 ----
+  // ---- Step 5: set the packet filter -> the device enters data-initialized
+  // and data starts flowing ----
   if (const auto status = SetOidUint32(Oid::kGenCurrentPacketFilter, config_.packet_filter);
       !status) {
     SendHalt();
@@ -478,7 +502,7 @@ Status StateMachine::Start() {
 }
 
 // =============================================================================
-// 周期性工作
+// Periodic work
 // =============================================================================
 
 std::uint32_t StateMachine::MillisUntilNextPoll() const noexcept {
@@ -491,32 +515,37 @@ std::uint32_t StateMachine::MillisUntilNextPoll() const noexcept {
 
 Status StateMachine::Poll() {
   if (state_ != State::kDataInitialized && state_ != State::kInitialized) {
-    return Ok();  // 未就绪或正在停机，无事可做
+    return Ok();  // not ready or shutting down; nothing to do
   }
 
-  // ---- 先排空设备主动推送的消息 ----
+  // ---- Drain unsolicited device pushes first ----
   //
-  // 不排空的话它们会堆在设备的响应队列里，把我们后续请求的响应挤到后面，
-  // 导致每次 Transact 都要多轮几次才拿到想要的那条。
+  // If we do not, they pile up in the device's response queue and push the
+  // responses to our own requests behind them, forcing every Transact to spin
+  // through several extra rounds to get the reply it wants.
   //
-  // 只在有中断通知时才去读控制端点 —— 否则每次 Poll 都要发一次
-  // GET_ENCAPSULATED_RESPONSE，而 Apple Silicon 上这是毫秒级开销。
+  // Only read the control endpoint when there is an interrupt notification --
+  // otherwise every Poll would issue a GET_ENCAPSULATED_RESPONSE, which costs
+  // milliseconds on Apple Silicon.
   //
-  // ⚠️ 这里**绝不能传 0**：libusb 在 darwin 上 timeout=0 表示无限等待，
-  // 会把控制线程永久卡死。用 kProbeOnlyTimeoutMillis（1 ms）——
-  // Poll 本身每几百毫秒才跑一次，1 ms 的阻塞可以忽略。
+  // Warning: **never pass 0 here**: on darwin libusb treats timeout=0 as an
+  // infinite wait and would wedge the control thread forever. Use
+  // kProbeOnlyTimeoutMillis (1 ms) -- Poll itself only runs every few hundred
+  // milliseconds, so a 1 ms block is negligible.
   if (channel_->WaitForNotification(kProbeOnlyTimeoutMillis) ==
       NotificationResult::kResponseAvailable) {
     std::span<const std::byte> ignored;
-    // 最多排 8 条，避免设备疯狂推送时卡在这里。
+    // Drain at most 8 messages so a device that pushes frantically cannot
+    // pin us here.
     for (int i = 0; i < 8; ++i) {
       const auto pumped = PumpOnce(std::nullopt, ignored);
       if (!pumped) {
         return std::unexpected(
             Error{pumped.error()}.WithContext(Tr(Msg::kRndisDrainControlFailed)));
       }
-      // PumpOnce 在没有更多消息时返回 false 且不报错，无法区分「空了」和
-      // 「处理了一条推送」。用通知状态再判一次。
+      // PumpOnce returns false without an error when there are no more
+      // messages, so it cannot distinguish "queue empty" from "handled a
+      // push". Check the notification state once more.
       if (channel_->WaitForNotification(kProbeOnlyTimeoutMillis) !=
           NotificationResult::kResponseAvailable) {
         break;
@@ -524,10 +553,12 @@ Status StateMachine::Poll() {
     }
   }
 
-  // ---- 保活 ----
+  // ---- Keep-alive ----
   //
-  // 语义是「距上次从设备收到任何消息已超过保活周期」才发，而不是无条件定时发。
-  // 通道活跃时无谓的保活往返纯属浪费（尤其在 Apple Silicon 上）。
+  // The semantics are "more than a keep-alive period has passed since we last
+  // received anything from the device", not an unconditional timer. When the
+  // channel is busy a pointless keep-alive round trip is pure waste (on Apple
+  // Silicon especially).
   const Nanos now = MonotonicNanos();
   if (now < next_keepalive_deadline_) {
     return Ok();
@@ -539,7 +570,7 @@ Status StateMachine::Poll() {
   next_keepalive_deadline_ = now + interval_nanos;
 
   if (idle_nanos < interval_nanos) {
-    // 通道一直有数据在走，不需要保活。
+    // The channel has been carrying data all along; no keep-alive needed.
     return Ok();
   }
 
@@ -557,7 +588,7 @@ Status StateMachine::Poll() {
       observer_->OnFatalError(fatal);
       return std::unexpected(std::move(fatal));
     }
-    return Ok();  // 还没到阈值，下个周期再试
+    return Ok();  // below the threshold; try again next period
   }
 
   const auto complete = DecodeKeepAliveComplete(exchange->response);
@@ -567,7 +598,8 @@ Status StateMachine::Poll() {
   }
 
   if (complete->status != ToRaw(StatusCode::kSuccess)) {
-    // 设备明确回了失败状态。这通常意味着设备想让我们复位。
+    // The device explicitly returned a failure status. That usually means it
+    // wants us to reset.
     const std::string_view name = StatusName(complete->status);
     TETHERKIT_WARN_TR(Msg::kRndisKeepAliveRejected,
                       name.empty() ? Text(Msg::kRndisUnknownStatus) : name);
@@ -580,14 +612,14 @@ Status StateMachine::Poll() {
 }
 
 // =============================================================================
-// 复位
+// Reset
 // =============================================================================
 
 Status StateMachine::Reset() {
   TETHERKIT_INFO_TR(Msg::kRndisResetStarted);
 
-  // RESET_MSG **没有 RequestId**（offset 8 是 Reserved），因此无法用 ID 配对，
-  // 同一时刻只能有一个 RESET 在飞。
+  // RESET_MSG has **no RequestId** (offset 8 is Reserved), so it cannot be
+  // paired by ID; only one RESET may be in flight at a time.
   TETHERKIT_ASSIGN_OR_RETURN(const std::uint32_t written, EncodeReset(request_buffer_));
   TETHERKIT_ASSIGN_OR_RETURN(
       const Exchange exchange,
@@ -610,11 +642,13 @@ Status StateMachine::Reset() {
   observer_->OnDeviceReset(complete.addressing_reset);
 
   if (complete.addressing_reset) {
-    // AddressingReset 非零 → 设备丢掉了包过滤与组播表，**必须重发**，
-    // 否则复位后数据不会再流动。
+    // AddressingReset non-zero -> the device dropped the packet filter and the
+    // multicast table, so we **must resend**, otherwise data will not flow
+    // again after the reset.
     //
-    // （本驱动不维护组播表 —— 包过滤里开了 ALL_MULTICAST，所以只需重发过滤器。
-    //   如果将来加了 SET OID_802_3_MULTICAST_LIST，这里也要一并重放。）
+    // (This driver does not maintain a multicast table -- ALL_MULTICAST is set
+    //   in the packet filter, so only the filter needs resending. If a
+    //   SET OID_802_3_MULTICAST_LIST is ever added, replay it here too.)
     const std::uint32_t filter =
         active_packet_filter_ != 0 ? active_packet_filter_ : config_.packet_filter;
     TETHERKIT_RETURN_IF_ERROR(SetOidUint32(Oid::kGenCurrentPacketFilter, filter));
@@ -628,11 +662,12 @@ Status StateMachine::Reset() {
 }
 
 // =============================================================================
-// 停机
+// Shutdown
 // =============================================================================
 
 void StateMachine::SendHalt() noexcept {
-  // HALT_MSG 设备**不会回复**，发完即可认为进入 uninitialized。
+  // The device does **not** reply to HALT_MSG; once sent we may consider the
+  // state uninitialized.
   const auto written = EncodeHalt(NextRequestId(), request_buffer_);
   if (!written) {
     TETHERKIT_WARN_TR(Msg::kRndisEncodeHaltFailed, written.error().ToString());
@@ -641,7 +676,8 @@ void StateMachine::SendHalt() noexcept {
   if (const auto status =
           channel_->SendMessage(std::span<const std::byte>{request_buffer_.data(), *written});
       !status) {
-    // 停机路径上的失败只记日志 —— 设备可能已经拔掉了，这很正常。
+    // Failures on the shutdown path are only logged -- the device may already
+    // have been unplugged, which is perfectly normal.
     TETHERKIT_DEBUG_TR(Msg::kRndisSendHaltFailed, status.error().ToString());
     return;
   }
@@ -654,9 +690,10 @@ void StateMachine::Stop() {
   }
   TransitionTo(State::kHalting);
 
-  // 先把包过滤清零让设备停止发数据（规范：filter = 0 会让设备退回
-  // RNDIS-initialized），再发 HALT。即使清零失败也要继续发 HALT ——
-  // 不发的话设备会一直以为主机还在，下次插上时状态不干净。
+  // Zero the packet filter first so the device stops sending data (spec: a
+  // filter of 0 drops the device back to RNDIS-initialized), then send HALT.
+  // Continue to HALT even if clearing fails -- without it the device keeps
+  // believing the host is still there, and the next plug-in starts unclean.
   if (active_packet_filter_ != 0) {
     if (const auto status = SetOidUint32(Oid::kGenCurrentPacketFilter, 0); !status) {
       TETHERKIT_DEBUG_TR(Msg::kRndisClearPacketFilterFailed, status.error().ToString());

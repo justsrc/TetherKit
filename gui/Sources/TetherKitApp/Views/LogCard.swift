@@ -142,7 +142,8 @@ private struct LogRow: View {
                 .foregroundStyle(.tertiary)
             Text(entry.latest.level.label)
                 .foregroundStyle(Design.logColor(for: entry.latest.level))
-                // 固定宽度让级别列对齐，扫读时眼睛不用横向找。
+                // A fixed width aligns the level column, so the eye does
+                // not have to search sideways when scanning.
                 .frame(width: 46, alignment: .leading)
             Text(entry.latest.message)
                 .foregroundStyle(Design.logColor(for: entry.latest.level))

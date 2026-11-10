@@ -1,426 +1,524 @@
-# GUI 与提权可行性验证
+# GUI and privilege escalation feasibility spike
 
-本文记录一次探索性验证的结论：**能不能在 TetherKit 之上做一个原生 Swift 图形界面，
-并让它以合适的方式取得配置网络所需的 root 权限。**
+This document records the conclusions of an exploratory spike: **can a native
+Swift GUI be built on top of TetherKit, and can it obtain the root privileges
+needed to configure the network in an appropriate way?**
 
-结论是能，但过程中排除掉了三条看起来更"正统"的路线。**被排除的路线和排除理由，
-比最终方案本身更值得记录** —— 否则下次还会有人再走一遍。
+The answer is yes, but three routes that looked more "orthodox" were ruled out
+along the way. **The ruled-out routes and the reasons for ruling them out are
+worth recording more than the final design itself** -- otherwise someone will
+walk the same path again next time.
 
-所有结论都在 macOS 26.6 / Apple Silicon / Xcode 26.6 / Swift 6.3.3 上实测。
+All the conclusions were measured on macOS 26.6 / Apple Silicon / Xcode 26.6 /
+Swift 6.3.3.
 
 ---
 
-## 1. 结论速览
+## 1. Summary of the conclusions
 
-| 能力 | 结论 | 依据 |
+| Capability | Conclusion | Evidence |
 |---|---|---|
-| C API 现状 | **不存在** | 全仓库零 `extern "C"`，只有 C++23 头 + CLI |
-| Swift 调用 C++ | 不可行 | `std::expected` / `std::span` / 抽象基类，Swift interop 吞不下 |
-| USB 枚举 | 不需要 root | 实测通过 |
-| 创建 feth | 需要 root | 实测通过 |
-| 配 IP（`SIOCAIFADDR`） | 可行，configd 不干预 | 实测通过 |
-| 子网/具体路由 | 可行 | 实测通过 |
-| DHCP | **系统客户端可用** | 实测拿到租约，`State: BOUND` |
-| DNS | **自动配好**（scoped） | 实测 |
-| scoped 默认路由 | **自动配好** | 实测 |
-| 抢全局默认路由 | 需手工一步 | 仅当有更高优先级服务在跑时 |
+| C API status (at the time of the spike) | **does not exist** | zero `extern "C"` in the whole repo, only C++23 headers + a CLI |
+| Swift calling C++ | not feasible | `std::expected` / `std::span` / abstract base classes, which the Swift interop cannot swallow |
+| USB enumeration | no root needed | measured, works |
+| Creating feth | root needed | measured, works |
+| Configuring the IP (`SIOCAIFADDR`) | feasible, configd does not interfere | measured, works |
+| Subnet / specific routes | feasible | measured, works |
+| DHCP | **the system client works** | measured a lease, `State: BOUND` |
+| DNS | **set up automatically** (scoped) | measured |
+| scoped default route | **set up automatically** | measured |
+| Taking over the global default route | one manual step needed | only when a service of higher priority is running |
 
 ---
 
-## 2. 核心事实：feth 没有 IOKit 节点
+## 2. The core fact: feth has no IOKit node
 
-这一条是后面一连串限制的**共同根因**。
+This single fact is the **common root cause** of the whole chain of limitations
+that follows.
 
-`if_fake`（feth）通过 `SIOCIFCREATE` → `ifnet_attach` 创建，**不注册任何 IOKit
-provider**，因此在 IORegistry 里没有 `IONetworkInterface` 节点。
+`if_fake` (feth) is created through `SIOCIFCREATE` -> `ifnet_attach` and
+**registers no IOKit provider at all**, therefore there is no
+`IONetworkInterface` node in the IORegistry.
 
-实测对照：
+Measured comparison:
 
 ```
-IOKit IONetworkInterface：en0–en7、anpi0/1/3、vmenet0/1   ← 无 feth
-NetworkInterfaces.plist： feth 出现 0 次
-ipconfig getiflist：      en4 en5 en6 bridge0 en0 en7      ← 无 feth
-SC 动态存储：             State:/Network/Interface/feth0/Link  ← 有！
+IOKit IONetworkInterface: en0-en7, anpi0/1/3, vmenet0/1         <- no feth
+NetworkInterfaces.plist: feth appears 0 times
+ipconfig getiflist:      en4 en5 en6 bridge0 en0 en7              <- no feth
+SC dynamic store:        State:/Network/Interface/feth0/Link       <- yes!
 ```
 
-最后一行是关键反差：configd 的**动态存储**能看见 feth 的链路状态（那一层由路由
-socket / KEV 事件喂养），但 **SCNetworkInterface 服务层看不见**（那一层枚举 IOKit）。
+The last line is the key contrast: configd's **dynamic store** can see feth's
+link state (that layer is fed by routing socket / KEV events), but the
+**SCNetworkInterface service layer cannot** (that layer enumerates IOKit).
 
-一句话：**只读的链路状态拿得到，可写的服务配置拿不到。**
+In one sentence: **the read-only link state is obtainable, the writable service
+configuration is not.**
 
-注意 `vmenet0/1`（Virtualization.framework）**在** IOKit 里 —— 虚拟接口本身没问题，
-问题是 `if_fake` 这种纯 ifnet 附着的方式没有 IOKit 存在感。
-
----
-
-## 3. 被排除的三条路线
-
-### 3.1 SCPreferences 建持久网络服务 ❌
-
-想法：用 `SCPreferences` + `SCNetworkService` 建一个真正的网络服务，让 macOS 自己
-跑 DHCP、管 DNS、算路由。
-
-排除理由：`SCNetworkInterfaceCopyAll()` 枚举的是 IOKit 节点，feth 不在其中，
-无法为它创建 `SCNetworkService`。
-
-要让 SC 看见 feth，得写 IOKit driver —— 那正是本项目要避免的东西。
-
-### 3.2 SCDynamicStore 凭空注入服务 ❌
-
-想法：绕开偏好设置层，直接往动态存储写 `State:/Network/Service/<uuid>/IPv4` 和
-`/DNS`（VPN 客户端的常见手法），让 configd 自己把 feth 算成一个服务。
-
-实测过程：
-
-1. 只写 `/DNS` → 不被采纳
-2. 补齐 `/IPv4`（含 `Addresses`、`SubnetMasks`、`InterfaceName`），且接口和地址
-   都真实存在 → **仍不被采纳**
-
-`scutil --dns` 里始终找不到注入的解析器；`State:/Network/Global/IPv4` 的
-`PrimaryService` 是个 UUID，说明 IPMonitor 只认从 `Setup:` 层实例化出来的服务。
-
-而写 `Setup:` 层要回到 3.1 的死结。
-
-⚠️ **这条的适用范围很窄，别推广。** 它只证明"**手工捏造**的动态存储条目不被采纳"。
-
-实测反证：`ipconfig set feth0 DHCP` 之后，IPConfiguration 发布了
-`State:/Network/Service/DHCP-feth0/{DHCP,DNS,IPv4}` —— **和这里手工写失败的是同样的键** ——
-IPMonitor 完全采纳（DNS 生效、默认路由装上）。见 §6.3。
-
-差别在于服务是否经正规路径注册，不在于键的内容。所以 feth 上的 configd 集成
-**是可行的**，只是不能用手写动态存储这条捷径。
-
-### 3.3 SMAppService 安装特权 helper ❌
-
-想法：用 macOS 13+ 的现代 API 注册 LaunchDaemon。
-
-排除理由与技术无关，与**分发方式**有关：`SMPrivilegedExecutables` /
-`SMAuthorizedClients` 靠代码签名的 designated requirement 双向绑定。源码分发
-（Homebrew formula）下每台机器编译出的 cdhash 都不同，写死在 plist 里的 DR
-必然对不上。
-
-附带：SMAppService **不弹密码框** —— 审批入口是「系统设置 → 登录项与扩展」。
-这是 Apple 从 macOS 13 起的刻意设计，会弹密码框的 `SMJobBless` 已废弃。
+Note that `vmenet0/1` (Virtualization.framework) **is** in IOKit -- virtual
+interfaces themselves are fine; the problem is that `if_fake`, being attached
+purely at the ifnet level, has no IOKit presence.
 
 ---
 
-## 4. 最终方案
+## 3. The three routes that were ruled out
+
+### 3.1 SCPreferences for a persistent network service
+
+The idea: use `SCPreferences` + `SCNetworkService` to create a real network
+service and let macOS run the DHCP, handle the DNS and compute the routes
+itself.
+
+The reason: `SCNetworkInterfaceCopyAll()` enumerates IOKit nodes, feth is not
+among them, and no `SCNetworkService` can be created for it.
+
+For SC to see feth, an IOKit driver would have to be written -- which is
+exactly what this project wants to avoid.
+
+### 3.2 Injecting a service into the SCDynamicStore out of thin air
+
+The idea: bypass the preferences layer, write `State:/Network/Service/<uuid>/IPv4`
+and `/DNS` straight into the dynamic store (the common trick of VPN clients)
+and let configd work out that feth is a service.
+
+The measured process:
+
+1. Writing only `/DNS` -> not adopted
+2. Completing `/IPv4` (with `Addresses`, `SubnetMasks`, `InterfaceName`), and
+   both the interface and the address really exist -> **still not adopted**
+
+The injected resolver never shows up in `scutil --dns`; the `PrimaryService` in
+`State:/Network/Global/IPv4` is a UUID, which shows that IPMonitor only
+accepts the services instantiated from the `Setup:` layer.
+
+And writing the `Setup:` layer leads back to the dead end of 3.1.
+
+Warning: **the scope of this finding is very narrow, do not generalize it.** It
+only proves that the "**hand-fabricated**" dynamic store entries are not
+adopted.
+
+Measured counter-evidence: after `ipconfig set feth0 DHCP`, IPConfiguration
+published `State:/Network/Service/DHCP-feth0/{DHCP,DNS,IPv4}` -- **exactly the
+same keys that failed here when they were written by hand** -- and IPMonitor
+adopts them completely (the DNS takes effect, the default route is installed).
+See section 6.3.
+
+The difference lies in whether the service was registered through the proper
+path, not in the content of the keys. So the configd integration on feth **is
+feasible**, it just cannot use the shortcut of hand-writing the dynamic store.
+
+### 3.3 SMAppService for installing the privileged helper
+
+The idea: register the LaunchDaemon with the modern API of macOS 13+.
+
+The reason has nothing to do with the technology and everything to do with the
+**distribution method**: `SMPrivilegedExecutables` / `SMAuthorizedClients`
+bind in both directions through the code signature's designated requirement.
+Under source distribution (a Homebrew formula) the cdhash produced on each
+machine differs, so the DR hard-coded in the plist can never match.
+
+As a side note: SMAppService **does not pop a password box** -- the approval
+entry point is "System Settings -> Login Items & Extensions". This is a
+deliberate design of Apple since macOS 13; `SMJobBless`, which did pop a
+password box, is deprecated.
+
+---
+
+## 4. The final design
 
 ```
-TetherKit.app (uid 501，不需要 root)
-  │ ① 直接调 C API 做免 root 的事：环境预检、USB 枚举
-  │ ② AuthorizationCopyRights → 弹指纹/密码 → AuthorizationRef
-  │ ③ AuthorizationMakeExternalForm → 32 字节凭据
-  │
-  ├── XPC（com.tetherkit.helper，.privileged）──►  tetherkit-helper (uid 0)
-  │                                                  │ ④ CreateFromExternalForm 还原
-  │                                                  │ ⑤ CopyRights 复核
-  │                                                  │    （**不带** interactionAllowed）
-  │                                                  │ ⑥ 复核通过才执行特权操作
-  └──────────────────────  结果  ◄───────────────────┘
+TetherKit.app (uid 501, no root needed)
+  | 1. call the C API directly for the root-free work: environment preflight, USB enumeration
+  | 2. AuthorizationCopyRights -> pop a fingerprint/password -> AuthorizationRef
+  | 3. AuthorizationMakeExternalForm -> 32-byte credential
+  |
+  +-- XPC (com.tetherkit.helper, .privileged) -->  tetherkit-helper (uid 0)
+  |                                                     | 4. CreateFromExternalForm restores it
+  |                                                     | 5. CopyRights re-checks it
+  |                                                     |    (without interactionAllowed)
+  |                                                     | 6. only after the re-check passes does it do the privileged work
+  +--------------------  result  <----------------------+
 ```
 
-helper 由传统 LaunchDaemon 拉起（`/Library/LaunchDaemons/` + `MachServices`），
-按需启动，不需要 `KeepAlive`。
+The helper is launched by a traditional LaunchDaemon
+(`/Library/LaunchDaemons/` + `MachServices`), it is started on demand and
+needs no `KeepAlive`.
 
-### 为什么安全性靠 AuthorizationRef 而不是代码签名
+### Why the security rests on the AuthorizationRef rather than on the code signature
 
-helper 的 root **来自 launchd**，跟用户按没按指纹毫无关系 —— 它一启动就是 root，
-任何能连上 Mach 服务的进程都能发请求。所以"谁在调用"必须由 helper 自己回答。
+The helper's root **comes from launchd** and has nothing to do with whether the
+user touched their fingerprint -- it is root from the moment it starts, and any
+process that can reach the Mach service can send requests. So "who is calling"
+has to be answered by the helper itself.
 
-两种答法：
+Two ways to answer it:
 
-- **校验调用方代码签名**（SMJobBless 的做法）—— 依赖证书，源码分发不可行
-- **要求每次调用附带用户刚确认过的 AuthorizationRef** —— 不依赖任何证书
+- **Verify the code signature of the caller** (the SMJobBless approach) --
+  depends on a certificate, which does not work under source distribution
+- **Require every call to carry the AuthorizationRef that the user has just
+  confirmed** -- depends on no certificate at all
 
-选后者。对开源、源码分发的工具这是更合适的模型：谁编译的都一样安全。
+The latter is chosen. For an open-source, source-distributed tool this is the
+more appropriate model: whoever built it, it is equally safe.
 
-### 三条容易写错的细节
+### Three details that are easy to get wrong
 
-1. **复核时绝不能带 `interactionAllowed`。** daemon 没有 UI 会话；真让它能弹框，
-   等于任何进程都能随意触发系统授权弹框骚扰用户。那一步只查"这份凭据里已经有
-   这项权利了吗"，不获取新权利。
-2. **`AuthorizationFree` 不能带 `destroyRights`。** 凭据归 App 所有，helper 只是
-   借来核对；带了会把 App 那边的授权一起作废。
-3. **连通性探测方法不要求授权。** 否则"helper 没装"和"授权没过"两种失败混在一起，
-   没法给用户准确提示。
+1. **The re-check must never carry `interactionAllowed`.** A daemon has no UI
+   session; letting it pop a dialog would let any process trigger the system
+   authorization dialog at will to harass the user. That step only asks "does
+   this credential already contain this right?", it does not acquire new rights.
+2. **`AuthorizationFree` must not carry `destroyRights`.** The credential
+   belongs to the App, the helper only borrows it to check; carrying it would
+   void the App's authorization as well.
+3. **The connectivity probe methods do not require authorization.** Otherwise
+   the two failures "the helper is not installed" and "the authorization did not
+   pass" get mixed together and the user cannot be given an accurate message.
 
-### 后补：helper 的安装本身也能走同一套授权（AEWP）
+### Addendum: installing the helper itself can go through the same authorization (AEWP)
 
-后来把「安装 helper」也从终端挪进了 App（`HelperInstaller.swift`）。机制是
-废弃已久的 `AuthorizationExecuteWithPrivileges`，macOS 26 实测：
+Later on, "installing the helper" was moved from the terminal into the App as
+well (`HelperInstaller.swift`). The mechanism is the long-deprecated
+`AuthorizationExecuteWithPrivileges`, measured on macOS 26:
 
-- `dlsym(RTLD_DEFAULT, "AuthorizationExecuteWithPrivileges")` 仍能解析；
-- setuid 的执行载体 `/usr/libexec/security_authtrampoline` 仍在（mode 04711）。
+- `dlsym(RTLD_DEFAULT, "AuthorizationExecuteWithPrivileges")` still resolves;
+- the setuid trampoline `/usr/libexec/security_authtrampoline` is still there
+  (mode 04711).
 
-它恰好接 `AuthorizationRef`，与 4 节的信任模型同源 —— App 缓存的令牌直接复用，
-5 分钟窗口内安装一次框都不弹。`osascript with administrator privileges` 因为
-自建授权会话、接不上令牌缓存而被排除。三个实测约束：
+It happens to take an `AuthorizationRef`, so it has the same origin as the trust
+model of section 4 -- the token cached by the App is reused directly, and
+installing pops no dialog at all within the 5-minute window.
+`osascript with administrator privileges` was ruled out because it creates its
+own authorization session and cannot hook into the token cache. Three measured
+constraints:
 
-- **AEWP 的执行对象必须是二进制，不能是 shell 脚本。** trampoline 给子进程的
-  凭据是 euid=0 / **ruid=调用者**，而 bash（zsh、dash 同理）在 euid ≠ ruid 且
-  未带 `-p` 时会把 euid 降回 ruid —— 防 setuid 脚本的老规矩。直接 AEWP
-  安装脚本，真机上得到的就是脚本自己的「需要 root 权限」报错。解法：AEWP
-  helper 二进制的 `--install` 模式，先 `setgid(0)` + `setuid(0)` 归一化成与
-  sudo 完全相同的凭据，再 exec 脚本（`InstallerMode.swift`）。
-- **不给 pid 也不给退出码**，只有连到子进程 stdout 的管道 —— stderr 要在
-  子进程里 dup2 并流，成败得用「装完能否连上匹配版本的 helper」这类真实
-  结果判定；
-- 用 dlsym 而不是直接链接：将来符号被移除时能降级成终端引导，而不是
-  dyld 绑定失败。
+- **The execution target of AEWP must be a binary, not a shell script.** The
+  credential that the trampoline gives the child process is euid=0 /
+  **ruid=the caller**, and bash (zsh and dash likewise) drops the euid back to
+  the ruid when euid != ruid and `-p` is not given -- the old rule against
+  setuid scripts. AEWP-ing the install script directly yields, on a real
+  machine, the script's own "root privileges required" error. The solution: the
+  `--install` mode of the AEWP helper binary, which first normalizes the
+  credential with `setgid(0)` + `setuid(0)` into exactly the same credential as
+  sudo, and then execs the script (`InstallerMode.swift`).
+- **Neither a pid nor an exit code is given**, only a pipe connected to the
+  child's stdout -- stderr has to be dup2-ed into the stream inside the child,
+  and the success has to be judged by a real result such as "after the install,
+  can we connect to a helper of the matching version";
+- use dlsym instead of linking directly: if the symbol is removed in the
+  future it can degrade into a terminal guide instead of a dyld binding failure.
 
 ---
 
-## 5. 关键澄清：授权 ≠ root
+## 5. The key clarification: authorization != root
 
-`AuthorizationCopyRights` 成功**不改变进程的任何东西**。它产出的
-`AuthorizationRef` 是一张**凭据**，语义是"用户在某时刻通过密码/指纹确认了，
-同意授予某项权利"。进程的 uid、euid 一个都没动。
+A successful `AuthorizationCopyRights` **changes nothing about the process**. The
+`AuthorizationRef` it produces is a **credential**, whose semantics are "the
+user confirmed at some moment with a password / fingerprint that they agree to
+grant a certain right". Not one of the uid and euid of the process moves.
 
-实测：App 在授权成功的下一行代码直接调 `tk_feth_create()`，仍然 `EPERM`；
-同一个函数经 helper 调用则成功。
+Measured: on the line right after the authorization succeeds, the App calls
+`tk_feth_create()` directly and still gets `EPERM`; the same function called
+through the helper succeeds.
 
-Authorization Services 从来就是**咨询式**授权系统，服务对象是那些本来就有 root
-的组件。权限本身必须另有来源（launchd 启动的 daemon、setuid 二进制）。
+The Authorization Services have always been an **advisory** authorization
+system, serving the components that already have root. The privilege itself
+must come from somewhere else (a daemon started by launchd, a setuid binary).
 
-**顺序不能反**：不能"先弹指纹拿到 root，再去建网卡"，只能"先有常驻的 root helper，
-每次操作弹指纹拿凭据交给它复核"。
+**The order cannot be reversed**: you cannot "pop the fingerprint to get root
+and then create the interface"; it can only be "have a resident root helper
+first, pop the fingerprint for each operation and hand the credential to it for
+re-checking".
 
 ---
 
-## 6. 网络配置能力边界
+## 6. The boundaries of the network configuration capability
 
-### 6.1 可行（纯内核 ioctl，configd 不参与）
+### 6.1 Feasible (pure kernel ioctl, configd not involved)
 
-- `SIOCAIFADDR` 配地址 —— 实测配上后 5 秒仍在，configd 不来收尸
-- 地址配好后子网路由自动生成
-- scoped 默认路由（`RTF_IFSCOPE`）—— macOS 支持每接口独立的默认路由，
-  实测一台机器上同时存在 4 条 default（ipsec0 / en0 / bridge100 / bridge101）
+- `SIOCAIFADDR` to configure an address -- measured: it is still there 5
+  seconds later, configd does not come to clean it up
+- once the address is configured, the subnet route is generated automatically
+- scoped default route (`RTF_IFSCOPE`) -- macOS supports a separate default
+  route per interface; measured: 4 default routes coexisted on one machine
+  (ipsec0 / en0 / bridge100 / bridge101)
 
-configd 看不见 feth 只影响**它管不了 feth**，不影响**你自己管**。
+configd not seeing feth only means **it cannot manage feth**, it does not
+affect **managing it yourself**.
 
-### 6.2 DHCP：系统客户端可用
+### 6.2 DHCP: the system client works
 
-**IPConfiguration 接受 feth**，不需要自己实现 DHCP 客户端。
+**IPConfiguration accepts feth**, there is no need to implement a DHCP client
+ourselves.
 
 ```bash
 sudo ipconfig set feth9 DHCP     # exit=0
-ipconfig getiflist               # → ... feth9    ← 出现了
-ipconfig getsummary feth9        # → ConfigMethod: DHCP, ServiceID: DHCP-feth9
+ipconfig getiflist               # -> ... feth9    <- it is there
+ipconfig getsummary feth9        # -> ConfigMethod: DHCP, ServiceID: DHCP-feth9
 ```
 
-⚠️ **一个曾经把结论带偏的陷阱**：`ipconfig getiflist` 列的是「**当前有服务的接口**」，
-不是「能配置的接口」。没跑过服务的接口一律不在里面 —— 连插着线的真网卡也不在
-（实测 `ipconfig getsummary en1` 同样报 "interface doesn't exist"，而 en1 是块
-正经的 Thunderbolt 网卡）。**不能拿它的缺席当作"IPConfiguration 不认这个接口"的证据。**
+Warning: **a trap that once led the conclusion astray**: `ipconfig getiflist`
+lists the "**interfaces that currently have a service**", not the "interfaces
+that can be configured". An interface that has never run a service is never in
+it -- not even a real wired NIC (measured: `ipconfig getsummary en1` likewise
+reports "interface doesn't exist", and en1 is a perfectly ordinary Thunderbolt
+NIC). **Its absence must not be taken as evidence that "IPConfiguration does
+not recognize this interface".**
 
-链路必须是 up 的：feth 没有 peer 时 `status: inactive`，服务会停在
-`Active: FALSE` / `State: INACTIVE`。真实场景下 feth0↔feth1 已配对，链路 active。
+The link must be up: while feth has no peer, `status: inactive` and the
+service stops at `Active: FALSE` / `State: INACTIVE`. In a real scenario
+feth0<->feth1 are already paired and the link is active.
 
-**代价**：`ipconfig set` 建立的是**临时服务**，只活到下一次网络配置变更，且不出现在
-「系统设置 → 网络」里。对 GUI 反而好办 —— App 自己就是配置入口，服务掉了可以重新 set。
+**The cost**: `ipconfig set` creates a **temporary service**, it lives only
+until the next network configuration change and does not appear in "System
+Settings -> Network". For the GUI this is actually easier -- the App is the
+configuration entry point itself, and when the service is gone it can simply
+set it again.
 
-### 6.3 一条命令换来的东西
+### 6.3 What one command buys you
 
-在真实链路（feth0↔feth1 已配对、设备侧有 DHCP 服务器）上执行：
+Executed on a real link (feth0<->feth1 paired, the device side running a DHCP
+server):
 
 ```bash
 sudo ipconfig set feth0 DHCP
 ```
 
-**IPConfiguration 会自动完成全部四件事**：
+**IPConfiguration automatically does all four things**:
 
-| 结果 | 实测证据 |
+| Result | Measured evidence |
 |---|---|
-| 拿到租约 | `ipconfig getifaddr feth0` → `192.168.35.128`，`State: BOUND` |
-| 配好 DNS（scoped） | `scutil --dns` 出现 `nameserver 192.168.35.7 / if_index 43 (feth0) / Scoped` |
-| 装好 scoped 默认路由 | `netstat -rn` 出现 `default 192.168.35.7 UGScIg feth0` |
-| 发布到动态存储 | `State:/Network/Service/DHCP-feth0/{DHCP,DNS,IPv4}`，`IsPublished: TRUE` |
+| A lease is obtained | `ipconfig getifaddr feth0` -> `192.168.35.128`, `State: BOUND` |
+| The DNS is configured (scoped) | `scutil --dns` shows `nameserver 192.168.35.7 / if_index 43 (feth0) / Scoped` |
+| The scoped default route is installed | `netstat -rn` shows `default 192.168.35.7 UGScIg feth0` |
+| It is published to the dynamic store | `State:/Network/Service/DHCP-feth0/{DHCP,DNS,IPv4}`, `IsPublished: TRUE` |
 
-最后一行值得注意：**这正是 §3.2 里手工写失败的那三个键**。IPConfiguration 通过
-正规路径注册的服务，IPMonitor 完全采纳；手工捏造的不采纳。
+The last row is worth noting: **these are exactly the three keys that failed
+when they were written by hand in section 3.2**. A service registered by
+IPConfiguration through the proper path is adopted completely by IPMonitor; a
+hand-fabricated one is not.
 
-### 6.4 唯一需要手工的一步：抢全局默认路由
+### 6.4 The only manual step: taking over the global default route
 
-feth0 **不会**自动成为主服务。实测时 `State:/Network/Global/IPv4` 的
-`PrimaryInterface` 仍是 `ipsec0`（当时 VPN + Wi-Fi 都在跑，排名高于 feth0）。
+feth0 **does not** become the primary service automatically. In the measurement
+the `PrimaryInterface` in `State:/Network/Global/IPv4` was still `ipsec0` (at
+the time both a VPN and Wi-Fi were running, ranked above feth0).
 
-结果是：feth0 有 **scoped** 默认路由（绑定到该接口的流量走它），但**未绑定的流量**
-仍走主服务。
+The result: feth0 has a **scoped** default route (the traffic bound to that
+interface goes through it), but the **unbound traffic** still goes through the
+primary service.
 
-要让全局流量走设备，就是那条原本的命令：
+To make the global traffic go through the device, it is the original command:
 
 ```bash
 sudo route -n change default $(ipconfig getoption feth0 router)
 ```
 
-**注意适用条件**：只在有更高优先级服务同时具备连通性时才需要这一步。而 USB 网络
-共享的典型场景恰恰是没有别的网络可用（用户正因为没 Wi-Fi 才插的手机），那时 feth0
-大概率自然成为主服务，这条命令都不用跑。
+**Mind the conditions of applicability**: this step is only needed when a
+service of higher priority is running and also has connectivity. And the
+typical scenario of USB network sharing is precisely the one where no other
+network is available (the user plugged in the phone precisely because there is
+no Wi-Fi); there feth0 most likely becomes the primary service on its own and
+the command does not even have to run.
 
-### 6.5 对实现的影响
+### 6.5 The impact on the implementation
 
-**`tk_net_*` 那组 C API 基本不需要了。** 原计划要自己实现的 DHCP 客户端
-（在 feth0 上开 BPF 走 DISCOVER/OFFER/REQUEST/ACK，还要和 RNDIS 状态机做时序耦合）
-整块省掉。helper 只需要：
+**The `tk_net_*` group of C APIs is basically not needed.** The DHCP client
+originally planned to be implemented by hand (opening BPF on feth0 to run
+DISCOVER/OFFER/REQUEST/ACK, and coupling its timing to the RNDIS state machine)
+is saved as a whole. The helper only needs:
 
-1. `ipconfig set <feth0> DHCP` —— 或者用静态 IP 时走 §6.1 的 `SIOCAIFADDR`
-2. 可选地 `route change default`
+1. `ipconfig set <feth0> DHCP` -- or, for a static IP, the `SIOCAIFADDR` of
+   section 6.1
+2. optionally `route change default`
 
-**代价**：`ipconfig set` 建立的是**临时服务**，只活到下一次网络配置变更，且不出现在
-「系统设置 → 网络」里。对 GUI 反而好办 —— App 自己就是配置入口，服务掉了重新 set 即可。
+**The cost**: `ipconfig set` creates a **temporary service**, it lives only
+until the next network configuration change and does not appear in "System
+Settings -> Network". For the GUI this is actually easier -- the App is the
+configuration entry point itself, and when the service is gone, set it again.
 
-**清理**：`sudo ipconfig set feth0 NONE`。
+**Cleanup**: `sudo ipconfig set feth0 NONE`.
 
 ---
 
-## 7. 踩过的坑
+## 7. The pitfalls hit along the way
 
-### Hardened Runtime 与 Homebrew 的 libusb
+### Hardened Runtime and Homebrew's libusb
 
-签名的 .app 启动即崩：
+The signed .app crashes on startup:
 
 ```
 Library not loaded: /opt/homebrew/opt/libusb/lib/libusb-1.0.0.dylib
 Reason: ... have different Team IDs
 ```
 
-Hardened Runtime 下 macOS 拒绝加载 Team ID 与主程序不一致的库。Homebrew 的 libusb
-是 ad-hoc 签名（无 Team ID），而 App 用开发者证书签（有 Team ID）。
+Under the Hardened Runtime macOS refuses to load a library whose Team ID
+differs from the main program's. Homebrew's libusb is ad-hoc signed (no Team
+ID), while the App is signed with a developer certificate (it has a Team ID).
 
-**任何签名分发的 TetherKit.app 都必须内嵌 libusb** 并用同一身份重签。
-另一条路是加 `com.apple.security.cs.disable-library-validation` 豁免，但那等于把
-整个进程的库校验关掉，不划算。
+**Any signed and distributed TetherKit.app must embed libusb** and re-sign it
+with the same identity. The other road is to add the
+`com.apple.security.cs.disable-library-validation` exemption, but that amounts
+to turning off the library validation of the whole process, which is not worth
+it.
 
-注意：这个坑是**签名带来的**。源码构建的 ad-hoc 产物不存在此问题。
+Note: this pitfall is **brought about by the signing**. An ad-hoc artifact
+built from the source does not have this problem.
 
-### `install_name_tool` 之后必须重签
+### After `install_name_tool` you must re-sign
 
-arm64 要求可执行文件有有效签名，改字节会让签名失效，然后启动直接被内核拒绝
-（`Killed: 9`），而且 launchd 日志里看不出原因。
+arm64 requires the executable to have a valid signature; changing the bytes
+invalidates the signature, and then the startup is rejected outright by the
+kernel (`Killed: 9`), with no reason visible in the launchd log.
 
-### `install` 会把软链拆成独立文件
+### `install` breaks the symlinks into separate files
 
-`libtetherkit.dylib` 和 `libtetherkit.0.dylib` 是指向 `.0.1.1.dylib` 的软链。
-`install` 不保留软链，会各拷一份**独立的真实文件**。后续 `install_name_tool`
-只改到其中一份，而按 `@rpath` 加载的恰好是没改到的那份 —— **修了个不被使用的副本，
-问题却还在，且毫无征兆**。用 `cp -a`。
+`libtetherkit.dylib` and `libtetherkit.0.dylib` are symlinks to
+`.0.1.1.dylib`. `install` does not preserve the symlinks and copies a
+**separate real file** for each. The later `install_name_tool` only changes one
+of them, and the one that gets loaded via `@rpath` is exactly the one that was
+not changed -- **a copy that is never used got fixed, the problem is still
+there, and with no warning whatsoever**. Use `cp -a`.
 
-### 依赖要对着正确的对象查
+### Look up the dependencies against the right object
 
-`libusb` 是 `libtetherkit.dylib` 的依赖，不是 helper 可执行文件的。对着 helper 查
-`otool -L` 得到空结果，整段处理被静默跳过 —— 装完看起来一切正常，实际仍依赖 Homebrew。
+`libusb` is a dependency of `libtetherkit.dylib`, not of the helper
+executable. Running `otool -L` against the helper yields an empty result, the
+whole step is silently skipped -- after the install everything looks perfectly
+normal, yet it still depends on Homebrew.
 
-### UTF-8 locale 下 `$VAR` 紧跟全角标点会炸
+### Under a UTF-8 locale, `$VAR` followed by full-width punctuation blows up
 
 ```bash
-echo "已清理（条目 + $IFACE）"   # → IFACE?: unbound variable
+echo "cleaned（items + $IFACE）"   # -> IFACE?: unbound variable
 ```
 
-bash 按字节判断标识符字符，UTF-8 locale 下全角标点的首字节（0xEF）被 `isalnum()`
-判为真，吸进了变量名。C locale 下不复现。
+bash decides the characters of an identifier byte by byte; under a UTF-8
+locale the lead byte of the full-width punctuation (0xEF) is judged true by
+`isalnum()` and is absorbed into the variable name. It does not reproduce under
+the C locale.
 
-**规则：变量后面紧跟中文标点时必须写 `${VAR}`。**
+**Rule: when a variable is immediately followed by Chinese punctuation, it must
+be written as `${VAR}`.**
 
-### 部署目标默认跟宿主走
+### The deployment target follows the host by default
 
-项目支持传 `CMAKE_OSX_DEPLOYMENT_TARGET` 但没设默认值，产物一直跟着宿主编译
-（本次是 26.0），而 README 声称支持 13.3+。
+The project accepts `CMAKE_OSX_DEPLOYMENT_TARGET` but sets no default, so the
+artifacts have always been built against the host version (26.0 in this case),
+while the README claims support for 13.3+.
 
-顺带发现：Homebrew 的 libusb 本身也是按宿主版本编的，所以**预编译 Release 二进制
-实际上跑不了 13.3**。这个与 GUI 无关，但影响现有的 Release 产物。
+Incidentally: Homebrew's libusb itself is also built against the host version,
+so **the prebuilt Release binaries actually do not run on 13.3**. This has
+nothing to do with the GUI, but it does affect the existing Release artifacts.
 
 ---
 
-## 8. Homebrew 分发
+## 8. Homebrew distribution
 
-### 实测的两条约束
+### The two measured constraints
 
-- **`brew services` 的 service DSL 没有 `MachServices`**（查
-  `Library/Homebrew/service.rb` 确认），注册不了 XPC 服务
-- **`brew install` 从不以 root 运行**，formula 写不了 `/Library/LaunchDaemons`
+- **The service DSL of `brew services` has no `MachServices`** (confirmed by
+  looking at `Library/Homebrew/service.rb`), so an XPC service cannot be
+  registered
+- **`brew install` never runs as root**, a formula cannot write
+  `/Library/LaunchDaemons`
 
-→ helper 只能装进 prefix，由 caveats 引导用户跑一条 `sudo`。这是标准做法。
+So the helper can only be installed into the prefix, and the caveats guide the
+user to run one `sudo`. This is the standard practice.
 
-### .app 的位置
+### Where the .app goes
 
-formula **可以**装 .app 进 Cellar（`python@3.14` 就装了两个），但**不会**出现在
-`/Applications`、Launchpad 或聚焦搜索里 —— 需要 caveats 引导用户软链，或改走 Cask。
+A formula **can** install an .app into the Cellar (`python@3.14` installs two),
+but it **does not** show up in `/Applications`, in the Launchpad or in the
+Spotlight search -- the caveats have to guide the user to create a symlink, or
+the distribution has to switch to a Cask.
 
-### 签名需求
+### The signing requirements
 
-| 分发方式 | 需要证书吗 |
+| Distribution method | Does it need a certificate? |
 |---|---|
-| Formula（源码构建） | **不需要** —— 本地编译不带 quarantine，Gatekeeper 不参与 |
-| Cask（预编译 .app） | 需要 Developer ID + 公证 —— Cask 默认给下载物加 quarantine |
+| Formula (built from the source) | **no** -- a local build carries no quarantine, Gatekeeper is not involved |
+| Cask (prebuilt .app) | Developer ID + notarization needed -- a Cask puts the quarantine on the download by default |
 
-源码构建路线之所以可行，正是因为安全模型选了 AuthorizationRef 复核而非签名绑定。
+The source-build route is feasible precisely because the security model chose
+the AuthorizationRef re-check over the signature binding.
 
 ---
 
-## 9. C API 缺口清单
+## 9. The C API gap list
 
-若要继续，现有 C++ 层需要补的东西：
+To go further, the existing C++ layer needs the following (as of the spike):
 
-**必须新增的访问器** —— `Runtime` 目前只暴露 `SystemInterfaceName()` 和
-`DeviceInfo()`，以下全部拿不到：桥接统计、RNDIS 当前状态、链路 up/down、
-协商参数、驱动侧网卡名、致命错误原因。
+**The accessors that must be added** -- `Runtime` currently exposes only
+`SystemInterfaceName()` and `DeviceInfo()`, and the following are all
+unobtainable: the bridge statistics, the current RNDIS state, the link up/down,
+the negotiated parameters, the driver side interface name, the reason for a
+fatal error.
 
-**必须改的行为**：
+**The behaviours that must change**:
 
-- `RunUntilStopped()` 是阻塞的，GUI 用不了 —— `Start()` 必须自己起控制线程后返回
-  （控制通道必须在非 libusb 事件线程上，这条约束不能省）
-- 观察者的五个回调现在只打日志，需要转发给宿主
+- `RunUntilStopped()` blocks and is unusable from a GUI -- `Start()` must start
+  the control thread itself and return (the control channel has to be on a
+  thread that is not the libusb event thread, this constraint cannot be
+  dropped)
+- the five callbacks of the observer only log today and have to be forwarded to
+  the host
 
-**建议用事件队列而非回调**：回调会从 libusb 事件线程和控制线程上来，Swift 侧要跨线程
-marshal；更要命的是重入 —— 在回调里调停机会自等死锁（`Stop()` 要 join 控制线程）。
+**An event queue is recommended rather than callbacks**: the callbacks arrive
+from the libusb event thread and from the control thread, so the Swift side has
+to marshal across the threads; worse is re-entrancy -- calling stop from inside
+a callback self-waits into a deadlock (`Stop()` joins the control thread).
 
-**其它缺口**：
+**The other gaps**:
 
-| 缺口 | 说明 |
+| Gap | Explanation |
 |---|---|
-| 日志 sink | 日志只往 stderr 走，GUI 拿不到 |
-| 设备字符串描述符 | `DeviceCandidate` 无厂商名/产品名/序列号，两台同型号设备无法区分 |
-| 热插拔 | `Context::SupportsHotplug()` 存在但从未被使用 |
-| 孤儿 feth 清理 | 进程被 SIGKILL 时析构不跑，网卡留在内核里 |
-| helper 信号处理 | `launchctl bootout` 发 SIGTERM，Swift `deinit` 不会跑，同样漏网卡 |
+| Log sink | The logs only go to stderr, the GUI cannot get them |
+| Device string descriptors | `DeviceCandidate` has no vendor name / product name / serial number, two devices of the same model cannot be told apart |
+| Hot plug | `Context::SupportsHotplug()` exists but has never been used |
+| Orphan feth cleanup | When the process is SIGKILLed the destructor does not run and the interface stays in the kernel |
+| helper signal handling | `launchctl bootout` sends SIGTERM, the Swift `deinit` does not run, and the interface is leaked just the same |
 
-孤儿清理是兜底，比信号处理更重要 —— SIGKILL 是任何信号处理器都拦不住的。
+The orphan cleanup is the backstop and matters more than the signal handling --
+SIGKILL is something that no signal handler can catch.
 
 ---
 
-## 10. 验证命令备忘
+## 10. Verification command memo
 
 ```bash
-# feth 是否在 IOKit 里（预期：不在）
+# whether feth is in IOKit (expected: it is not)
 ioreg -c IONetworkInterface -r -d1 | grep '"BSD Name"' | sort -u
 
-# IPConfiguration 认不认 feth（预期：认，exit=0 且随后出现在 getiflist 里）
+# whether IPConfiguration accepts feth (expected: yes, exit=0 and it then shows up in getiflist)
 sudo ifconfig feth9 create
 sudo ipconfig set feth9 DHCP && ipconfig getiflist
 sudo ipconfig set feth9 NONE && sudo ifconfig feth9 destroy
 
-# ⚠️ getiflist 列的是「当前有服务的接口」，不是「能配置的接口」。
-#    没跑过服务的接口一律不在里面，插着线的真网卡也不在。
-#    不要拿它的缺席当作「IPConfiguration 不认这个接口」的证据 —— 我踩过。
+# Warning: getiflist lists the "interfaces that currently have a service", not
+#    the "interfaces that can be configured". An interface that has never run a
+#    service is never in it, not even a real wired NIC.
+#    Do not take its absence as evidence that "IPConfiguration does not
+#    recognize this interface" -- I stepped on that one.
 
-# 真实链路下的完整验证（需要接着设备、tetherkit 在跑）
+# the complete verification on a real link (needs the device plugged in and tetherkit running)
 sudo ipconfig set feth0 DHCP
-ipconfig getifaddr feth0                     # 租约
-scutil --dns | grep -A3 feth0                # scoped DNS（在后段，别用 head 截断）
-netstat -rn -f inet | grep -E "^default"     # scoped 默认路由
+ipconfig getifaddr feth0                     # the lease
+scutil --dns | grep -A3 feth0                # scoped DNS (it is in the later part, do not cut it with head)
+netstat -rn -f inet | grep -E "^default"     # scoped default route
 ipconfig getsummary feth0 | grep -E "State|IsPublished|Router"
-sudo ipconfig set feth0 NONE                 # 清理
+sudo ipconfig set feth0 NONE                 # cleanup
 
-# 内核肯不肯给 feth 配地址（预期：肯）
+# whether the kernel agrees to configure an address on feth (expected: it does)
 sudo ifconfig feth9 create
 sudo ifconfig feth9 inet 10.99.99.1 netmask 255.255.255.0 up
 netstat -rn -f inet | grep 10.99.99
 sudo ifconfig feth9 destroy
 
-# Homebrew service DSL 支不支持 MachServices（预期：不支持）
+# whether the Homebrew service DSL supports MachServices (expected: it does not)
 grep -i machservice /opt/homebrew/Library/Homebrew/service.rb
 ```
 
-`netstat -rn` 输出里接口路由行尾的 `!` 是 scoped route 标记（`RTF_IFSCOPE`），
-**不是错误** —— 正常的 en0/bridge 路由也带它。
+The `!` at the end of the interface route lines in the `netstat -rn` output is
+the scoped route marker (`RTF_IFSCOPE`), **not an error** -- the ordinary
+en0/bridge routes carry it too.

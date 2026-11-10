@@ -1,11 +1,13 @@
-# C ABI 层的检查豁免
+# Check exemptions for the C ABI layer
 #
-# 这一层是**给 C / Swift 用的**，命名必须遵守 C 的惯例（`tk_snake_case`），
-# 而不是项目内部 C++ 代码的 CamelCase。硬套上层规则只会得到一堆无法修的告警，
-# 所以在这个目录里整组关掉命名检查。
+# This layer is **for C and Swift callers**, so the names must follow the C
+# convention (`tk_snake_case`) rather than the CamelCase of the project's
+# internal C++ code. Forcing the upper-level rules on it would only produce a
+# pile of warnings nobody could fix, so the whole naming group is off here.
 #
-# 同样地，C ABI 只能用 POD 与裸指针，因此关掉那些「改用 std::array / span /
-# 引用」之类在 extern "C" 边界上根本不适用的建议。
+# Likewise, a C ABI can only use PODs and raw pointers, so the advice to
+# "use std::array / span / references instead" is turned off -- it simply does
+# not apply at an extern "C" boundary.
 InheritParentConfig: true
 
 Checks: >

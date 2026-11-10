@@ -1,26 +1,35 @@
 import Foundation
 import TetherKitIPC
 
-/// 在「应用程序」目录里维护一个指向本 .app 的 Finder 别名，让聚焦搜得到。
+/// Maintain a Finder alias pointing at this .app in the Applications
+/// directory, so Spotlight can find it.
 ///
-/// ★ 为什么是别名（bookmark）而不是软链接 ★
-///   Homebrew formula 把 .app 装在 Cellar 里，聚焦不索引那里；指向 App 的
-///   **软链接**聚焦同样不认。Finder 别名是真正的书签文件：聚焦按文件名索引它，
-///   回车即启动目标。用 URL 的 bookmark API（.suitableForBookmarkFile）生成，
-///   不需要 Finder 帮忙、不触发任何权限弹窗。
+/// Why an alias (bookmark) and not a symbolic link:
+///   The Homebrew formula installs the .app into the Cellar, and Spotlight
+///   does not index that; a **symbolic link** pointing at the App is not
+///   recognized by Spotlight either. A Finder alias is a real bookmark
+///   file: Spotlight indexes it by file name and Return launches the
+///   target. It is created with the URL bookmark API
+///   (.suitableForBookmarkFile), which needs no help from Finder and
+///   triggers no permission dialog.
 ///
-/// ★ 为什么在首次启动时建，而不是安装时 ★
-///   实测 brew 连 postinstall 都跑在沙箱里，写 /Applications 会被静默拦下 ——
-///   「装完立刻建」走不通。所以由 App 每次启动顺手校一遍：缺了就补、目标
-///   漂移（brew upgrade 换了 Cellar 版本路径）就重写。`--install-finder-alias`
-///   模式（建完即退）保留给 CI 冒烟与手动补建。
+/// Why it is created at first launch and not at install time:
+///   Measured: brew runs even its postinstall inside a sandbox, and
+///   writing /Applications is silently blocked -- so "create it right
+///   after installing" does not work. Instead the app checks it on every
+///   launch as a side task: add it if missing, rewrite it if the target
+///   drifted (brew upgrade changed the Cellar version path). The
+///   `--install-finder-alias` mode (create and exit) is kept for the CI
+///   smoke test and for manual rebuilds.
 enum FinderAlias {
-    /// 别名文件名。不带 .app —— 它是书签文件，不是 bundle；
-    /// 聚焦显示的名字就是它。
+    /// The alias file name. Without .app -- it is a bookmark file, not a
+    /// bundle; the name Spotlight shows is exactly this.
     private static let aliasName = "TetherKit"
 
-    /// 确保别名存在且指向 bundleURL。返回一句人话结果（--install-finder-alias
-    /// 模式会原样打印）。失败不抛错 —— 别名是锦上添花，不该拦住任何流程。
+    /// Make sure the alias exists and points at bundleURL. Returns a
+    /// plain-language result (the --install-finder-alias mode prints it
+    /// verbatim). Failures do not throw -- the alias is a bonus and must
+    /// not block any flow.
     @discardableResult
     static func ensure(for bundleURL: URL) -> String {
         guard bundleURL.pathExtension == "app" else {
@@ -31,8 +40,10 @@ enum FinderAlias {
             return L(.aliasSkippedAlreadyInApplications)
         }
 
-        // 先试全局 /Applications（admin 组可写，不需要 root）；
-        // 写不进去（受管机器、非管理员账户）退回 ~/Applications —— 聚焦同样索引。
+        // Try the global /Applications first (writable by the admin
+        // group, no root needed); if it cannot be written (a managed
+        // machine, a non-admin account) fall back to ~/Applications --
+        // Spotlight indexes that one too.
         let candidates = [
             URL(fileURLWithPath: "/Applications", isDirectory: true),
             FileManager.default.homeDirectoryForCurrentUser
@@ -50,8 +61,9 @@ enum FinderAlias {
         return L(.aliasFailed)
     }
 
-    /// 在指定目录里建立/修复别名。位置被非别名文件占用时返回 nil（换下一个
-    /// 候选目录），其余失败抛错。
+    /// Create or repair the alias in the given directory. Returns nil
+    /// when the name is taken by a file that is not an alias (try the next
+    /// candidate directory); other failures throw.
     private static func ensure(in directory: URL, target: URL) throws -> String? {
         let aliasURL = directory.appendingPathComponent(aliasName)
         let path = aliasURL.path
@@ -59,7 +71,8 @@ enum FinderAlias {
         if FileManager.default.fileExists(atPath: path) {
             let isAlias = (try? aliasURL.resourceValues(forKeys: [.isAliasFileKey]))?
                 .isAliasFile ?? false
-            // 不是我们的别名（用户自己拷了个同名文件？）就绝不动它。
+            // Not our alias (the user copied a file with the same
+            // name?) -- never touch it.
             guard isAlias else { return nil }
 
             if let resolved = try? URL(resolvingAliasFileAt: aliasURL,
@@ -67,7 +80,8 @@ enum FinderAlias {
                resolved.standardizedFileURL.path == target.path {
                 return L(.aliasAlreadyPresent, path)
             }
-            // 目标漂移（升级换了路径）—— 重写。
+            // The target drifted (an upgrade changed the path) --
+            // rewrite it.
         }
 
         let bookmark = try target.bookmarkData(options: .suitableForBookmarkFile,

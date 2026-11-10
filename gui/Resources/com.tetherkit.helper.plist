@@ -1,20 +1,25 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  tetherkit-helper 的 LaunchDaemon 配置。
+  The LaunchDaemon configuration of tetherkit-helper.
 
-  安装到 /Library/LaunchDaemons/com.tetherkit.helper.plist（需要 root）。
-  Scripts/install-helper.sh 会替你做。
+  Installed to /Library/LaunchDaemons/com.tetherkit.helper.plist (root
+  required). Scripts/install-helper.sh does it for you.
 
-  ★ 为什么是传统 LaunchDaemon 而不是 SMAppService ★
-    SMAppService 靠代码签名的 designated requirement 双向绑定 App 与 helper，
-    源码分发下每台机器编出的 cdhash 都不同，DR 必然对不上。而且它不弹密码框 ——
-    审批入口是「系统设置 → 登录项与扩展」，对命令行安装的工具很别扭。
-    详见 docs/GUI-SPIKE.md 第 3.3 节。
+  Why a classic LaunchDaemon rather than SMAppService:
+    SMAppService binds the App and the helper bidirectionally through the
+    code signing designated requirement, and under source distribution
+    every machine compiles a different cdhash, so the DR can never match.
+    It also does not raise a password dialog: the approval entry point is
+    "System Settings, Login Items and Extensions", which is awkward for
+    a tool installed from the command line.
+    See docs/GUI-SPIKE.md section 3.3.
 
-  ★ 为什么没有 KeepAlive ★
-    声明了 MachServices 之后，launchd 会在有人连这个服务时**按需**把它拉起来。
-    加 KeepAlive 只会让它在没人用时也常驻，白占内存 —— 而且 helper 一旦跑起来
-    就会一直活着（见 main.swift 末尾的说明），不需要 launchd 帮忙重启。
+  Why there is no KeepAlive:
+    Once MachServices is declared, launchd starts the service **on
+    demand** when somebody connects to it. Adding KeepAlive only makes it
+    resident while nobody uses it, wasting memory, and once the helper is
+    running it stays alive (see the note at the end of main.swift), so
+    launchd does not need to restart it.
 -->
 <plist version="1.0">
 <dict>
@@ -26,21 +31,23 @@
         <string>/Library/PrivilegedHelperTools/com.tetherkit.helper</string>
     </array>
 
-    <!-- 声明 Mach 服务，launchd 据此按需拉起。名字必须与
-         HelperConstants.machServiceName 完全一致。 -->
+    <!-- Declares the Mach service; launchd starts it on demand. The
+         name must be exactly HelperConstants.machServiceName. -->
     <key>MachServices</key>
     <dict>
         <key>com.tetherkit.helper</key>
         <true/>
     </dict>
 
-    <!-- 日志。helper 自身的问题（起不来、崩溃）只能从这里看。 -->
+    <!-- The log. The helper's own problems (does not start, crashes)
+         can only be seen here. -->
     <key>StandardOutPath</key>
     <string>/var/log/tetherkit-helper.log</string>
     <key>StandardErrorPath</key>
     <string>/var/log/tetherkit-helper.log</string>
 
-    <!-- 数据路径要开 BPF 描述符与大量 USB 传输，默认的 256 个描述符偏紧。 -->
+    <!-- The data path opens BPF descriptors and many USB transfers, so
+         the default of 256 descriptors is too tight. -->
     <key>SoftResourceLimits</key>
     <dict>
         <key>NumberOfFiles</key>

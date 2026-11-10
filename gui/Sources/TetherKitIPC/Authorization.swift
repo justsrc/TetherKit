@@ -1,40 +1,50 @@
 import Foundation
 import Security
 
-/// 授权凭据的取得（App 侧）与复核（helper 侧）。
+/// Obtaining (App side) and verifying (helper side) authorization credentials.
 ///
-/// ★ 两侧刻意放在同一个文件里 ★
-///   它们的差别只有一个标志位（`.interactionAllowed`），而那一位放错就是一个
-///   安全漏洞。写在一起，改一边时另一边就在眼前。
+/// The two sides are deliberately kept in the same file:
+///   They differ by only one flag (`.interactionAllowed`), and setting that flag
+///   in the wrong place is a security vulnerability. Kept together, the other
+///   side is in view when one is changed.
 ///
-/// ★ 一句必须记住的话：授权 ≠ root ★
-///   `AuthorizationCopyRights` 成功**不改变进程的任何东西** —— uid、euid 一个
-///   都没动。它产出的只是一张「用户在某时刻通过密码/指纹确认过」的凭据。
-///   权限本身必须另有来源（这里是 launchd 以 root 拉起的 helper）。
+/// One sentence that must be remembered: authorization != root.
+///   A successful `AuthorizationCopyRights` does not change anything about the
+///   process -- uid and euid are untouched. All it produces is a credential
+///   proving "the user confirmed with a password/fingerprint at some point".
+///   The privilege itself must come from elsewhere (here, the helper launched as
+///   root by launchd).
 ///
-///   所以顺序不能反：不是「先弹指纹拿到 root，再去建网卡」，而是「先有常驻的
-///   root helper，每次操作弹指纹拿凭据交给它复核」。
+///   So the order cannot be reversed: it is not "show the fingerprint prompt to
+///   get root, then create the interface", but "first have a resident root
+///   helper, then on each operation show the fingerprint prompt to obtain a
+///   credential and hand it to the helper for verification".
 
-/// 一次授权的持有者。
+/// Holder of one authorization.
 ///
-/// ★ 它存在的唯一理由：外部形式**不是凭据本身，只是一个引用** ★
+/// The only reason it exists: the external form is not the credential itself,
+/// only a reference.
 ///
-///   `AuthorizationMakeExternalForm` 产出的 32 字节里没有任何权利信息，它只是
-///   指向 securityd 里那份授权的一把钥匙。只要 App 这边把 AuthorizationRef 释放
-///   掉（尤其是带 `.destroyRights` 释放），securityd 里的东西就没了 ——
-///   helper 随后 `AuthorizationCreateFromExternalForm` 会失败，
-///   报 `errAuthorizationDenied (-60005)`。
+///   The 32 bytes produced by `AuthorizationMakeExternalForm` contain no rights
+///   information; they are just a key pointing at that authorization inside
+///   securityd. As soon as the App side releases the AuthorizationRef (especially
+///   with `.destroyRights`), the thing in securityd is gone -- the helper's
+///   subsequent `AuthorizationCreateFromExternalForm` will fail with
+///   `errAuthorizationDenied (-60005)`.
 ///
-///   所以 AuthorizationRef 必须**活到 XPC 往返结束之后**。用一个类来持有它，
-///   让 ARC 去管这件事，比在每个调用点手写「记得最后再 free」可靠得多。
+///   So the AuthorizationRef must stay alive until the XPC round trip has
+///   finished. Holding it in a class and letting ARC manage that is far more
+///   reliable than writing "remember to free at the end" at every call site.
 ///
-/// ★ 为什么敢标 @unchecked Sendable ★
-///   HelperInstaller 要把令牌递到后台队列（AEWP 会阻塞在授权框上，不能占主
-///   线程）。这里没有可变状态 —— 两个存储属性都是 let；AuthorizationRef 本身
-///   按 Authorization Services 的文档是线程安全的（真正的状态在 securityd
-///   进程里，跨进程调用天然串行化）；deinit 由 ARC 保证只跑一次。
+/// Why it is safe to mark @unchecked Sendable:
+///   HelperInstaller needs to pass the token to a background queue (AEWP blocks
+///   on the authorization dialog and cannot occupy the main thread). There is no
+///   mutable state here -- both stored properties are let; AuthorizationRef
+///   itself is thread-safe per Authorization Services documentation (the real
+///   state lives in the securityd process, and cross-process calls are
+///   serialized by nature); ARC guarantees deinit runs exactly once.
 public final class AuthorizationToken: @unchecked Sendable {
-    /// 可以跨进程传给 helper 的 32 字节外部形式。
+    /// 32-byte external form that can be passed across processes to the helper.
     public let externalForm: Data
 
     private let authorization: AuthorizationRef
@@ -44,24 +54,29 @@ public final class AuthorizationToken: @unchecked Sendable {
         self.externalForm = externalForm
     }
 
-    /// 把底层的 AuthorizationRef 短暂借给需要它本体的 API（目前只有
-    /// `AuthorizationExecuteWithPrivileges` 一处 —— 它要的是 ref，不是外部形式）。
+    /// Briefly lend the underlying AuthorizationRef to an API that needs the ref
+    /// itself (currently only `AuthorizationExecuteWithPrivileges`, which takes a
+    /// ref, not the external form).
     ///
-    /// 做成作用域借用而不是直接暴露属性：ref 的生命周期归本类管，谁把它存到
-    /// 闭包外面，令牌一释放就是悬垂引用 —— 那种错误编译器查不出来。
+    /// Exposed as a scoped borrow rather than a property: the ref's lifetime is
+    /// owned by this class; storing it outside the closure would become a dangling
+    /// reference as soon as the token is released -- a mistake the compiler cannot
+    /// catch.
     public func withReference<T>(_ body: (AuthorizationRef) throws -> T) rethrows -> T {
         try body(authorization)
     }
 
     deinit {
-        // 带 .destroyRights：凭据归 App 所有，用完就销毁，不在进程里留一张
-        // 长期有效的通行证。（helper 那边复核时**不能**带这个标志，
-        // 否则会把这边的授权一起作废 —— 见 AuthorizationVerifier。）
+        // With .destroyRights: the credential belongs to the App and is destroyed
+        // when done, leaving no long-lived pass in the process. (The helper must
+        // not pass this flag when verifying, otherwise it would also invalidate the
+        // App-side authorization -- see AuthorizationVerifier.)
         AuthorizationFree(authorization, [.destroyRights])
     }
 }
 
-/// App 侧：向用户请求授权，拿到可以跨进程传递的凭据。
+/// App side: request authorization from the user and obtain a credential that
+/// can be passed across processes.
 public enum AuthorizationBroker {
     public enum Failure: LocalizedError {
         case userCancelled
@@ -80,29 +95,39 @@ public enum AuthorizationBroker {
         }
     }
 
-    /// 弹出系统授权框，成功后返回持有这次授权的令牌。
+    /// Show the system authorization dialog and, on success, return a token
+    /// holding this authorization.
     ///
-    /// ★ 令牌应当被**缓存复用**，而不是每次操作重新取一次 ★
+    /// The token should be cached and reused, not requested again for every
+    /// operation:
     ///
-    ///   `system.privilege.admin` 这条规则的实测参数是 `shared = false`、
-    ///   `timeout = 300`：
-    ///     * `shared = false` —— 凭据**不跨 AuthorizationRef 共享**。每次
-    ///       `AuthorizationCreate` 建一个新 ref，就必然要用户重新认证一次。
-    ///     * `timeout = 300` —— 但在**同一个 ref** 上，凭据 5 分钟内有效。
+    ///   The measured parameters for the `system.privilege.admin` rule are
+    ///   `shared = false`, `timeout = 300`:
+    ///     * `shared = false` -- credentials are not shared across
+    ///       AuthorizationRefs. Creating a new ref with `AuthorizationCreate`
+    ///       for each operation inevitably requires the user to authenticate
+    ///       again.
+    ///     * `timeout = 300` -- but on the same ref, the credential remains
+    ///       valid for 5 minutes.
     ///
-    ///   所以「连接、配网络、断开」各弹一次框，纯粹是因为我们每次都新建 ref。
-    ///   复用同一个令牌，5 分钟内只需要认证一次。这也是 Apple 自己在
-    ///   EvenBetterAuthorizationSample 里的做法。
+    ///   So showing a prompt for "connect", "configure network", and
+    ///   "disconnect" separately is purely because we create a new ref each
+    ///   time. Reusing the same token means only one authentication within 5
+    ///   minutes. This is also what Apple does in EvenBetterAuthorizationSample.
     ///
-    ///   过期之后 helper 侧的复核会失败，调用方据此丢弃缓存、重新取一次即可。
+    ///   Once expired, helper-side verification will fail, and the caller can
+    ///   discard the cache and request a new one.
     ///
-    /// ⚠️ **调用方必须让令牌活到 XPC 往返结束之后。** 令牌一释放，securityd 里的
-    /// 授权就没了，helper 还原外部形式时会报 `errAuthorizationDenied (-60005)`。
+    /// The caller must keep the token alive until the XPC round trip has
+    /// finished. Once the token is released, the authorization in securityd is
+    /// gone and the helper will fail to restore the external form with
+    /// `errAuthorizationDenied (-60005)`.
     ///
-    /// - Parameter prompt: 显示在系统授权框里的一句说明，告诉用户这次授权是干
-    ///   什么用的。不传的话框里只有干巴巴的「想要进行更改」。
+    /// - Parameter prompt: A sentence shown in the system authorization dialog
+    ///   explaining what this authorization is for. Without it, the dialog shows
+    ///   only a bare "wants to make changes".
     ///
-    /// 必须在主线程调用 —— 它会呈现 UI。
+    /// Must be called on the main thread -- it presents UI.
     public static func requestAuthorization(
         right: String = HelperConstants.privilegedRightName,
         prompt: String? = nil
@@ -112,7 +137,8 @@ public enum AuthorizationBroker {
         guard createStatus == errAuthorizationSuccess, let authorization else {
             throw Failure.internalFailure(createStatus)
         }
-        // 失败路径上要立刻释放；成功路径上所有权交给 AuthorizationToken。
+        // Release immediately on the failure path; hand ownership to
+        // AuthorizationToken on the success path.
         var handedOff = false
         defer {
             if !handedOff {
@@ -138,11 +164,12 @@ public enum AuthorizationBroker {
                                   externalForm: withUnsafeBytes(of: &external) { Data($0) })
     }
 
-    /// 请求权利，必要时弹框。
+    /// Request the right, showing a prompt when necessary.
     ///
-    /// 单独抽出来是因为环境项的构造要嵌好几层 `withUnsafe*` —— 那些缓冲必须活
-    /// 到 `AuthorizationCopyRights` 返回之后，写在主流程里很容易被后来的人
-    /// 「顺手整理」成悬垂指针。
+    /// Extracted because constructing the environment items nests several
+    /// `withUnsafe*` layers -- those buffers must stay alive until
+    /// `AuthorizationCopyRights` returns, and inlining this in the main flow
+    /// makes it easy for a later "tidy up" to turn them into dangling pointers.
     private static func copyRights(_ authorization: AuthorizationRef,
                                    right: String,
                                    prompt: String?) -> OSStatus {
@@ -156,9 +183,10 @@ public enum AuthorizationBroker {
             return withUnsafeMutablePointer(to: &rightItem) { rightPointer in
                 var rights = AuthorizationRights(count: 1, items: rightPointer)
 
-                // App 侧**要**带 .interactionAllowed —— 弹框正是我们要的。
-                // .preAuthorize 让权利当场就被授予，而不是等到真正使用时，
-                // 这样凭据才会进入这个 ref 的缓存、供后续操作复用。
+                // The App side must include .interactionAllowed -- the prompt is
+                // exactly what we want. .preAuthorize grants the right on the
+                // spot rather than at actual use, so the credential enters this
+                // ref's cache and can be reused for subsequent operations.
                 let flags: AuthorizationFlags = [.extendRights, .interactionAllowed, .preAuthorize]
 
                 guard prompt != nil else {
@@ -184,7 +212,7 @@ public enum AuthorizationBroker {
     }
 }
 
-/// helper 侧：复核调用方递过来的凭据。
+/// Helper side: verify a credential handed over by the caller.
 public enum AuthorizationVerifier {
     public enum Failure: LocalizedError {
         case malformedCredential
@@ -203,20 +231,27 @@ public enum AuthorizationVerifier {
         }
     }
 
-    /// 校验凭据里确实已经包含指定权利。不包含就抛错。
+    /// Verify that the credential already contains the specified right. Throws
+    /// if it does not.
     ///
-    /// ★ 三条必须照做的细节 ★
+    /// Three details that must be followed:
     ///
-    ///   1. **绝不能带 `.interactionAllowed`。** daemon 没有 UI 会话；真让它能
-    ///      弹框，等于任何能连上 Mach 服务的进程都能随意触发系统授权弹框骚扰
-    ///      用户。这一步只查「这份凭据里已经有这项权利了吗」，不获取新权利。
+    ///   1. Never include `.interactionAllowed`. A daemon has no UI session; if
+    ///      it could show a prompt, any process able to connect to the Mach
+    ///      service could trigger system authorization dialogs at will to harass
+    ///      the user. This step only checks "does this credential already hold
+    ///      this right?" -- it does not acquire new rights.
     ///
-    ///   2. **`AuthorizationFree` 不能带 `.destroyRights`。** 凭据归 App 所有，
-    ///      helper 只是借来核对；带上会把 App 那边的授权一起作废。
+    ///   2. `AuthorizationFree` must not include `.destroyRights`. The
+    ///      credential belongs to the App; the helper only borrows it for
+    ///      checking. Including the flag would also invalidate the App-side
+    ///      authorization.
     ///
-    ///   3. 复核是**每次特权调用**都要做的。helper 的 root 来自 launchd，
-    ///      跟用户按没按指纹毫无关系 —— 它一启动就是 root，任何能连上 Mach
-    ///      服务的进程都能发请求。所以「谁在调用」只能由 helper 自己回答。
+    ///   3. Verification must happen on every privileged call. The helper's root
+    ///      comes from launchd and has nothing to do with whether the user
+    ///      pressed a fingerprint -- it is root from the moment it starts, and
+    ///      any process able to connect to the Mach service can send requests.
+    ///      So "who is calling" can only be answered by the helper itself.
     public static func verify(externalForm data: Data,
                               right: String = HelperConstants.privilegedRightName) throws {
         guard data.count == MemoryLayout<AuthorizationExternalForm>.size else {
@@ -233,7 +268,7 @@ public enum AuthorizationVerifier {
         guard restoreStatus == errAuthorizationSuccess, let authorization else {
             throw Failure.restoreFailed(restoreStatus)
         }
-        // 注意：**不带** .destroyRights，见上面第 2 条。
+        // Note: no .destroyRights; see detail 2 above.
         defer { AuthorizationFree(authorization, []) }
 
         var name = Array(right.utf8CString)
@@ -242,7 +277,7 @@ public enum AuthorizationVerifier {
                                          value: nil, flags: 0)
             return withUnsafeMutablePointer(to: &item) { itemPointer in
                 var rights = AuthorizationRights(count: 1, items: itemPointer)
-                // 只有 .extendRights，**没有** .interactionAllowed，见上面第 1 条。
+                // Only .extendRights, no .interactionAllowed; see detail 1 above.
                 return AuthorizationCopyRights(authorization, &rights, nil, [.extendRights], nil)
             }
         }
