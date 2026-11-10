@@ -4,8 +4,6 @@
 
 # TetherKit
 
-**English** | [简体中文](README.zh-CN.md)
-
 **A kext-free HoRNDIS alternative that brings Android USB tethering on macOS back to life.**
 
 TetherKit is a **user-space RNDIS driver for macOS**: it turns an RNDIS device (Android USB
@@ -27,7 +25,7 @@ connect, configure IP in three clicks — plus a command-line tool, `tetherkit-c
 > measured against a real Android phone: **~326 Mbps RX / ~240–300 Mbps TX, zero
 > retransmits in both directions** (USB 2.0 high-speed; theoretical ceiling 426 Mbps).
 > Methodology and full results: [docs/BENCHMARKS.md](docs/BENCHMARKS.md); the
-> verification checklist lives in [AGENTS.md](AGENTS.md) §6 (Chinese).
+> verification checklist lives in [AGENTS.md](AGENTS.md) §6 (in English).
 
 ---
 
@@ -172,8 +170,8 @@ blocked by Gatekeeper, so the app deliberately only checks, never swaps. To
 disable the automatic check:
 `defaults write com.tetherkit.app updateCheckDisabled -bool YES`.
 
-**Interface language**: "TetherKit → Language" offers Follow system / 中文 /
-English, and the menu bar panel carries the same switch. Changes take effect
+**Interface language**: "TetherKit → Language" offers Follow system / English,
+and the menu bar panel carries the same switch. Changes take effect
 **immediately** — no restart — and the log lines coming out of the library
 follow along (the language is pushed to the privileged helper too). The default
 is to follow the system language.
@@ -215,20 +213,21 @@ Common options (see `--help` for the full list):
 | `--stats 1000` | Print a throughput/drop statistics line every second |
 | `--log debug` | Enable detailed protocol interaction logging |
 | `--max-transfer-kb` | The main throughput tuning knob — see [docs/PERFORMANCE.md](docs/PERFORMANCE.md) |
-| `--lang zh\|en\|auto` | Interface language, default `auto` (see below) |
+| `--lang en\|auto` | Interface language, default `auto` (see below) |
 
 **Language**: by default the tool checks `TETHERKIT_LANG`, `LC_ALL`,
 `LC_MESSAGES` and `LANG` in that order and takes the first non-empty value.
-Anything starting with `zh` means Chinese; everything else means English.
+English is the only language shipped today, so `en` and `auto` both select it
+and any other value is rejected with an error.
 
 ```bash
-tetherkit-cli --lang zh --help     # pick explicitly
-TETHERKIT_LANG=zh tetherkit-cli --list
+tetherkit-cli --lang en --help     # pick explicitly
+TETHERKIT_LANG=en tetherkit-cli --list
 ```
 
 > ⚠️ Whether `sudo` passes `LANG` through depends on your sudoers `env_keep`, so
-> `sudo tetherkit-cli` does not necessarily follow your terminal's language —
-> pass `--lang` explicitly in that case.
+> `sudo tetherkit-cli` may not see the same environment as your terminal — pass
+> `--lang` explicitly in that case.
 
 ### Why root is needed
 
@@ -397,7 +396,7 @@ Aggregated results: [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 
 ## Documentation
 
-The documents below are written in Chinese.
+The documents below are written in English.
 
 | Document | Contents |
 |---|---|
