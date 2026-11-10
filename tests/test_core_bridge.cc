@@ -507,57 +507,57 @@ TEST_SUITE("core.bridge") {
     bridge.Stop();
   }
 
-TEST_CASE("stats line renders rates and drops") {
-  // The stats line is user-facing text; pin the language before asserting.
-  const tetherkit::testing::ScopedLanguage guard{tetherkit::Language::kEnglish};
-  MockDataChannel channel;
-  LoopbackLink link(LoopbackConfig{.sent_capacity = 4096});
-  Bridge bridge(channel, link, TestConfig());
-  REQUIRE(bridge.Start().has_value());
+  TEST_CASE("stats line renders rates and drops") {
+    // The stats line is user-facing text; pin the language before asserting.
+    const tetherkit::testing::ScopedLanguage guard{tetherkit::Language::kEnglish};
+    MockDataChannel channel;
+    LoopbackLink link(LoopbackConfig{.sent_capacity = 4096});
+    Bridge bridge(channel, link, TestConfig());
+    REQUIRE(bridge.Start().has_value());
 
-  const BridgeStats before = bridge.Snapshot();
-  constexpr std::uint32_t kCount = 50;
-  CHECK(channel.InjectFromDevice(MakeFrames(kCount, 1514)) == kCount);
-  REQUIRE(WaitFor([&] { return link.TotalSentFrames() >= kCount; }));
-  const BridgeStats after = bridge.Snapshot();
+    const BridgeStats before = bridge.Snapshot();
+    constexpr std::uint32_t kCount = 50;
+    CHECK(channel.InjectFromDevice(MakeFrames(kCount, 1514)) == kCount);
+    REQUIRE(WaitFor([&] { return link.TotalSentFrames() >= kCount; }));
+    const BridgeStats after = bridge.Snapshot();
 
-  const std::string line = FormatStatsLine(before, after, 1.0);
-  CHECK(line.find("RX") != std::string::npos);
-  CHECK(line.find("TX") != std::string::npos);
-  CHECK(line.find("pps") != std::string::npos);
-  CHECK(line.find("Mbps") != std::string::npos);
-  CHECK(line.find("queue depth") != std::string::npos);
+    const std::string line = FormatStatsLine(before, after, 1.0);
+    CHECK(line.find("RX") != std::string::npos);
+    CHECK(line.find("TX") != std::string::npos);
+    CHECK(line.find("pps") != std::string::npos);
+    CHECK(line.find("Mbps") != std::string::npos);
+    CHECK(line.find("queue depth") != std::string::npos);
 
-  bridge.Stop();
-}
+    bridge.Stop();
+  }
 
-TEST_CASE("Shutdown keeps the statistics already queued, and stops safely under traffic") {
-  MockDataChannel channel;
-  LoopbackLink link(LoopbackConfig{.inbound_capacity = 8192, .sent_capacity = 8192,
-                                   .max_frames_per_batch = 64});
-  Bridge bridge(channel, link, TestConfig());
-  REQUIRE(bridge.Start().has_value());
+  TEST_CASE("Shutdown keeps the statistics already queued, and stops safely under traffic") {
+    MockDataChannel channel;
+    LoopbackLink link(LoopbackConfig{
+        .inbound_capacity = 8192, .sent_capacity = 8192, .max_frames_per_batch = 64});
+    Bridge bridge(channel, link, TestConfig());
+    REQUIRE(bridge.Start().has_value());
 
-  // Stopping while traffic flows -- this is the scenario that exposes
-  // teardown-order problems most easily.
-  std::atomic<bool> keep_going{true};
-  std::thread producer([&] {
-    while (keep_going.load(std::memory_order_acquire)) {
-      (void)channel.InjectFromDevice(MakeFrames(8, 512));
-      for (const std::vector<std::byte>& frame : MakeFrames(8, 512)) {
-        (void)link.PushInbound(frame);
+    // Stopping while traffic flows -- this is the scenario that exposes
+    // teardown-order problems most easily.
+    std::atomic<bool> keep_going{true};
+    std::thread producer([&] {
+      while (keep_going.load(std::memory_order_acquire)) {
+        (void)channel.InjectFromDevice(MakeFrames(8, 512));
+        for (const std::vector<std::byte>& frame : MakeFrames(8, 512)) {
+          (void)link.PushInbound(frame);
+        }
+        std::this_thread::yield();
       }
-      std::this_thread::yield();
-    }
-  });
+    });
 
-  std::this_thread::sleep_for(std::chrono::milliseconds(50));
-  bridge.Stop();  // stop while traffic flows
-  keep_going.store(false, std::memory_order_release);
-  producer.join();
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    bridge.Stop();  // stop while traffic flows
+    keep_going.store(false, std::memory_order_release);
+    producer.join();
 
-  CHECK_FALSE(bridge.Running());
-  CHECK(channel.ShutdownCalled());
-}
+    CHECK_FALSE(bridge.Running());
+    CHECK(channel.ShutdownCalled());
+  }
 
 }  // TEST_SUITE("core.bridge")

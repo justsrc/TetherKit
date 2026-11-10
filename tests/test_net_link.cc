@@ -228,18 +228,18 @@ TEST_SUITE("net.abi") {
     CHECK(BPF_WORDALIGN(14 + kBpfHeaderMinBytes) - 14 == kBpfHeaderMinBytes);
   }
 
-TEST_CASE("feth creation-time sysctl list is non-empty and each entry has a reason") {
-  CHECK(std::size(kRequiredFethSysctls) > 0);
-  for (const RequiredFethSysctl& entry : kRequiredFethSysctls) {
-    CHECK(entry.name != nullptr);
-    // why holds a message identifier; the shipped language must really have
-    // text for it (a missing row would render as an empty string and leave
-    // "reason:" empty in sysctl errors).
-    const std::string_view why = tetherkit::TextIn(tetherkit::Language::kEnglish, entry.why);
-    // The reason must be a real sentence, not one word.
-    CHECK(why.size() > 10);
+  TEST_CASE("feth creation-time sysctl list is non-empty and each entry has a reason") {
+    CHECK(std::size(kRequiredFethSysctls) > 0);
+    for (const RequiredFethSysctl& entry : kRequiredFethSysctls) {
+      CHECK(entry.name != nullptr);
+      // why holds a message identifier; the shipped language must really have
+      // text for it (a missing row would render as an empty string and leave
+      // "reason:" empty in sysctl errors).
+      const std::string_view why = tetherkit::TextIn(tetherkit::Language::kEnglish, entry.why);
+      // The reason must be a real sentence, not one word.
+      CHECK(why.size() > 10);
+    }
   }
-}
 
 }  // TEST_SUITE("net.abi")
 

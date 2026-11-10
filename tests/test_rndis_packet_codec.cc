@@ -439,46 +439,46 @@ TEST_SUITE("rndis.packet_codec") {
     CHECK(reader.BytesConsumed() == kPacketMsgHeaderBytes + 100);
   }
 
-TEST_CASE("MalformedReason names are complete") {
-  // The names are user-facing text and follow the language, so pin it first.
-  const tetherkit::testing::ScopedLanguage guard{tetherkit::Language::kEnglish};
-  CHECK(MalformedReasonName(MalformedReason::kNone) == "none");
-  CHECK_FALSE(MalformedReasonName(MalformedReason::kNotPacketMessage).empty());
-  CHECK_FALSE(MalformedReasonName(MalformedReason::kDataOutOfBounds).empty());
-  CHECK_FALSE(MalformedReasonName(MalformedReason::kFrameTooLong).empty());
-}
+  TEST_CASE("MalformedReason names are complete") {
+    // The names are user-facing text and follow the language, so pin it first.
+    const tetherkit::testing::ScopedLanguage guard{tetherkit::Language::kEnglish};
+    CHECK(MalformedReasonName(MalformedReason::kNone) == "none");
+    CHECK_FALSE(MalformedReasonName(MalformedReason::kNotPacketMessage).empty());
+    CHECK_FALSE(MalformedReasonName(MalformedReason::kDataOutOfBounds).empty());
+    CHECK_FALSE(MalformedReasonName(MalformedReason::kFrameTooLong).empty());
+  }
 
-// ---------------------------------------------------------------------------
-// Round-trip property tests
-// ---------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
+  // Round-trip property tests
+  // ---------------------------------------------------------------------------
 
-TEST_CASE("Round trip: every alignment factor and frame length is reproduced losslessly") {
-  std::array<std::byte, 16384> transfer{};
-  for (std::uint32_t factor = 0; factor <= kMaxPacketAlignmentFactor; ++factor) {
-    const std::uint32_t alignment = 1U << factor;
-    for (const std::uint32_t length : {14U, 15U, 63U, 64U, 65U, 127U, 128U, 1514U}) {
-      PacketMessageWriter writer(
-          transfer,
-          {.max_transfer_bytes = 16384, .max_messages = 4, .alignment_bytes = alignment}, 512);
+  TEST_CASE("Round trip: every alignment factor and frame length is reproduced losslessly") {
+    std::array<std::byte, 16384> transfer{};
+    for (std::uint32_t factor = 0; factor <= kMaxPacketAlignmentFactor; ++factor) {
+      const std::uint32_t alignment = 1U << factor;
+      for (const std::uint32_t length : {14U, 15U, 63U, 64U, 65U, 127U, 128U, 1514U}) {
+        PacketMessageWriter writer(
+            transfer,
+            {.max_transfer_bytes = 16384, .max_messages = 4, .alignment_bytes = alignment}, 512);
 
-      std::uint32_t appended = 0;
-      for (std::uint8_t i = 0; i < 4; ++i) {
-        if (!writer.TryAppend(MakeFrame(length, static_cast<std::uint8_t>(0x10 + i)))) {
-          break;
+        std::uint32_t appended = 0;
+        for (std::uint8_t i = 0; i < 4; ++i) {
+          if (!writer.TryAppend(MakeFrame(length, static_cast<std::uint8_t>(0x10 + i)))) {
+            break;
+          }
+          ++appended;
         }
-        ++appended;
-      }
-      REQUIRE(appended > 0);
-      const std::uint32_t total = writer.Finish();
+        REQUIRE(appended > 0);
+        const std::uint32_t total = writer.Finish();
 
-      const auto summary = DecodeAll(std::span<const std::byte>{transfer}.first(total));
-      CHECK(summary.final_outcome == ReadOutcome::kEndOfTransfer);
-      REQUIRE(summary.frames.size() == appended);
-      for (std::uint32_t i = 0; i < appended; ++i) {
-        CHECK(FrameMatches(summary.frames[i], length, static_cast<std::uint8_t>(0x10 + i)));
+        const auto summary = DecodeAll(std::span<const std::byte>{transfer}.first(total));
+        CHECK(summary.final_outcome == ReadOutcome::kEndOfTransfer);
+        REQUIRE(summary.frames.size() == appended);
+        for (std::uint32_t i = 0; i < appended; ++i) {
+          CHECK(FrameMatches(summary.frames[i], length, static_cast<std::uint8_t>(0x10 + i)));
+        }
       }
     }
   }
-}
 
 }  // TEST_SUITE("rndis.packet_codec")

@@ -139,119 +139,119 @@ struct ParsedFormat {
 }  // namespace
 
 TEST_SUITE("common.i18n") {
+  TEST_CASE("language switch and table lookup") {
+    const Language original = tetherkit::GetLanguage();
 
-TEST_CASE("language switch and table lookup") {
-  const Language original = tetherkit::GetLanguage();
+    // The selection machinery is process-wide and round-trips; today every
+    // value resolves to the English table, but these calls exercise the same
+    // path a second language will ride.
+    tetherkit::SetLanguage(Language::kEnglish);
+    CHECK(tetherkit::GetLanguage() == Language::kEnglish);
+    CHECK(tetherkit::Text(Msg::kCoreRunStateRunning) == "running");
 
-  // The selection machinery is process-wide and round-trips; today every
-  // value resolves to the English table, but these calls exercise the same
-  // path a second language will ride.
-  tetherkit::SetLanguage(Language::kEnglish);
-  CHECK(tetherkit::GetLanguage() == Language::kEnglish);
-  CHECK(tetherkit::Text(Msg::kCoreRunStateRunning) == "running");
-
-  tetherkit::SetLanguage(original);
-}
-
-TEST_CASE("Tr renders the current language and substitutes arguments") {
-  const Language original = tetherkit::GetLanguage();
-  tetherkit::SetLanguage(Language::kEnglish);
-
-  const std::string text = tetherkit::Tr(Msg::kNetBpfBindFailed, "feth1");
-  // The argument really was substituted, not left as an unreplaced field.
-  CHECK(text.find("feth1") != std::string::npos);
-  CHECK(text.find("{}") == std::string::npos);
-
-  tetherkit::SetLanguage(original);
-}
-
-TEST_CASE("every message is non-empty") {
-  for (std::size_t i = 0; i < kMessageCount; ++i) {
-    const auto id = static_cast<Msg>(i);
-    CAPTURE(i);
-    CHECK_FALSE(tetherkit::TextIn(Language::kEnglish, id).empty());
+    tetherkit::SetLanguage(original);
   }
-}
 
-TEST_CASE("out-of-range Msg returns an empty string instead of crashing") {
-  const auto out_of_range = static_cast<Msg>(kMessageCount);
-  CHECK(tetherkit::Text(out_of_range).empty());
-  CHECK(tetherkit::TextIn(Language::kEnglish, out_of_range).empty());
-}
+  TEST_CASE("Tr renders the current language and substitutes arguments") {
+    const Language original = tetherkit::GetLanguage();
+    tetherkit::SetLanguage(Language::kEnglish);
 
-// This suite's core: the one check the compiler stopped doing, done entry by
-// entry.
-TEST_CASE("every message's placeholders are well-formed and contiguous") {
-  for (std::size_t i = 0; i < kMessageCount; ++i) {
-    const ParsedFormat parsed = ParseFormat(tetherkit::TextIn(Language::kEnglish, static_cast<Msg>(i)));
+    const std::string text = tetherkit::Tr(Msg::kNetBpfBindFailed, "feth1");
+    // The argument really was substituted, not left as an unreplaced field.
+    CHECK(text.find("feth1") != std::string::npos);
+    CHECK(text.find("{}") == std::string::npos);
 
-    CAPTURE(Label(i));
-    CHECK_FALSE(parsed.malformed);
-    // Mixing `{}` with `{0}` in one string makes std::format throw at
-    // runtime; nothing at compile time can stop it.
-    CHECK_FALSE(parsed.mixed_indexing);
+    tetherkit::SetLanguage(original);
+  }
 
-    // Indices must be exactly 0..n-1: a gap still renders, but it means an
-    // argument was silently ignored, which is almost always a mistake.
-    std::size_t expected = 0;
-    for (const auto& entry : parsed.types) {
-      CHECK(entry.first == expected);
-      ++expected;
+  TEST_CASE("every message is non-empty") {
+    for (std::size_t i = 0; i < kMessageCount; ++i) {
+      const auto id = static_cast<Msg>(i);
+      CAPTURE(i);
+      CHECK_FALSE(tetherkit::TextIn(Language::kEnglish, id).empty());
     }
   }
-}
 
-TEST_CASE("ParseLanguage understands the established spellings") {
-  Language language = Language::kEnglish;
+  TEST_CASE("out-of-range Msg returns an empty string instead of crashing") {
+    const auto out_of_range = static_cast<Msg>(kMessageCount);
+    CHECK(tetherkit::Text(out_of_range).empty());
+    CHECK(tetherkit::TextIn(Language::kEnglish, out_of_range).empty());
+  }
 
-  CHECK(tetherkit::ParseLanguage("en", &language));
-  CHECK(language == Language::kEnglish);
-  CHECK(tetherkit::ParseLanguage("EN_US", &language));
-  CHECK(language == Language::kEnglish);
-  CHECK(tetherkit::ParseLanguage("english", &language));
-  CHECK(language == Language::kEnglish);
+  // This suite's core: the one check the compiler stopped doing, done entry by
+  // entry.
+  TEST_CASE("every message's placeholders are well-formed and contiguous") {
+    for (std::size_t i = 0; i < kMessageCount; ++i) {
+      const ParsedFormat parsed =
+          ParseFormat(tetherkit::TextIn(Language::kEnglish, static_cast<Msg>(i)));
 
-  // auto defers to the environment; only require it to succeed and yield a
-  // valid language.
-  CHECK(tetherkit::ParseLanguage("auto", &language));
+      CAPTURE(Label(i));
+      CHECK_FALSE(parsed.malformed);
+      // Mixing `{}` with `{0}` in one string makes std::format throw at
+      // runtime; nothing at compile time can stop it.
+      CHECK_FALSE(parsed.mixed_indexing);
 
-  CHECK_FALSE(tetherkit::ParseLanguage("klingon", &language));
-  CHECK_FALSE(tetherkit::ParseLanguage("", &language));
-  CHECK_FALSE(tetherkit::ParseLanguage("zh", nullptr));
+      // Indices must be exactly 0..n-1: a gap still renders, but it means an
+      // argument was silently ignored, which is almost always a mistake.
+      std::size_t expected = 0;
+      for (const auto& entry : parsed.types) {
+        CHECK(entry.first == expected);
+        ++expected;
+      }
+    }
+  }
 
-  // Chinese is fully out: no table, no spelling, not even as a parse.
-  CHECK_FALSE(tetherkit::ParseLanguage("zh", &language));
-  CHECK_FALSE(tetherkit::ParseLanguage("Chinese", &language));
-}
+  TEST_CASE("ParseLanguage understands the established spellings") {
+    Language language = Language::kEnglish;
 
-TEST_CASE("locale strings resolve through the current language set") {
-  // Documents today's behavior: with English as the only language, every
-  // locale string resolves to English. When a language is added, the prefix
-  // table goes into LanguageFromLocaleString() and these checks become
-  // per-prefix.
-  CHECK(tetherkit::LanguageFromLocaleString("zh_CN.UTF-8") == Language::kEnglish);
-  CHECK(tetherkit::LanguageFromLocaleString("ZH-hant") == Language::kEnglish);
-  CHECK(tetherkit::LanguageFromLocaleString("en_US.UTF-8") == Language::kEnglish);
-  CHECK(tetherkit::LanguageFromLocaleString("C") == Language::kEnglish);
-  CHECK(tetherkit::LanguageFromLocaleString("") == Language::kEnglish);
-  CHECK(tetherkit::LanguageFromLocaleString("en_zh") == Language::kEnglish);
-}
+    CHECK(tetherkit::ParseLanguage("en", &language));
+    CHECK(language == Language::kEnglish);
+    CHECK(tetherkit::ParseLanguage("EN_US", &language));
+    CHECK(language == Language::kEnglish);
+    CHECK(tetherkit::ParseLanguage("english", &language));
+    CHECK(language == Language::kEnglish);
 
-TEST_CASE("language tag") {
-  CHECK(tetherkit::LanguageTag(Language::kEnglish) == "en");
-}
+    // auto defers to the environment; only require it to succeed and yield a
+    // valid language.
+    CHECK(tetherkit::ParseLanguage("auto", &language));
 
-TEST_CASE("error context separator is deterministic") {
-  const Language original = tetherkit::GetLanguage();
-  tetherkit::SetLanguage(Language::kEnglish);
+    CHECK_FALSE(tetherkit::ParseLanguage("klingon", &language));
+    CHECK_FALSE(tetherkit::ParseLanguage("", &language));
+    CHECK_FALSE(tetherkit::ParseLanguage("zh", nullptr));
 
-  // Context() returns a view, so the Error must land in a named variable
-  // before it is read; a temporary dies at the end of the statement and the
-  // view dangles on the spot.
-  const tetherkit::Error error = tetherkit::Error::Generic("inner").WithContext("outer");
-  CHECK(error.Context().starts_with("outer: "));
+    // Chinese is fully out: no table, no spelling, not even as a parse.
+    CHECK_FALSE(tetherkit::ParseLanguage("zh", &language));
+    CHECK_FALSE(tetherkit::ParseLanguage("Chinese", &language));
+  }
 
-  tetherkit::SetLanguage(original);
-}
+  TEST_CASE("locale strings resolve through the current language set") {
+    // Documents today's behavior: with English as the only language, every
+    // locale string resolves to English. When a language is added, the prefix
+    // table goes into LanguageFromLocaleString() and these checks become
+    // per-prefix.
+    CHECK(tetherkit::LanguageFromLocaleString("zh_CN.UTF-8") == Language::kEnglish);
+    CHECK(tetherkit::LanguageFromLocaleString("ZH-hant") == Language::kEnglish);
+    CHECK(tetherkit::LanguageFromLocaleString("en_US.UTF-8") == Language::kEnglish);
+    CHECK(tetherkit::LanguageFromLocaleString("C") == Language::kEnglish);
+    CHECK(tetherkit::LanguageFromLocaleString("") == Language::kEnglish);
+    CHECK(tetherkit::LanguageFromLocaleString("en_zh") == Language::kEnglish);
+  }
+
+  TEST_CASE("language tag") {
+    CHECK(tetherkit::LanguageTag(Language::kEnglish) == "en");
+  }
+
+  TEST_CASE("error context separator is deterministic") {
+    const Language original = tetherkit::GetLanguage();
+    tetherkit::SetLanguage(Language::kEnglish);
+
+    // Context() returns a view, so the Error must land in a named variable
+    // before it is read; a temporary dies at the end of the statement and the
+    // view dangles on the spot.
+    const tetherkit::Error error = tetherkit::Error::Generic("inner").WithContext("outer");
+    CHECK(error.Context().starts_with("outer: "));
+
+    tetherkit::SetLanguage(original);
+  }
 
 }  // TEST_SUITE

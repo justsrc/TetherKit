@@ -341,260 +341,260 @@ TEST_SUITE("rndis.state_machine") {
     CHECK_MESSAGE(found, "the host did not reply to the device-initiated KEEPALIVE");
   }
 
-TEST_CASE("messages aimed at connection-oriented devices are explicitly rejected") {
-  // The error message wording is asserted below; pin the language.
-  const tetherkit::testing::ScopedLanguage guard{tetherkit::Language::kEnglish};
-  MockControlChannel channel;
-  channel.SetRequestHandler([](std::span<const std::byte> request, MockControlChannel& mock) {
-    if (LoadLe32(request.data() + kMessageTypeOffset) == ToRaw(MessageType::kInitialize)) {
-      // Queue a CONDIS message.
-      std::vector<std::byte> condis(kMessageHeaderBytes);
-      StoreLe32(condis.data() + kMessageTypeOffset, 0x0000'8001U);  // MP_CREATE_VC
-      StoreLe32(condis.data() + kMessageLengthOffset, kMessageHeaderBytes);
-      mock.EnqueueResponse(std::move(condis));
-      mock.EnqueueResponse(MakeInitializeComplete(RequestIdOf(request)));
-    }
-  });
-  RecordingObserver observer;
-  StateMachine machine(channel, observer, FastConfig());
+  TEST_CASE("messages aimed at connection-oriented devices are explicitly rejected") {
+    // The error message wording is asserted below; pin the language.
+    const tetherkit::testing::ScopedLanguage guard{tetherkit::Language::kEnglish};
+    MockControlChannel channel;
+    channel.SetRequestHandler([](std::span<const std::byte> request, MockControlChannel& mock) {
+      if (LoadLe32(request.data() + kMessageTypeOffset) == ToRaw(MessageType::kInitialize)) {
+        // Queue a CONDIS message.
+        std::vector<std::byte> condis(kMessageHeaderBytes);
+        StoreLe32(condis.data() + kMessageTypeOffset, 0x0000'8001U);  // MP_CREATE_VC
+        StoreLe32(condis.data() + kMessageLengthOffset, kMessageHeaderBytes);
+        mock.EnqueueResponse(std::move(condis));
+        mock.EnqueueResponse(MakeInitializeComplete(RequestIdOf(request)));
+      }
+    });
+    RecordingObserver observer;
+    StateMachine machine(channel, observer, FastConfig());
 
-  const auto status = machine.Start();
-  REQUIRE_FALSE(status.has_value());
-  // The message must explicitly name connection-oriented devices rather
-  // than the vague "unknown message".
-  CHECK(status.error().ToString().find("connection-oriented") != std::string::npos);
-}
+    const auto status = machine.Start();
+    REQUIRE_FALSE(status.has_value());
+    // The message must explicitly name connection-oriented devices rather
+    // than the vague "unknown message".
+    CHECK(status.error().ToString().find("connection-oriented") != std::string::npos);
+  }
 
-TEST_CASE("keepalive success reports no error and sends none while the device is active") {
-  MockControlChannel channel;
-  channel.SetRequestHandler(MakeWellBehavedDevice(kDeviceMac));
-  RecordingObserver observer;
-  auto config = FastConfig();
-  // Keep-alive period set very large: Poll must not send a keep-alive.
-  config.keepalive_interval_millis = 60'000;
-  StateMachine machine(channel, observer, config);
-  REQUIRE(machine.Start().has_value());
+  TEST_CASE("keepalive success reports no error and sends none while the device is active") {
+    MockControlChannel channel;
+    channel.SetRequestHandler(MakeWellBehavedDevice(kDeviceMac));
+    RecordingObserver observer;
+    auto config = FastConfig();
+    // Keep-alive period set very large: Poll must not send a keep-alive.
+    config.keepalive_interval_millis = 60'000;
+    StateMachine machine(channel, observer, config);
+    REQUIRE(machine.Start().has_value());
 
-  channel.ClearSentMessages();
-  REQUIRE(machine.Poll().has_value());
-  CHECK(channel.CountSent(MessageType::kKeepAlive) == 0);
-}
+    channel.ClearSentMessages();
+    REQUIRE(machine.Poll().has_value());
+    CHECK(channel.CountSent(MessageType::kKeepAlive) == 0);
+  }
 
-TEST_CASE("keepalive expiry sends KEEPALIVE and clears the failure count after success") {
-  MockControlChannel channel;
-  channel.SetRequestHandler(MakeWellBehavedDevice(kDeviceMac));
-  RecordingObserver observer;
-  auto config = FastConfig();
-  config.keepalive_interval_millis = 0;  // expires immediately
-  StateMachine machine(channel, observer, config);
-  REQUIRE(machine.Start().has_value());
+  TEST_CASE("keepalive expiry sends KEEPALIVE and clears the failure count after success") {
+    MockControlChannel channel;
+    channel.SetRequestHandler(MakeWellBehavedDevice(kDeviceMac));
+    RecordingObserver observer;
+    auto config = FastConfig();
+    config.keepalive_interval_millis = 0;  // expires immediately
+    StateMachine machine(channel, observer, config);
+    REQUIRE(machine.Start().has_value());
 
-  channel.ClearSentMessages();
-  REQUIRE(machine.Poll().has_value());
-  CHECK(channel.CountSent(MessageType::kKeepAlive) == 1);
-  CHECK(observer.fatal_errors.empty());
-}
+    channel.ClearSentMessages();
+    REQUIRE(machine.Poll().has_value());
+    CHECK(channel.CountSent(MessageType::kKeepAlive) == 1);
+    CHECK(observer.fatal_errors.empty());
+  }
 
-TEST_CASE("reaching the keepalive failure threshold reports a fatal error") {
-  // The fatal error wording is asserted below; pin the language.
-  const tetherkit::testing::ScopedLanguage guard{tetherkit::Language::kEnglish};
-  MockControlChannel channel;
-  // The device answers only INITIALIZE / QUERY / SET and never KEEPALIVE ->
-  // every poll times out.
-  channel.SetRequestHandler([](std::span<const std::byte> request, MockControlChannel& mock) {
-    const std::uint32_t type = LoadLe32(request.data() + kMessageTypeOffset);
-    if (type == ToRaw(MessageType::kKeepAlive)) {
-      return;  // deliberately no reply
-    }
-    MakeWellBehavedDevice(kDeviceMac)(request, mock);
-  });
-  RecordingObserver observer;
-  auto config = FastConfig();
-  config.keepalive_interval_millis = 0;
-  config.keepalive_failure_threshold = 3;
-  StateMachine machine(channel, observer, config);
-  REQUIRE(machine.Start().has_value());
+  TEST_CASE("reaching the keepalive failure threshold reports a fatal error") {
+    // The fatal error wording is asserted below; pin the language.
+    const tetherkit::testing::ScopedLanguage guard{tetherkit::Language::kEnglish};
+    MockControlChannel channel;
+    // The device answers only INITIALIZE / QUERY / SET and never KEEPALIVE ->
+    // every poll times out.
+    channel.SetRequestHandler([](std::span<const std::byte> request, MockControlChannel& mock) {
+      const std::uint32_t type = LoadLe32(request.data() + kMessageTypeOffset);
+      if (type == ToRaw(MessageType::kKeepAlive)) {
+        return;  // deliberately no reply
+      }
+      MakeWellBehavedDevice(kDeviceMac)(request, mock);
+    });
+    RecordingObserver observer;
+    auto config = FastConfig();
+    config.keepalive_interval_millis = 0;
+    config.keepalive_failure_threshold = 3;
+    StateMachine machine(channel, observer, config);
+    REQUIRE(machine.Start().has_value());
 
-  // The first two failures must not be fatal.
-  CHECK(machine.Poll().has_value());
-  CHECK(observer.fatal_errors.empty());
-  CHECK(machine.Poll().has_value());
-  CHECK(observer.fatal_errors.empty());
-  // The third one reaches the threshold.
-  const auto third = machine.Poll();
-  CHECK_FALSE(third.has_value());
-  REQUIRE(observer.fatal_errors.size() == 1);
-  CHECK(observer.fatal_errors[0].find("keep-alive") != std::string::npos);
-}
+    // The first two failures must not be fatal.
+    CHECK(machine.Poll().has_value());
+    CHECK(observer.fatal_errors.empty());
+    CHECK(machine.Poll().has_value());
+    CHECK(observer.fatal_errors.empty());
+    // The third one reaches the threshold.
+    const auto third = machine.Poll();
+    CHECK_FALSE(third.has_value());
+    REQUIRE(observer.fatal_errors.size() == 1);
+    CHECK(observer.fatal_errors[0].find("keep-alive") != std::string::npos);
+  }
 
-TEST_CASE("Soft reset: when AddressingReset is non-zero the packet filter must be replayed") {
-  // This is the easiest one to miss: without the replay, data never flows
-  // again after the reset.
-  MockControlChannel channel;
-  channel.SetRequestHandler(MakeWellBehavedDevice(kDeviceMac));
-  RecordingObserver observer;
-  StateMachine machine(channel, observer, FastConfig());
-  REQUIRE(machine.Start().has_value());
+  TEST_CASE("Soft reset: when AddressingReset is non-zero the packet filter must be replayed") {
+    // This is the easiest one to miss: without the replay, data never flows
+    // again after the reset.
+    MockControlChannel channel;
+    channel.SetRequestHandler(MakeWellBehavedDevice(kDeviceMac));
+    RecordingObserver observer;
+    StateMachine machine(channel, observer, FastConfig());
+    REQUIRE(machine.Start().has_value());
 
-  channel.ClearSentMessages();
-  REQUIRE(machine.Reset().has_value());
+    channel.ClearSentMessages();
+    REQUIRE(machine.Reset().has_value());
 
-  // The reset was reported, and it flags the addressing information as lost.
-  REQUIRE(observer.reset_events.size() == 1);
-  CHECK(observer.reset_events[0]);
+    // The reset was reported, and it flags the addressing information as lost.
+    REQUIRE(observer.reset_events.size() == 1);
+    CHECK(observer.reset_events[0]);
 
-  // A RESET_MSG must have been sent.
-  CHECK(channel.CountSent(MessageType::kReset) == 1);
-  // And the packet filter must have been replayed.
-  std::uint32_t filter = 0;
-  REQUIRE_MESSAGE(channel.FindSetUint32(Oid::kGenCurrentPacketFilter, filter),
-                  "the packet filter setting was not replayed after the reset");
-  CHECK(filter == kDefaultPacketFilter);
-}
+    // A RESET_MSG must have been sent.
+    CHECK(channel.CountSent(MessageType::kReset) == 1);
+    // And the packet filter must have been replayed.
+    std::uint32_t filter = 0;
+    REQUIRE_MESSAGE(channel.FindSetUint32(Oid::kGenCurrentPacketFilter, filter),
+                    "the packet filter setting was not replayed after the reset");
+    CHECK(filter == kDefaultPacketFilter);
+  }
 
-TEST_CASE("Soft reset: when AddressingReset is 0 no replay is needed") {
-  MockControlChannel channel;
-  channel.SetRequestHandler([](std::span<const std::byte> request, MockControlChannel& mock) {
-    const std::uint32_t type = LoadLe32(request.data() + kMessageTypeOffset);
-    if (type == ToRaw(MessageType::kReset)) {
-      mock.EnqueueResponse(MakeResetComplete(/*addressing_reset=*/false));
-      return;
-    }
-    MakeWellBehavedDevice(kDeviceMac)(request, mock);
-  });
-  RecordingObserver observer;
-  StateMachine machine(channel, observer, FastConfig());
-  REQUIRE(machine.Start().has_value());
+  TEST_CASE("Soft reset: when AddressingReset is 0 no replay is needed") {
+    MockControlChannel channel;
+    channel.SetRequestHandler([](std::span<const std::byte> request, MockControlChannel& mock) {
+      const std::uint32_t type = LoadLe32(request.data() + kMessageTypeOffset);
+      if (type == ToRaw(MessageType::kReset)) {
+        mock.EnqueueResponse(MakeResetComplete(/*addressing_reset=*/false));
+        return;
+      }
+      MakeWellBehavedDevice(kDeviceMac)(request, mock);
+    });
+    RecordingObserver observer;
+    StateMachine machine(channel, observer, FastConfig());
+    REQUIRE(machine.Start().has_value());
 
-  channel.ClearSentMessages();
-  REQUIRE(machine.Reset().has_value());
-  REQUIRE(observer.reset_events.size() == 1);
-  CHECK_FALSE(observer.reset_events[0]);
+    channel.ClearSentMessages();
+    REQUIRE(machine.Reset().has_value());
+    REQUIRE(observer.reset_events.size() == 1);
+    CHECK_FALSE(observer.reset_events[0]);
 
-  std::uint32_t filter = 0;
-  CHECK_FALSE(channel.FindSetUint32(Oid::kGenCurrentPacketFilter, filter));
-}
+    std::uint32_t filter = 0;
+    CHECK_FALSE(channel.FindSetUint32(Oid::kGenCurrentPacketFilter, filter));
+  }
 
-TEST_CASE("Shutdown: clear the packet filter first, then send HALT") {
-  MockControlChannel channel;
-  channel.SetRequestHandler(MakeWellBehavedDevice(kDeviceMac));
-  RecordingObserver observer;
-  StateMachine machine(channel, observer, FastConfig());
-  REQUIRE(machine.Start().has_value());
+  TEST_CASE("Shutdown: clear the packet filter first, then send HALT") {
+    MockControlChannel channel;
+    channel.SetRequestHandler(MakeWellBehavedDevice(kDeviceMac));
+    RecordingObserver observer;
+    StateMachine machine(channel, observer, FastConfig());
+    REQUIRE(machine.Start().has_value());
 
-  channel.ClearSentMessages();
-  machine.Stop();
-  CHECK(machine.CurrentState() == State::kUninitialized);
+    channel.ClearSentMessages();
+    machine.Stop();
+    CHECK(machine.CurrentState() == State::kUninitialized);
 
-  // Must SET filter = 0 first (so the device falls back to initialized and
-  // stops sending data), then send HALT.
-  std::uint32_t filter = 0xFFFF'FFFFU;
-  REQUIRE(channel.FindSetUint32(Oid::kGenCurrentPacketFilter, filter));
-  CHECK(filter == 0);
-  CHECK(channel.CountSent(MessageType::kHalt) == 1);
+    // Must SET filter = 0 first (so the device falls back to initialized and
+    // stops sending data), then send HALT.
+    std::uint32_t filter = 0xFFFF'FFFFU;
+    REQUIRE(channel.FindSetUint32(Oid::kGenCurrentPacketFilter, filter));
+    CHECK(filter == 0);
+    CHECK(channel.CountSent(MessageType::kHalt) == 1);
 
-  const std::size_t last = channel.SentMessages().size() - 1;
-  CHECK(channel.SentMessageType(last) == ToRaw(MessageType::kHalt));
-}
+    const std::size_t last = channel.SentMessages().size() - 1;
+    CHECK(channel.SentMessageType(last) == ToRaw(MessageType::kHalt));
+  }
 
-TEST_CASE("Shutdown is idempotent") {
-  MockControlChannel channel;
-  channel.SetRequestHandler(MakeWellBehavedDevice(kDeviceMac));
-  RecordingObserver observer;
-  StateMachine machine(channel, observer, FastConfig());
-  REQUIRE(machine.Start().has_value());
+  TEST_CASE("Shutdown is idempotent") {
+    MockControlChannel channel;
+    channel.SetRequestHandler(MakeWellBehavedDevice(kDeviceMac));
+    RecordingObserver observer;
+    StateMachine machine(channel, observer, FastConfig());
+    REQUIRE(machine.Start().has_value());
 
-  machine.Stop();
-  const std::size_t after_first = channel.SentMessages().size();
-  machine.Stop();
-  CHECK(channel.SentMessages().size() == after_first);
-}
+    machine.Stop();
+    const std::size_t after_first = channel.SentMessages().size();
+    machine.Stop();
+    CHECK(channel.SentMessages().size() == after_first);
+  }
 
-TEST_CASE("Start may only be called in the uninitialized state") {
-  MockControlChannel channel;
-  channel.SetRequestHandler(MakeWellBehavedDevice(kDeviceMac));
-  RecordingObserver observer;
-  StateMachine machine(channel, observer, FastConfig());
-  REQUIRE(machine.Start().has_value());
-  CHECK_FALSE(machine.Start().has_value());
-}
+  TEST_CASE("Start may only be called in the uninitialized state") {
+    MockControlChannel channel;
+    channel.SetRequestHandler(MakeWellBehavedDevice(kDeviceMac));
+    RecordingObserver observer;
+    StateMachine machine(channel, observer, FastConfig());
+    REQUIRE(machine.Start().has_value());
+    CHECK_FALSE(machine.Start().has_value());
+  }
 
-TEST_CASE("A device without an interrupt endpoint degrades to polling, startup still completes") {
-  // The Linux host driver ignores the interrupt endpoint entirely and relies
-  // on polling the control endpoint.
-  MockControlChannel channel;
-  channel.SetHasInterruptEndpoint(false);
-  channel.SetRequestHandler(MakeWellBehavedDevice(kDeviceMac));
-  RecordingObserver observer;
-  StateMachine machine(channel, observer, FastConfig());
+  TEST_CASE("A device without an interrupt endpoint degrades to polling, startup still completes") {
+    // The Linux host driver ignores the interrupt endpoint entirely and relies
+    // on polling the control endpoint.
+    MockControlChannel channel;
+    channel.SetHasInterruptEndpoint(false);
+    channel.SetRequestHandler(MakeWellBehavedDevice(kDeviceMac));
+    RecordingObserver observer;
+    StateMachine machine(channel, observer, FastConfig());
 
-  const auto status = machine.Start();
-  REQUIRE_MESSAGE(status.has_value(), Why(status));
-  CHECK(machine.CurrentState() == State::kDataInitialized);
-}
+    const auto status = machine.Start();
+    REQUIRE_MESSAGE(status.has_value(), Why(status));
+    CHECK(machine.CurrentState() == State::kDataInitialized);
+  }
 
-TEST_CASE("A control channel send failure fails startup without getting stuck") {
-  MockControlChannel channel;
-  channel.SetRequestHandler(MakeWellBehavedDevice(kDeviceMac));
-  channel.FailSendOnCall(1);  // the very first INITIALIZE cannot be sent
-  RecordingObserver observer;
-  StateMachine machine(channel, observer, FastConfig());
+  TEST_CASE("A control channel send failure fails startup without getting stuck") {
+    MockControlChannel channel;
+    channel.SetRequestHandler(MakeWellBehavedDevice(kDeviceMac));
+    channel.FailSendOnCall(1);  // the very first INITIALIZE cannot be sent
+    RecordingObserver observer;
+    StateMachine machine(channel, observer, FastConfig());
 
-  REQUIRE_FALSE(machine.Start().has_value());
-  CHECK(machine.CurrentState() == State::kUninitialized);
-}
+    REQUIRE_FALSE(machine.Start().has_value());
+    CHECK(machine.CurrentState() == State::kUninitialized);
+  }
 
-TEST_CASE("Device quirk: Qualcomm aggregation patch (MaxPacketsPerMessage=3, alignment factor 2)") {
-  MockControlChannel channel;
-  channel.SetRequestHandler(
-      MakeWellBehavedDevice(kDeviceMac, /*max_transfer_size=*/3 * 1600,
-                            /*max_packets=*/3, /*alignment_factor=*/2));
-  RecordingObserver observer;
-  StateMachine machine(channel, observer, FastConfig());
-  REQUIRE(machine.Start().has_value());
+  TEST_CASE(
+      "Device quirk: Qualcomm aggregation patch (MaxPacketsPerMessage=3, alignment factor 2)") {
+    MockControlChannel channel;
+    channel.SetRequestHandler(MakeWellBehavedDevice(kDeviceMac, /*max_transfer_size=*/3 * 1600,
+                                                    /*max_packets=*/3, /*alignment_factor=*/2));
+    RecordingObserver observer;
+    StateMachine machine(channel, observer, FastConfig());
+    REQUIRE(machine.Start().has_value());
 
-  CHECK(observer.parameters_snapshot.max_packets_per_message == 3);
-  CHECK(observer.parameters_snapshot.tx_alignment_bytes == 4);  // 1 << 2
-}
+    CHECK(observer.parameters_snapshot.max_packets_per_message == 3);
+    CHECK(observer.parameters_snapshot.tx_alignment_bytes == 4);  // 1 << 2
+  }
 
-TEST_CASE("Device quirk: an out-of-range alignment factor is clamped to 7") {
-  MockControlChannel channel;
-  channel.SetRequestHandler(MakeWellBehavedDevice(kDeviceMac, 2048, 1, /*alignment_factor=*/31));
-  RecordingObserver observer;
-  StateMachine machine(channel, observer, FastConfig());
-  REQUIRE(machine.Start().has_value());
-  CHECK(observer.parameters_snapshot.tx_alignment_bytes == 128);
-}
+  TEST_CASE("Device quirk: an out-of-range alignment factor is clamped to 7") {
+    MockControlChannel channel;
+    channel.SetRequestHandler(MakeWellBehavedDevice(kDeviceMac, 2048, 1, /*alignment_factor=*/31));
+    RecordingObserver observer;
+    StateMachine machine(channel, observer, FastConfig());
+    REQUIRE(machine.Start().has_value());
+    CHECK(observer.parameters_snapshot.tx_alignment_bytes == 128);
+  }
 
-TEST_CASE("The MTU drops when the device's max frame size is below the negotiated MTU") {
-  MockControlChannel channel;
-  channel.SetRequestHandler([](std::span<const std::byte> request, MockControlChannel& mock) {
-    const std::uint32_t type = LoadLe32(request.data() + kMessageTypeOffset);
-    const std::uint32_t request_id = RequestIdOf(request);
-    if (type == ToRaw(MessageType::kQuery) &&
-        OidOf(request) == ToRaw(Oid::kGenMaximumFrameSize)) {
-      mock.EnqueueResponse(MakeQueryCompleteUint32(request_id, 1400));
-      return;
-    }
-    MakeWellBehavedDevice(kDeviceMac)(request, mock);
-  });
-  RecordingObserver observer;
-  StateMachine machine(channel, observer, FastConfig());
-  REQUIRE(machine.Start().has_value());
-  CHECK(machine.Parameters().mtu == 1400);
-}
+  TEST_CASE("The MTU drops when the device's max frame size is below the negotiated MTU") {
+    MockControlChannel channel;
+    channel.SetRequestHandler([](std::span<const std::byte> request, MockControlChannel& mock) {
+      const std::uint32_t type = LoadLe32(request.data() + kMessageTypeOffset);
+      const std::uint32_t request_id = RequestIdOf(request);
+      if (type == ToRaw(MessageType::kQuery) &&
+          OidOf(request) == ToRaw(Oid::kGenMaximumFrameSize)) {
+        mock.EnqueueResponse(MakeQueryCompleteUint32(request_id, 1400));
+        return;
+      }
+      MakeWellBehavedDevice(kDeviceMac)(request, mock);
+    });
+    RecordingObserver observer;
+    StateMachine machine(channel, observer, FastConfig());
+    REQUIRE(machine.Start().has_value());
+    CHECK(machine.Parameters().mtu == 1400);
+  }
 
-TEST_CASE("MillisUntilNextPoll returns a positive value within the keep-alive period") {
-  MockControlChannel channel;
-  channel.SetRequestHandler(MakeWellBehavedDevice(kDeviceMac));
-  RecordingObserver observer;
-  auto config = FastConfig();
-  config.keepalive_interval_millis = 5'000;
-  StateMachine machine(channel, observer, config);
-  REQUIRE(machine.Start().has_value());
-  CHECK(machine.MillisUntilNextPoll() > 0);
-  CHECK(machine.MillisUntilNextPoll() <= 5'000);
-}
+  TEST_CASE("MillisUntilNextPoll returns a positive value within the keep-alive period") {
+    MockControlChannel channel;
+    channel.SetRequestHandler(MakeWellBehavedDevice(kDeviceMac));
+    RecordingObserver observer;
+    auto config = FastConfig();
+    config.keepalive_interval_millis = 5'000;
+    StateMachine machine(channel, observer, config);
+    REQUIRE(machine.Start().has_value());
+    CHECK(machine.MillisUntilNextPoll() > 0);
+    CHECK(machine.MillisUntilNextPoll() <= 5'000);
+  }
 
 }  // TEST_SUITE("rndis.state_machine")
 
