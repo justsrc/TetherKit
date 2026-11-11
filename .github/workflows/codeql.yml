@@ -7,23 +7,38 @@
 # in the libusb transfer pool, the BPF buffer walk, and the
 # reinterpret_cast-heavy private ABI bridge are exactly its turf.
 #
-# third_party/doctest stays in the analysis set on purpose: paths-ignore is
-# inert for C/C++ manual builds (github/codeql-action#3890; the docs confine
-# paths filtering to build-mode none, and the workflow would warn about it at
-# run time). SARIF post-filtering means a new third-party action for exactly
-# one benign vendored-code alert (cpp/use-after-free at
-# third_party/doctest/doctest.h:3710). Accepted as baseline noise instead.
-#
 # Free for public repos. Must run on macOS: CMakeLists fatals on non-Apple
 # platforms.
 #
-# pull_request trigger restricted to workflow edits (paths:
-# ['.github/workflows/**']): running a many-minute C++ build on every PR push
-# isn't worth it, but workflow changes self-verify before landing. dependabot.yml
-# and .github/scripts/ edits never match this filter; note it only gates
-# pull_request runs, pushes to main still analyze them. Dependabot's weekly
-# grouped action-bump PR deliberately rides along because it edits workflow
-# files. The concurrency group below is event-scoped (the tests.yml doctrine):
+# Merging a Dependabot PR (how this interacts with the read-only token):
+#   Prefer the MERGE COMMIT strategy. Squash and rebase both produce a main
+#   tip authored by dependabot[bot], and any workflow running on such a
+#   commit gets a read-only GITHUB_TOKEN, so the SARIF upload 403s.
+#   A merge commit is authored by the human merger and keeps write scope.
+#   The analyze step below also skips the upload for a Dependabot-authored
+#   push, so the run stays green either way, but the merge-commit path is the
+#   one that keeps publishing results.
+#   The review requirement on the bot PR is bypassed BY YOU, the same way it
+#   is for your own PRs: the "Require review" ruleset lists the admin role as
+#   a bypass actor with bypass_mode pull_request, so
+#     gh api repos/justsrc/TetherKit/pulls/<PR>/merge -X PUT -f merge_method=merge
+#   engages the bypass. (`gh pr merge` refuses at its own pre-flight when
+#   mergeStateStatus is BLOCKED; that is cli/cli#13388, still open. The REST
+#   endpoint does the right thing.) Do NOT add Dependabot to the bypass list:
+#   that would let the bot merge its own PR unreviewed, which is exactly what
+#   the SHA pinning below exists to prevent.
+#
+# pull_request runs on every PR, not only on workflow edits. The old
+# paths-filtered trigger was a cost decision (a many-minute C++ build per PR
+# push) taken when the alert list was empty. It is now the wrong trade: the
+# check's whole value is catching a defect BEFORE it lands, and the defects
+# worth catching live in src/, not in .github/workflows/. With the filter, a
+# pull_request run saw almost nothing, so "C++ analysis" could not be a
+# required status check without deadlocking PRs that never trigger it. macOS
+# minutes are free for public repos, so the cost is wall-clock on the PR, not
+# money.
+#
+# The concurrency group below is event-scoped (the tests.yml doctrine):
 # push-to-main, the Monday cron and pull_request runs sit in different groups
 # and never cancel each other; within one event, canceling a superseded run is
 # safe because the newer run's SARIF simply replaces its alerts.
@@ -37,8 +52,6 @@ on:
   push:
     branches: [main]
   pull_request:
-    paths:
-      - ".github/workflows/**"
   workflow_dispatch:
 
 permissions:
@@ -61,12 +74,12 @@ jobs:
     name: C++ analysis
     runs-on: macos-26
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install libusb
         run: brew install libusb
 
-      - uses: github/codeql-action/init@v4
+      - uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           languages: cpp
           # Manual build mode: the build commands come from the next step.
@@ -74,8 +87,46 @@ jobs:
 
       - name: Build
         run: |
-          # Tests and benchmarks stay enabled: everything compiles, everything
-          # lands in the analysis set.
+          # Tests are OFF, so doctest never enters the analysis set.
+          #
+          # Why this mechanism and not the obvious ones:
+          #   - paths / paths-ignore in a CodeQL config file are inert for C++
+          #     in manual build mode. The codeql-action maintainer states it
+          #     directly (github/codeql-action#3890): "When using build-mode:
+          #     autobuild or build-mode: manual, custom steps to ignore
+          #     specified files are indeed still needed, and paths-ignore does
+          #     not work." The docs confine path filtering to build-mode none.
+          #   - SARIF post-filtering (advanced-security/filter-sarif) would work,
+          #     but it is one more action to trust and pin on the analysis
+          #     path, and it would need the workflow to upload the SARIF
+          #     itself rather than letting the action do it. Not worth it for
+          #     one benign vendored alert.
+          #   - What GitHub does document for compiled languages is the right
+          #     answer: "To restrict the analysis of a compiled language, you
+          #     should configure your build process to compile only the
+          #     specified files." For C++ the database contains exactly the
+          #     translation units the build compiled.
+          #
+          # So the build decides the analysis set, and this project already
+          # has the switch: doctest is an INTERFACE library linked only into
+          # tetherkit_tests (tests/CMakeLists.txt), so with
+          # TETHERKIT_BUILD_TESTS=OFF no test TU is compiled, doctest.h is
+          # never parsed, and third_party/doctest never reaches the database.
+          #
+          # That retires cpp/use-after-free at third_party/doctest/doctest.h:3710
+          # at the source instead of dismissing it. That alert is a false
+          # positive on a union assignment (the buffer is freed and a new one
+          # is assigned before the read; CodeQL's C++ model cannot see across
+          # the union member write), and it lives in a vendored test framework
+          # that never ships. Upstream doctest 2.5.3 carries the identical
+          # code, so upgrading does not clear it either.
+          #
+          # The cost, stated plainly: tests/ drops out of the analysis set
+          # along with doctest. That is first-party test code, not shipped
+          # code, and the shipped surface (src/, include/) stays fully
+          # analyzed -- which is where the BPF buffer walk and the
+          # reinterpret_cast-heavy private ABI bridge live, and those are
+          # exactly the findings worth having.
           #
           # CodeQL's macOS tracer forces traced child processes onto the x86_64
           # slice under Rosetta (observed: build defaulted to x86_64; run 42513807606).
@@ -88,9 +139,42 @@ jobs:
           # "simplification" would silently reintroduce the bug.
           cmake -S . -B build \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-            -DCMAKE_OSX_ARCHITECTURES=arm64
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DTETHERKIT_BUILD_TESTS=OFF
           cmake --build build -j"$(sysctl -n hw.ncpu)"
 
-      - uses: github/codeql-action/analyze@v4
+      # The upload is skipped for a commit authored by Dependabot.
+      #
+      # Why: a Dependabot PR merged with SQUASH produces a commit on main
+      # that is authored by Dependabot, and any workflow running on such a
+      # commit gets a read-only GITHUB_TOKEN. The SARIF upload then fails
+      # with "403: Resource not accessible by integration" (the upload
+      # library warns and rethrows; the action's outer catch then fails the
+      # step via core.setFailed, so the run goes red).
+      # GitHub's own guidance is to merge bot PRs with a MERGE COMMIT instead,
+      # which keeps the commit authored by the human merger. This guard is
+      # the belt to that braces: it keeps the analysis running and the run
+      # green either way.
+      #
+      # The pull_request path is NOT affected and must not be guarded. Code
+      # scanning always allows uploading results when the pull_request event
+      # triggers the run, because the results are scoped to that one pull
+      # request. (upload-lib.ts's pull_request branch only fills base_ref and
+      # base_sha into the upload payload; the permission itself is GitHub's
+      # service-side policy.) Guarding it would be a regression: no upload
+      # means no result, and a required check that never reports blocks the
+      # PR forever (the failure mode documented in cli/cli#13388's
+      # neighbourhood: a scan that skips itself can never satisfy a rule
+      # that demands one).
+      #
+      # 'never' skips only the upload: the analysis still runs, the summary
+      # counts are printed into the job log, and the SARIF is written to
+      # ../results (outside the workspace, not uploaded and not kept as an
+      # artifact). This is the action's own input for the purpose
+      # (analyze/action.yml: upload: always | failure-only | never) at the
+      # pinned v4.39.3.
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           category: "/language:cpp"
+          upload: ${{ github.event_name == 'push' && github.event.head_commit.author.username == 'dependabot[bot]' && 'never' || 'always' }}

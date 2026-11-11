@@ -1,9 +1,81 @@
 # Dependabot: keep GitHub Actions on the latest versions automatically.
 #
-# Repo convention: pin every action to the latest major (checkout@v7,
-# upload-artifact@v7, ...). Watching upstream releases by hand leaks; Dependabot
-# folds stale pins into one grouped PR per week, and merges are backstopped by
-# the normal test suite. Major jumps like v7 -> v8 arrive in the same stream.
+# Repo convention: pin every external action to a full 40-character commit
+# SHA, with the release tag in a trailing comment
+# (actions/checkout@<sha> # v7.0.1). A mutable tag is a supply-chain
+# liability: whoever controls the action's repository can repoint the tag at
+# malicious code, and our workflows hold a token that can write to the
+# public Homebrew tap that users install from. Pinning to a SHA makes the
+# reference immutable, which is what GitHub's own hardening guide calls the
+# most secure option, and what the OpenSSF Scorecard Pinned-Dependencies
+# check measures.
+#
+# The local reusable-workflow call (uses: ./.github/workflows/update-tap.yml)
+# is deliberately left unpinned: it is a path inside this repository, so
+# there is no third-party source to pin, and GitHub requires local
+# references to stay as paths.
+#
+# Why Dependabot still matters with SHA pins: Dependabot resolves the
+# pinned action's latest release and opens a PR that rewrites the SHA and
+# the trailing comment. Watching upstream releases by hand leaks; Dependabot
+# folds stale pins into one grouped PR per week, and merges are backstopped
+# by the normal test suite. Major bumps like v7 -> v8 arrive in the same
+# stream.
+#
+# The known cost of SHA pinning, stated plainly so nobody rediscovers it:
+# Dependabot ALERTS are only generated for actions referenced with semantic
+# versioning, not SHA versioning. So after this convention lands, a
+# compromised release of a pinned action arrives as a version-update PR
+# rather than as a security alert, and dependabot_security_updates will
+# have nothing to open for the github-actions ecosystem. That is the
+# intended trade: a version-update PR still lands the fix, and the
+# alternative (a mutable tag) means a retagged release reaches this repo
+# without any PR at all.
+#
+# No alert channel remains for the action pins themselves. codeql.yml
+# analyzes C++ only, not workflow files, so it is not a substitute here
+# either. The version-update PR below is the only place a compromised
+# action release would be seen, which is why the merge procedure below
+# treats reading that diff as mandatory.
+#
+# Groups: one group for the whole ecosystem, so a week with several stale
+# pins is one PR to review rather than one per action.
+#
+# MERGING A DEPENDABOT PR (the procedure, since it is not the obvious one):
+#
+#   1. Use the MERGE COMMIT strategy. Squash and rebase both put a commit on
+#      main that is authored by dependabot[bot], and a workflow on such a
+#      commit gets a read-only GITHUB_TOKEN, so the CodeQL SARIF upload fails
+#      with "403: Resource not accessible by integration". codeql.yml skips
+#      that upload so the run stays green, but a merge commit keeps publishing
+#      results.
+#
+#   2. The PR arrives with zero reviews and is BLOCKED on "review required".
+#      That is expected: Dependabot cannot approve its own PR. You bypass it
+#      the same way you bypass your own PRs, because the "Require review"
+#      ruleset lists the admin role as a bypass actor:
+#        gh api repos/justsrc/TetherKit/pulls/<PR>/merge -X PUT -f merge_method=merge
+#      The REST endpoint makes the mechanism explicit. `gh pr merge` refuses
+#      at its own pre-flight when the PR is BLOCKED (cli/cli#13388, still
+#      open) and suggests --auto or --admin; --admin only suppresses that
+#      client-side refusal (no admin flag travels to the server, and the
+#      "Protect main" ruleset has no bypass actor at all, so nothing can
+#      override the required status checks). What merges the PR is your role:
+#      the "Require review" ruleset lists the admin role as a bypass actor
+#      with bypass_mode pull_request.
+#
+#   3. Read the diff before merging. The whole point of the SHA convention is
+#      that a new action version is a decision, not an automatic consequence:
+#      a version-update PR is the last human checkpoint before a new release of
+#      a third-party action can run in workflows that hold the tap token.
+#      A compromised release of a pinned action arrives here as an ordinary
+#      version-update PR precisely because SHA pinning kills the alert channel
+#      (see above), so this review is the only place that compromise would be
+#      caught.
+#
+#   4. Do NOT add Dependabot to the bypass list of any ruleset: that would
+#      let the bot merge its own PR unreviewed, which is exactly what the
+#      SHA pinning above exists to prevent.
 
 version: 2
 updates:

@@ -24,7 +24,7 @@ jobs:
     runs-on: macos-26
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # The tag and CMakeLists' VERSION must agree, otherwise
       # `tetherkit-cli --version` will not match the version on the Release /
@@ -178,5 +178,10 @@ jobs:
       tag: ${{ github.ref_name }}
     # Narrow mapping instead of secrets: inherit: the callee needs exactly
     # one secret, and the caller's remaining secrets stay out of its scope.
+    #
+    # HOMEBREW_TAP_TOKEN is the fine-grained token scoped to
+    # justsrc/homebrew-tap (contents:write for the branch push,
+    # pull_requests:write for the PR). Declared in the callee's
+    # workflow_call secrets block, so the name validates at startup.
     secrets:
-      HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
