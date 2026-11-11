@@ -9,20 +9,20 @@
 //   5. Normalization of device quirks (MaxPacketsPerMessage=0, alignment factor out of range,
 //      MaxTransferSize too large or too small);
 //   6. All malformed inputs must return an error rather than crashing or reading out of bounds.
+#include "tethernet/common/byte_order.h"
+#include "tethernet/rndis/messages.h"
+#include "tethernet/rndis/protocol.h"
+
+#include <doctest.h>
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <span>
 #include <vector>
 
-#include <doctest.h>
-
-#include "tetherkit/common/byte_order.h"
-#include "tetherkit/rndis/messages.h"
-#include "tetherkit/rndis/protocol.h"
-
-using namespace tetherkit;        // NOLINT(google-build-using-namespace)
-using namespace tetherkit::rndis;  // NOLINT(google-build-using-namespace)
+using namespace tethernet;         // NOLINT(google-build-using-namespace)
+using namespace tethernet::rndis;  // NOLINT(google-build-using-namespace)
 
 namespace {
 

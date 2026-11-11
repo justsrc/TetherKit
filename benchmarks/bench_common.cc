@@ -8,22 +8,23 @@
 //     of the data path.
 #include "bench_common.h"
 
+#include "tethernet/common/byte_order.h"
+#include "tethernet/common/frame_ring.h"
+#include "tethernet/common/spsc_ring.h"
+#include "tethernet/common/stats.h"
+
 #include <atomic>
 #include <cstddef>
-#include <format>
 #include <cstdint>
 #include <cstring>
+#include <format>
 #include <span>
 #include <thread>
 #include <vector>
 
 #include "harness.h"
-#include "tetherkit/common/byte_order.h"
-#include "tetherkit/common/frame_ring.h"
-#include "tetherkit/common/spsc_ring.h"
-#include "tetherkit/common/stats.h"
 
-namespace tetherkit::bench {
+namespace tethernet::bench {
 namespace {
 
 /// The two most common frame lengths on Ethernet: a full MTU frame and a small TCP ACK frame.
@@ -304,4 +305,4 @@ void RegisterCommonBenchmarks(Runner& runner) {
              [](std::uint64_t n) { return BenchCounterUpdateFetchAdd(n); });
 }
 
-}  // namespace tetherkit::bench
+}  // namespace tethernet::bench

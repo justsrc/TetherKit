@@ -1,7 +1,7 @@
 # GUI and privilege escalation feasibility spike
 
 This document records the conclusions of an exploratory spike: **can a native
-Swift GUI be built on top of TetherKit, and can it obtain the root privileges
+Swift GUI be built on top of Tethernet, and can it obtain the root privileges
 needed to configure the network in an appropriate way?**
 
 The answer is yes, but three routes that looked more "orthodox" were ruled out
@@ -128,12 +128,12 @@ password box, is deprecated.
 ## 4. The final design
 
 ```
-TetherKit.app (uid 501, no root needed)
+Tethernet.app (uid 501, no root needed)
   | 1. call the C API directly for the root-free work: environment preflight, USB enumeration
   | 2. AuthorizationCopyRights -> pop a fingerprint/password -> AuthorizationRef
   | 3. AuthorizationMakeExternalForm -> 32-byte credential
   |
-  +-- XPC (com.tetherkit.helper, .privileged) -->  tetherkit-helper (uid 0)
+  +-- XPC (com.tethernet.helper, .privileged) -->  tethernet-helper (uid 0)
   |                                                     | 4. CreateFromExternalForm restores it
   |                                                     | 5. CopyRights re-checks it
   |                                                     |    (without interactionAllowed)
@@ -218,7 +218,7 @@ user confirmed at some moment with a password / fingerprint that they agree to
 grant a certain right". Not one of the uid and euid of the process moves.
 
 Measured: on the line right after the authorization succeeds, the App calls
-`tk_feth_create()` directly and still gets `EPERM`; the same function called
+`tn_feth_create()` directly and still gets `EPERM`; the same function called
 through the helper succeeds.
 
 The Authorization Services have always been an **advisory** authorization
@@ -323,7 +323,7 @@ the command does not even have to run.
 
 ### 6.5 The impact on the implementation
 
-**The `tk_net_*` group of C APIs is basically not needed.** The DHCP client
+**The `tn_net_*` group of C APIs is basically not needed.** The DHCP client
 originally planned to be implemented by hand (opening BPF on feth0 to run
 DISCOVER/OFFER/REQUEST/ACK, and coupling its timing to the RNDIS state machine)
 is saved as a whole. The helper only needs:
@@ -356,7 +356,7 @@ Under the Hardened Runtime macOS refuses to load a library whose Team ID
 differs from the main program's. Homebrew's libusb is ad-hoc signed (no Team
 ID), while the App is signed with a developer certificate (it has a Team ID).
 
-**Any signed and distributed TetherKit.app must embed libusb** and re-sign it
+**Any signed and distributed Tethernet.app must embed libusb** and re-sign it
 with the same identity. The other road is to add the
 `com.apple.security.cs.disable-library-validation` exemption, but that amounts
 to turning off the library validation of the whole process, which is not worth
@@ -373,7 +373,7 @@ kernel (`Killed: 9`), with no reason visible in the launchd log.
 
 ### `install` breaks the symlinks into separate files
 
-`libtetherkit.dylib` and `libtetherkit.0.dylib` are symlinks to
+`libtethernet.dylib` and `libtethernet.0.dylib` are symlinks to
 `.0.1.1.dylib`. `install` does not preserve the symlinks and copies a
 **separate real file** for each. The later `install_name_tool` only changes one
 of them, and the one that gets loaded via `@rpath` is exactly the one that was
@@ -382,7 +382,7 @@ there, and with no warning whatsoever**. Use `cp -a`.
 
 ### Look up the dependencies against the right object
 
-`libusb` is a dependency of `libtetherkit.dylib`, not of the helper
+`libusb` is a dependency of `libtethernet.dylib`, not of the helper
 executable. Running `otool -L` against the helper yields an empty result, the
 whole step is silently skipped -- after the install everything looks perfectly
 normal, yet it still depends on Homebrew.
@@ -501,7 +501,7 @@ sudo ipconfig set feth9 NONE && sudo ifconfig feth9 destroy
 #    Do not take its absence as evidence that "IPConfiguration does not
 #    recognize this interface" -- I stepped on that one.
 
-# the complete verification on a real link (needs the device plugged in and tetherkit running)
+# the complete verification on a real link (needs the device plugged in and tethernet running)
 sudo ipconfig set feth0 DHCP
 ipconfig getifaddr feth0                     # the lease
 scutil --dns | grep -A3 feth0                # scoped DNS (it is in the later part, do not cut it with head)

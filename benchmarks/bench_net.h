@@ -8,7 +8,7 @@
 
 #include <string>
 
-namespace tetherkit::bench {
+namespace tethernet::bench {
 
 class Runner;
 
@@ -28,4 +28,4 @@ bool RegisterNetBenchmarks(Runner& runner, std::string& skip_reason);
 /// is a failure.
 void ShutdownNetBenchmarks() noexcept;
 
-}  // namespace tetherkit::bench
+}  // namespace tethernet::bench

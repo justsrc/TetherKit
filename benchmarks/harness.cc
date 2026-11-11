@@ -1,5 +1,8 @@
 #include "harness.h"
 
+#include "tethernet/common/cache.h"
+#include "tethernet/version.h"
+
 #include <sys/sysctl.h>
 #include <sys/types.h>
 
@@ -8,10 +11,7 @@
 #include <cstring>
 #include <string>
 
-#include "tetherkit/common/cache.h"
-#include "tetherkit/version.h"
-
-namespace tetherkit::bench {
+namespace tethernet::bench {
 namespace {
 
 /// Reads a string-typed sysctl; returns "unknown" on failure.
@@ -121,4 +121,4 @@ void PrintMarkdownReport(const std::vector<Result>& results, std::string_view ti
       "indicative only.\n\n");
 }
 
-}  // namespace tetherkit::bench
+}  // namespace tethernet::bench

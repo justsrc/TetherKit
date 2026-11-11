@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Install tetherkit-helper and register the LaunchDaemon. **Must run as root.**
+# Install tethernet-helper and register the LaunchDaemon. **Must run as root.**
 #
 #   sudo ./gui/Scripts/install-helper.sh
 #
@@ -21,20 +21,20 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 # Locate the payload directory by priority:
-#   1. TETHERKIT_HELPER_DIR -- packaging / CI can point it wherever it wants;
+#   1. TETHERNET_HELPER_DIR -- packaging / CI can point it wherever it wants;
 #   2. the script's own directory -- the copy packed into the .app payload
 #      takes this branch: the payload sits right next to it;
 #   3. the repo's default artifact location -- running
 #      sudo ./gui/Scripts/install-helper.sh inside the repo takes this one.
-if [[ -n "${TETHERKIT_HELPER_DIR:-}" ]]; then
-  SOURCE_DIR="${TETHERKIT_HELPER_DIR}"
-elif [[ -f "${SCRIPT_DIR}/com.tetherkit.helper" ]]; then
+if [[ -n "${TETHERNET_HELPER_DIR:-}" ]]; then
+  SOURCE_DIR="${TETHERNET_HELPER_DIR}"
+elif [[ -f "${SCRIPT_DIR}/com.tethernet.helper" ]]; then
   SOURCE_DIR="${SCRIPT_DIR}"
 else
-  SOURCE_DIR="$(cd -- "${SCRIPT_DIR}/../.." && pwd)/dist/TetherKit.app/Contents/Library/HelperTools"
+  SOURCE_DIR="$(cd -- "${SCRIPT_DIR}/../.." && pwd)/dist/Tethernet.app/Contents/Library/HelperTools"
 fi
 
-LABEL="com.tetherkit.helper"
+LABEL="com.tethernet.helper"
 TOOLS_DIR="/Library/PrivilegedHelperTools"
 INSTALL_PATH="${TOOLS_DIR}/${LABEL}"
 PLIST_PATH="/Library/LaunchDaemons/${LABEL}.plist"
@@ -64,11 +64,11 @@ fi
 log "Installing to ${INSTALL_PATH}"
 mkdir -p "${TOOLS_DIR}"
 
-# cp -a rather than install: libtetherkit's two symlinks must survive as
+# cp -a rather than install: libtethernet's two symlinks must survive as
 # symlinks. install copies each of them into an independent real file, and
 # after that there is no telling which copy @rpath ends up loading.
 cp -a "${SOURCE_DIR}/${LABEL}" "${INSTALL_PATH}"
-cp -a "${SOURCE_DIR}"/libtetherkit*.dylib "${TOOLS_DIR}/"
+cp -a "${SOURCE_DIR}"/libtethernet*.dylib "${TOOLS_DIR}/"
 if compgen -G "${SOURCE_DIR}/libusb-*.dylib" >/dev/null; then
   cp -a "${SOURCE_DIR}"/libusb-*.dylib "${TOOLS_DIR}/"
 fi
@@ -97,9 +97,9 @@ launchctl bootstrap system "${PLIST_PATH}"
 # registration there is no process yet -- that is normal, not a failure.
 # Validating means checking that the service is registered.
 if launchctl print "system/${LABEL}" >/dev/null 2>&1; then
-  log "Done. TetherKit.app picks it up automatically; restarting the App is unnecessary."
+  log "Done. Tethernet.app picks it up automatically; restarting the App is unnecessary."
 else
-  die "Service still not found after registration; check /var/log/tetherkit-helper.log"
+  die "Service still not found after registration; check /var/log/tethernet-helper.log"
 fi
 
 cat <<EOF
@@ -109,7 +109,7 @@ Installed:
   ${PLIST_PATH}
 
 Log:
-  /var/log/tetherkit-helper.log
+  /var/log/tethernet-helper.log
 
 Uninstall:
   sudo "${SOURCE_DIR}/uninstall-helper.sh"

@@ -1,4 +1,8 @@
-#include "tetherkit/usb/device.h"
+#include "tethernet/usb/device.h"
+
+#include "tethernet/common/byte_order.h"
+#include "tethernet/common/i18n.h"
+#include "tethernet/common/logging.h"
 
 #include <algorithm>
 #include <chrono>
@@ -6,11 +10,7 @@
 #include <format>
 #include <thread>
 
-#include "tetherkit/common/byte_order.h"
-#include "tetherkit/common/i18n.h"
-#include "tetherkit/common/logging.h"
-
-namespace tetherkit::usb {
+namespace tethernet::usb {
 namespace {
 
 /// CDC functional descriptor type (bDescriptorType = CS_INTERFACE).
@@ -182,7 +182,7 @@ Result<std::vector<DeviceCandidate>> FindRndisDevices(const Context& context,
             continue;
           }
           if (LooksLikeRealAcmModem(descriptor)) {
-            TETHERKIT_DEBUG_TR(Msg::kUsbSkippedAcmModem, device_descriptor.idVendor,
+            TETHERNET_DEBUG_TR(Msg::kUsbSkippedAcmModem, device_descriptor.idVendor,
                                device_descriptor.idProduct, descriptor.bInterfaceNumber);
             continue;
           }
@@ -218,7 +218,7 @@ Result<std::vector<DeviceCandidate>> FindRndisDevices(const Context& context,
           }
 
           if (!resolved) {
-            TETHERKIT_DEBUG_TR(Msg::kUsbNoPairedDataInterface, candidate.Describe(),
+            TETHERNET_DEBUG_TR(Msg::kUsbNoPairedDataInterface, candidate.Describe(),
                                candidate.control_interface);
             continue;
           }
@@ -228,7 +228,7 @@ Result<std::vector<DeviceCandidate>> FindRndisDevices(const Context& context,
           // log with duplicates. What was "discovered" is the caller's call to
           // present -- the CLI prints its own list, the GUI shows it on the
           // device card.
-          TETHERKIT_DEBUG_TR(
+          TETHERNET_DEBUG_TR(
               Msg::kUsbDeviceFound, candidate.Describe(), candidate.control_interface,
               candidate.data_interface, signature.interface_class, signature.interface_subclass,
               signature.interface_protocol,
@@ -309,12 +309,10 @@ Result<std::unique_ptr<Device>> Device::Open(const Context& context,
     return std::unexpected(std::move(error));
   };
 
-  TETHERKIT_RETURN_IF_ERROR(
-      claim(candidate.control_interface, Text(Msg::kUsbControlInterface),
-            device->control_interface_claimed_));
-  TETHERKIT_RETURN_IF_ERROR(
-      claim(candidate.data_interface, Text(Msg::kUsbDataInterface),
-            device->data_interface_claimed_));
+  TETHERNET_RETURN_IF_ERROR(claim(candidate.control_interface, Text(Msg::kUsbControlInterface),
+                                  device->control_interface_claimed_));
+  TETHERNET_RETURN_IF_ERROR(claim(candidate.data_interface, Text(Msg::kUsbDataInterface),
+                                  device->data_interface_claimed_));
 
   // Resolve the endpoints.
   ::libusb_config_descriptor* config = nullptr;
@@ -325,9 +323,9 @@ Result<std::unique_ptr<Device>> Device::Open(const Context& context,
   const std::unique_ptr<::libusb_config_descriptor, void (*)(::libusb_config_descriptor*)>
       config_guard(config, &::libusb_free_config_descriptor);
 
-  TETHERKIT_RETURN_IF_ERROR(device->ResolveEndpoints(*config));
+  TETHERNET_RETURN_IF_ERROR(device->ResolveEndpoints(*config));
 
-  TETHERKIT_INFO_TR(Msg::kUsbClaimed, device->description_, device->SpeedName(),
+  TETHERNET_INFO_TR(Msg::kUsbClaimed, device->description_, device->SpeedName(),
                     device->bulk_in_endpoint_, device->bulk_out_endpoint_,
                     device->bulk_max_packet_size_,
                     device->interrupt_in_endpoint_ == 0
@@ -357,7 +355,7 @@ Device::~Device() {
   }
   ::libusb_close(handle_);
   handle_ = nullptr;
-  TETHERKIT_DEBUG_TR(Msg::kUsbClosed, description_);
+  TETHERNET_DEBUG_TR(Msg::kUsbClosed, description_);
 }
 
 Status Device::ResolveEndpoints(const ::libusb_config_descriptor& config) {
@@ -467,7 +465,7 @@ UsbControlChannel::~UsbControlChannel() {
 
 Status UsbControlChannel::StartNotificationListener() {
   if (device_->InterruptInEndpoint() == 0) {
-    TETHERKIT_DEBUG_TR(Msg::kUsbNoInterruptEndpoint);
+    TETHERNET_DEBUG_TR(Msg::kUsbNoInterruptEndpoint);
     return Ok();
   }
   if (notification_transfer_ != nullptr) {
@@ -495,7 +493,7 @@ Status UsbControlChannel::StartNotificationListener() {
     notification_in_flight_.store(false, std::memory_order_release);
     return std::unexpected(Error::FromLibUsb(rc, Tr(Msg::kUsbSubmitInterruptFailed)));
   }
-  TETHERKIT_DEBUG_TR(Msg::kUsbNotificationStarted, device_->InterruptInEndpoint());
+  TETHERNET_DEBUG_TR(Msg::kUsbNotificationStarted, device_->InterruptInEndpoint());
   return Ok();
 }
 
@@ -508,7 +506,7 @@ void UsbControlChannel::StopNotificationListener() {
   if (notification_in_flight_.load(std::memory_order_acquire)) {
     const int rc = ::libusb_cancel_transfer(notification_transfer_);
     if (rc != LIBUSB_SUCCESS && rc != LIBUSB_ERROR_NOT_FOUND) {
-      TETHERKIT_DEBUG_TR(Msg::kUsbCancelInterruptReturned, ::libusb_error_name(rc));
+      TETHERNET_DEBUG_TR(Msg::kUsbCancelInterruptReturned, ::libusb_error_name(rc));
     }
   }
 
@@ -523,7 +521,7 @@ void UsbControlChannel::StopNotificationListener() {
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
   if (notification_in_flight_.load(std::memory_order_acquire)) {
-    TETHERKIT_ERROR_TR(Msg::kUsbInterruptReclaimTimeout);
+    TETHERNET_ERROR_TR(Msg::kUsbInterruptReclaimTimeout);
     notification_transfer_ = nullptr;  // deliberate leak
   }
 }
@@ -545,7 +543,7 @@ void UsbControlChannel::OnNotificationComplete() noexcept {
         if (notification == rndis::kNotificationResponseAvailable) {
           notification_pending_.store(true, std::memory_order_release);
         } else {
-          TETHERKIT_TRACE_TR(Msg::kUsbUnknownNotification, notification);
+          TETHERNET_TRACE_TR(Msg::kUsbUnknownNotification, notification);
         }
       }
       break;
@@ -561,14 +559,13 @@ void UsbControlChannel::OnNotificationComplete() noexcept {
       // endpoint (Linux's host driver does not use the interrupt endpoint at
       // all, so this is not fatal).
       if (const auto status = device_->ClearHalt(device_->InterruptInEndpoint()); !status) {
-        TETHERKIT_WARN_TR(Msg::kUsbInterruptHaltClearFailed, status.error().ToString());
+        TETHERNET_WARN_TR(Msg::kUsbInterruptHaltClearFailed, status.error().ToString());
         resubmit = false;
       }
       break;
 
     default:
-      TETHERKIT_TRACE_TR(Msg::kUsbInterruptTransferStatus,
-                         static_cast<int>(transfer->status));
+      TETHERNET_TRACE_TR(Msg::kUsbInterruptTransferStatus, static_cast<int>(transfer->status));
       break;
   }
 
@@ -664,4 +661,4 @@ rndis::NotificationResult UsbControlChannel::WaitForNotification(std::uint32_t t
   return rndis::NotificationResult::kTimeout;
 }
 
-}  // namespace tetherkit::usb
+}  // namespace tethernet::usb

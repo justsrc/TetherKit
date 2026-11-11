@@ -6,6 +6,9 @@
 //   RX: PacketMessageReader extracts frames one by one from a bulk IN transfer
 #include "bench_rndis.h"
 
+#include "tethernet/rndis/packet_codec.h"
+#include "tethernet/rndis/protocol.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <format>
@@ -13,10 +16,8 @@
 #include <vector>
 
 #include "harness.h"
-#include "tetherkit/rndis/packet_codec.h"
-#include "tetherkit/rndis/protocol.h"
 
-namespace tetherkit::bench {
+namespace tethernet::bench {
 namespace {
 
 constexpr std::uint32_t kFullFrameBytes = 1514;
@@ -210,4 +211,4 @@ void RegisterRndisBenchmarks(Runner& runner) {
              [](std::uint64_t n) { return BenchRoundTrip(n, kSmallFrameBytes, 10); });
 }
 
-}  // namespace tetherkit::bench
+}  // namespace tethernet::bench

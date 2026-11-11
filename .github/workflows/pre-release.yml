@@ -1,7 +1,7 @@
 # Pre-release: pushing a pre-release v* tag issues a pre-release
 # automatically.
 #
-#   git tag -a v0.2.0-rc.1 -m "TetherKit 0.2.0 rc 1" && git push origin v0.2.0-rc.1
+#   git tag -a v0.2.0-rc.1 -m "Tethernet 0.2.0 rc 1" && git push origin v0.2.0-rc.1
 #
 # Cut rc tags only from current main: tag-filtered workflows are resolved
 # from the TAGGED commit, not from main, so an rc tag on a commit older
@@ -52,7 +52,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Same check as release.yml: the tag and CMakeLists' VERSION must
-      # agree, otherwise `tetherkit-cli --version` will not match the
+      # agree, otherwise `tethernet-cli --version` will not match the
       # release. A pre-release tag carries a suffix (v0.2.0-rc.1) that
       # CMake's project() VERSION cannot hold (components are numeric
       # only), so the comparison uses the base version: everything before
@@ -77,7 +77,7 @@ jobs:
         run: |
           cmake -S . -B build \
             -DCMAKE_BUILD_TYPE=Release \
-            -DTETHERKIT_WARNINGS_AS_ERRORS=ON
+            -DTETHERNET_WARNINGS_AS_ERRORS=ON
           cmake --build build -j"$(sysctl -n hw.ncpu)"
           ctest --test-dir build --output-on-failure
 
@@ -87,21 +87,21 @@ jobs:
       - name: Package the command-line binary
         id: pkg
         run: |
-          name="tetherkit-cli-${GITHUB_REF_NAME}-macos-arm64.tar.gz"
+          name="tethernet-cli-${GITHUB_REF_NAME}-macos-arm64.tar.gz"
           cp THIRD_PARTY_NOTICES.md build/bin/
-          tar -C build/bin -czf "$name" tetherkit-cli THIRD_PARTY_NOTICES.md
+          tar -C build/bin -czf "$name" tethernet-cli THIRD_PARTY_NOTICES.md
           {
             echo "name=${name}"
             echo "sha256=$(shasum -a 256 "$name" | awk '{print $1}')"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Package TetherKit.app
+      - name: Package Tethernet.app
         id: app
         run: |
-          name="TetherKit-${GITHUB_REF_NAME}-macos-arm64.zip"
+          name="Tethernet-${GITHUB_REF_NAME}-macos-arm64.zip"
           # ditto preserves the bundle structure and extended attributes; it is
           # the standard way to package a .app.
-          ditto -c -k --keepParent dist/TetherKit.app "$name"
+          ditto -c -k --keepParent dist/Tethernet.app "$name"
           {
             echo "name=${name}"
             echo "sha256=$(shasum -a 256 "$name" | awk '{print $1}')"
@@ -161,15 +161,15 @@ jobs:
           built artifacts do not carry the flag):
 
           ```bash
-          xattr -d com.apple.quarantine tetherkit-cli     # CLI
-          xattr -dr com.apple.quarantine TetherKit.app    # GUI (recursive)
+          xattr -d com.apple.quarantine tethernet-cli     # CLI
+          xattr -dr com.apple.quarantine Tethernet.app    # GUI (recursive)
           ```
 
           ## Command line
 
           ```bash
-          tetherkit-cli --list          # list recognized devices, no root needed
-          sudo tetherkit-cli            # start the driver, needs root
+          tethernet-cli --list          # list recognized devices, no root needed
+          sudo tethernet-cli            # start the driver, needs root
           ```
 
           ## Requirements
@@ -201,7 +201,7 @@ jobs:
           APP_NAME: ${{ steps.app.outputs.name }}
         run: |
           gh release create "${GITHUB_REF_NAME}" \
-            --title "TetherKit ${GITHUB_REF_NAME}" \
+            --title "Tethernet ${GITHUB_REF_NAME}" \
             --prerelease \
             --notes-file notes.md \
             --generate-notes \

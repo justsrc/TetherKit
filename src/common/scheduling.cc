@@ -1,10 +1,10 @@
-#include "tetherkit/common/scheduling.h"
+#include "tethernet/common/scheduling.h"
+
+#include "tethernet/common/logging.h"
 
 #include <pthread/qos.h>
 
-#include "tetherkit/common/logging.h"
-
-namespace tetherkit {
+namespace tethernet {
 
 unsigned int QosClassFor(ThreadRole role) noexcept {
   switch (role) {
@@ -27,8 +27,8 @@ void ConfigureCurrentThread(std::string_view name, ThreadRole role) noexcept {
   if (rc != 0) {
     // A QoS failure does not affect functionality, only performance, so this
     // just warns instead of returning an error.
-    TETHERKIT_WARN_TR(Msg::kCommonThreadQosFailed, static_cast<int>(qos), rc);
+    TETHERNET_WARN_TR(Msg::kCommonThreadQosFailed, static_cast<int>(qos), rc);
   }
 }
 
-}  // namespace tetherkit
+}  // namespace tethernet

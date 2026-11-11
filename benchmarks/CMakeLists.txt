@@ -6,13 +6,13 @@
 # docs/BENCHMARKS.md, saving a parsing layer.
 
 add_executable(
-  tetherkit_bench
+  tethernet_bench
   bench_main.cc
   bench_common.cc
   bench_net.cc
   bench_rndis.cc
   harness.cc)
 
-# tk_core PUBLIC-links all other modules (the benchmarks need the RNDIS codec and net loopback).
-target_link_libraries(tetherkit_bench PRIVATE tetherkit_base tk_version tk_core)
-target_include_directories(tetherkit_bench PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+# tn_core PUBLIC-links all other modules (the benchmarks need the RNDIS codec and net loopback).
+target_link_libraries(tethernet_bench PRIVATE tethernet_base tn_version tn_core)
+target_include_directories(tethernet_bench PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")

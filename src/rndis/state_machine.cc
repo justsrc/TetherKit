@@ -1,15 +1,15 @@
-#include "tetherkit/rndis/state_machine.h"
+#include "tethernet/rndis/state_machine.h"
+
+#include "tethernet/common/byte_order.h"
+#include "tethernet/common/i18n.h"
+#include "tethernet/common/logging.h"
 
 #include <algorithm>
 #include <chrono>
 #include <format>
 #include <thread>
 
-#include "tetherkit/common/byte_order.h"
-#include "tetherkit/common/i18n.h"
-#include "tetherkit/common/logging.h"
-
-namespace tetherkit::rndis {
+namespace tethernet::rndis {
 namespace {
 
 /// Placeholder buffer size used when QUERYing a fixed-length OID.
@@ -81,7 +81,7 @@ void StateMachine::TransitionTo(State next) {
   }
   const State previous = state_;
   state_ = next;
-  TETHERKIT_INFO_TR(Msg::kRndisStateTransition, StateName(previous), StateName(next));
+  TETHERNET_INFO_TR(Msg::kRndisStateTransition, StateName(previous), StateName(next));
   observer_->OnStateChanged(previous, next);
 }
 
@@ -91,8 +91,7 @@ void StateMachine::TransitionTo(State next) {
 
 Result<bool> StateMachine::PumpOnce(std::optional<MessageType> expected_reply,
                                    std::span<const std::byte>& out_response) {
-  TETHERKIT_ASSIGN_OR_RETURN(const std::span<const std::byte> message,
-                             channel_->ReceiveMessage());
+  TETHERNET_ASSIGN_OR_RETURN(const std::span<const std::byte> message, channel_->ReceiveMessage());
 
   if (message.empty()) {
     // Spec: the device returns a single 0x00 byte instead of STALL while it
@@ -101,9 +100,9 @@ Result<bool> StateMachine::PumpOnce(std::optional<MessageType> expected_reply,
   }
   MarkDeviceActivity();
 
-  TETHERKIT_ASSIGN_OR_RETURN(const MessageHeader header, DecodeMessageHeader(message));
+  TETHERNET_ASSIGN_OR_RETURN(const MessageHeader header, DecodeMessageHeader(message));
   const std::string_view name = MessageTypeName(header.message_type);
-  TETHERKIT_DEBUG_TR(Msg::kRndisControlMessageReceived,
+  TETHERNET_DEBUG_TR(Msg::kRndisControlMessageReceived,
                      name.empty() ? Text(Msg::kRndisUnknownMessage) : name, header.message_type,
                      header.message_length);
 
@@ -115,7 +114,7 @@ Result<bool> StateMachine::PumpOnce(std::optional<MessageType> expected_reply,
   if (header.message_type == ToRaw(MessageType::kKeepAlive)) {
     // Device-initiated keep-alive. We **must reply**, otherwise the device may
     // decide the host is dead and disconnect.
-    TETHERKIT_RETURN_IF_ERROR(HandleDeviceKeepAlive(message));
+    TETHERNET_RETURN_IF_ERROR(HandleDeviceKeepAlive(message));
     return false;
   }
 
@@ -135,14 +134,14 @@ Result<bool> StateMachine::PumpOnce(std::optional<MessageType> expected_reply,
   // Not the one we awaited, and not a known push. It may be a late response to
   // a previously timed-out request -- drop it and continue (treating it as
   // fatal would let a single timeout kill the link).
-  TETHERKIT_WARN_TR(Msg::kRndisDiscardUnexpectedMessage,
+  TETHERNET_WARN_TR(Msg::kRndisDiscardUnexpectedMessage,
                     name.empty() ? Text(Msg::kRndisUnknown) : name, header.message_type);
   return false;
 }
 
 Result<StateMachine::Exchange> StateMachine::Transact(std::span<const std::byte> request,
                                                       MessageType expected_reply) {
-  TETHERKIT_RETURN_IF_ERROR(channel_->SendMessage(request));
+  TETHERNET_RETURN_IF_ERROR(channel_->SendMessage(request));
 
   // Wait for the interrupt endpoint's RESPONSE_AVAILABLE notification first,
   // then fetch the response.
@@ -164,12 +163,12 @@ Result<StateMachine::Exchange> StateMachine::Transact(std::span<const std::byte>
   const NotificationResult notification =
       channel_->WaitForNotification(notification_timeout);
   if (notification == NotificationResult::kResponseAvailable) {
-    TETHERKIT_TRACE_TR(Msg::kRndisNotificationReceived);
+    TETHERNET_TRACE_TR(Msg::kRndisNotificationReceived);
   }
 
   std::span<const std::byte> response;
   for (std::uint32_t attempt = 0; attempt < config_.response_poll_attempts; ++attempt) {
-    TETHERKIT_ASSIGN_OR_RETURN(const bool matched, PumpOnce(expected_reply, response));
+    TETHERNET_ASSIGN_OR_RETURN(const bool matched, PumpOnce(expected_reply, response));
     if (matched) {
       return Exchange{.response = response};
     }
@@ -194,7 +193,7 @@ void StateMachine::HandleIndicateStatus(std::span<const std::byte> message) {
   const auto indication = DecodeIndicateStatus(message);
   if (!indication) {
     // A parse failure must not kill the link -- this is a pure notification.
-    TETHERKIT_WARN_TR(Msg::kRndisIndicateStatusParseFailed, indication.error().ToString());
+    TETHERNET_WARN_TR(Msg::kRndisIndicateStatusParseFailed, indication.error().ToString());
     return;
   }
 
@@ -203,12 +202,12 @@ void StateMachine::HandleIndicateStatus(std::span<const std::byte> message) {
     // The device uses Rndis_Diagnostic_Info to tell us "byte N of the message
     // you sent is invalid", which is invaluable for tracking down our own
     // encoding bugs, so we log it separately.
-    TETHERKIT_WARN_TR(Msg::kRndisDeviceIndicatedWithDiagnostics,
+    TETHERNET_WARN_TR(Msg::kRndisDeviceIndicatedWithDiagnostics,
                       status_name.empty() ? Text(Msg::kRndisUnknownStatus) : status_name,
                       indication->status, indication->diagnostic_status,
                       indication->diagnostic_error_offset);
   } else {
-    TETHERKIT_INFO_TR(Msg::kRndisDeviceIndicated,
+    TETHERNET_INFO_TR(Msg::kRndisDeviceIndicated,
                       status_name.empty() ? Text(Msg::kRndisUnknownStatus) : status_name,
                       indication->status);
   }
@@ -245,9 +244,9 @@ Status StateMachine::HandleDeviceKeepAlive(std::span<const std::byte> message) {
     return std::unexpected(Error::Generic(Tr(Msg::kRndisKeepAliveMsgTooShort)));
   }
   const std::uint32_t request_id = LoadLe32(message.data() + kKeepAliveRequestIdOffset);
-  TETHERKIT_DEBUG_TR(Msg::kRndisDeviceKeepAlive, request_id);
+  TETHERNET_DEBUG_TR(Msg::kRndisDeviceKeepAlive, request_id);
 
-  TETHERKIT_ASSIGN_OR_RETURN(
+  TETHERNET_ASSIGN_OR_RETURN(
       const std::uint32_t written,
       EncodeKeepAliveComplete(request_id, ToRaw(StatusCode::kSuccess), request_buffer_));
   return channel_->SendMessage(std::span<const std::byte>{request_buffer_.data(), written});
@@ -260,33 +259,31 @@ Status StateMachine::HandleDeviceKeepAlive(std::span<const std::byte> message) {
 Result<std::span<const std::byte>> StateMachine::QueryOid(Oid oid, std::uint32_t expected_bytes,
                                                           bool fatal) {
   const std::string_view name = OidName(ToRaw(oid));
-  TETHERKIT_ASSIGN_OR_RETURN(
-      const std::uint32_t written,
-      Encode(QueryRequest{.request_id = NextRequestId(),
-                          .oid = oid,
-                          .expected_response_bytes = expected_bytes},
-             request_buffer_));
+  TETHERNET_ASSIGN_OR_RETURN(const std::uint32_t written,
+                             Encode(QueryRequest{.request_id = NextRequestId(),
+                                                 .oid = oid,
+                                                 .expected_response_bytes = expected_bytes},
+                                    request_buffer_));
 
   auto exchange = Transact(std::span<const std::byte>{request_buffer_.data(), written},
                            MessageType::kQueryComplete);
   if (!exchange) {
     if (!fatal) {
-      TETHERKIT_DEBUG_TR(Msg::kRndisOptionalOidQueryFailed, name, exchange.error().ToString());
+      TETHERNET_DEBUG_TR(Msg::kRndisOptionalOidQueryFailed, name, exchange.error().ToString());
       return std::span<const std::byte>{};
     }
     return std::unexpected(
         std::move(exchange).error().WithContext(Tr(Msg::kRndisOidQueryFailed, name)));
   }
 
-  TETHERKIT_ASSIGN_OR_RETURN(const QueryComplete complete,
-                             DecodeQueryComplete(exchange->response));
+  TETHERNET_ASSIGN_OR_RETURN(const QueryComplete complete, DecodeQueryComplete(exchange->response));
 
   if (complete.status != ToRaw(StatusCode::kSuccess)) {
     const std::string_view status_name = StatusName(complete.status);
     if (!fatal) {
       // An optional OID returning NOT_SUPPORTED is perfectly normal (e.g.
       // OID_GEN_PHYSICAL_MEDIUM).
-      TETHERKIT_DEBUG_TR(Msg::kRndisOptionalOidUnsupported, name,
+      TETHERNET_DEBUG_TR(Msg::kRndisOptionalOidUnsupported, name,
                          status_name.empty() ? Text(Msg::kRndisUnknownStatus) : status_name);
       return std::span<const std::byte>{};
     }
@@ -300,16 +297,14 @@ Result<std::span<const std::byte>> StateMachine::QueryOid(Oid oid, std::uint32_t
 
 Status StateMachine::SetOidUint32(Oid oid, std::uint32_t value) {
   const std::string_view name = OidName(ToRaw(oid));
-  TETHERKIT_ASSIGN_OR_RETURN(
-      const std::uint32_t written,
-      EncodeSetUint32(NextRequestId(), oid, value, request_buffer_));
+  TETHERNET_ASSIGN_OR_RETURN(const std::uint32_t written,
+                             EncodeSetUint32(NextRequestId(), oid, value, request_buffer_));
 
-  TETHERKIT_ASSIGN_OR_RETURN(
-      const Exchange exchange,
-      Transact(std::span<const std::byte>{request_buffer_.data(), written},
-               MessageType::kSetComplete));
+  TETHERNET_ASSIGN_OR_RETURN(const Exchange exchange,
+                             Transact(std::span<const std::byte>{request_buffer_.data(), written},
+                                      MessageType::kSetComplete));
 
-  TETHERKIT_ASSIGN_OR_RETURN(const SetComplete complete, DecodeSetComplete(exchange.response));
+  TETHERNET_ASSIGN_OR_RETURN(const SetComplete complete, DecodeSetComplete(exchange.response));
   if (complete.status != ToRaw(StatusCode::kSuccess)) {
     const std::string_view status_name = StatusName(complete.status);
     return std::unexpected(Error::FromRndisStatus(
@@ -317,7 +312,7 @@ Status StateMachine::SetOidUint32(Oid oid, std::uint32_t value) {
         Tr(Msg::kRndisOidSetRejected, name, value,
            status_name.empty() ? Text(Msg::kRndisUnknownStatus) : status_name)));
   }
-  TETHERKIT_DEBUG_TR(Msg::kRndisOidSet, name, value);
+  TETHERNET_DEBUG_TR(Msg::kRndisOidSet, name, value);
   return Ok();
 }
 
@@ -340,12 +335,12 @@ Status StateMachine::CollectDeviceInfo() {
   // This is the address the host-side feth will adopt; without it we cannot
   // build the interface correctly.
   {
-    TETHERKIT_ASSIGN_OR_RETURN(
+    TETHERNET_ASSIGN_OR_RETURN(
         const std::span<const std::byte> payload,
         QueryOid(Oid::kEthernetPermanentAddress, kFixedOidPlaceholderBytes, /*fatal=*/true));
-    TETHERKIT_ASSIGN_OR_RETURN(info_.permanent_address, ParseMac(payload));
+    TETHERNET_ASSIGN_OR_RETURN(info_.permanent_address, ParseMac(payload));
     info_.has_permanent_address = true;
-    TETHERKIT_INFO_TR(Msg::kRndisPermanentMac, FormatMac(info_.permanent_address).data());
+    TETHERNET_INFO_TR(Msg::kRndisPermanentMac, FormatMac(info_.permanent_address).data());
   }
 
   // ---- Current MAC: not fatal (most devices report the same as permanent) ----
@@ -371,7 +366,7 @@ Status StateMachine::CollectDeviceInfo() {
       // The device says it accepts at most N bytes of payload while we
       // negotiated a larger MTU -- the device wins.
       if (*value != 0 && *value < parameters_.mtu) {
-        TETHERKIT_WARN_TR(Msg::kRndisMtuLoweredToDeviceFrameSize, *value, parameters_.mtu);
+        TETHERNET_WARN_TR(Msg::kRndisMtuLoweredToDeviceFrameSize, *value, parameters_.mtu);
         parameters_.mtu = *value;
       }
     }
@@ -412,7 +407,7 @@ Status StateMachine::CollectDeviceInfo() {
     info_.vendor_description = ToPrintableString(*payload);
   }
 
-  TETHERKIT_INFO_TR(Msg::kRndisDeviceInfo, FormatMac(info_.permanent_address).data(),
+  TETHERNET_INFO_TR(Msg::kRndisDeviceInfo, FormatMac(info_.permanent_address).data(),
                     info_.LinkSpeedMbps(), info_.maximum_frame_size,
                     static_cast<std::uint32_t>(info_.physical_medium), info_.vendor_id,
                     info_.vendor_description);
@@ -429,7 +424,7 @@ Status StateMachine::Start() {
 
   // ---- Step 1: INITIALIZE ----
   {
-    TETHERKIT_ASSIGN_OR_RETURN(
+    TETHERNET_ASSIGN_OR_RETURN(
         const std::uint32_t written,
         Encode(InitializeRequest{.request_id = NextRequestId(),
                                  .max_transfer_size = config_.host_max_transfer_size},
@@ -461,12 +456,12 @@ Status StateMachine::Start() {
     // distrust it (see the config field's comment).
     if (config_.max_tx_packets_per_message != 0 &&
         parameters_.max_packets_per_message > config_.max_tx_packets_per_message) {
-      TETHERKIT_INFO_TR(Msg::kRndisMaxPacketsClamped, parameters_.max_packets_per_message,
+      TETHERNET_INFO_TR(Msg::kRndisMaxPacketsClamped, parameters_.max_packets_per_message,
                         config_.max_tx_packets_per_message);
       parameters_.max_packets_per_message = config_.max_tx_packets_per_message;
     }
 
-    TETHERKIT_INFO_TR(Msg::kRndisNegotiated, complete->major_version, complete->minor_version,
+    TETHERNET_INFO_TR(Msg::kRndisNegotiated, complete->major_version, complete->minor_version,
                       parameters_.mtu, parameters_.device_max_transfer_size,
                       parameters_.max_packets_per_message, parameters_.tx_alignment_bytes);
   }
@@ -574,13 +569,13 @@ Status StateMachine::Poll() {
     return Ok();
   }
 
-  TETHERKIT_ASSIGN_OR_RETURN(const std::uint32_t written,
+  TETHERNET_ASSIGN_OR_RETURN(const std::uint32_t written,
                              EncodeKeepAlive(NextRequestId(), request_buffer_));
   auto exchange = Transact(std::span<const std::byte>{request_buffer_.data(), written},
                             MessageType::kKeepAliveComplete);
   if (!exchange) {
     ++consecutive_keepalive_failures_;
-    TETHERKIT_WARN_TR(Msg::kRndisKeepAliveFailed, consecutive_keepalive_failures_,
+    TETHERNET_WARN_TR(Msg::kRndisKeepAliveFailed, consecutive_keepalive_failures_,
                       config_.keepalive_failure_threshold, exchange.error().ToString());
     if (consecutive_keepalive_failures_ >= config_.keepalive_failure_threshold) {
       Error fatal = std::move(exchange).error().WithContext(
@@ -601,13 +596,13 @@ Status StateMachine::Poll() {
     // The device explicitly returned a failure status. That usually means it
     // wants us to reset.
     const std::string_view name = StatusName(complete->status);
-    TETHERKIT_WARN_TR(Msg::kRndisKeepAliveRejected,
+    TETHERNET_WARN_TR(Msg::kRndisKeepAliveRejected,
                       name.empty() ? Text(Msg::kRndisUnknownStatus) : name);
     return Reset();
   }
 
   consecutive_keepalive_failures_ = 0;
-  TETHERKIT_TRACE_TR(Msg::kRndisKeepAliveOk);
+  TETHERNET_TRACE_TR(Msg::kRndisKeepAliveOk);
   return Ok();
 }
 
@@ -616,18 +611,16 @@ Status StateMachine::Poll() {
 // =============================================================================
 
 Status StateMachine::Reset() {
-  TETHERKIT_INFO_TR(Msg::kRndisResetStarted);
+  TETHERNET_INFO_TR(Msg::kRndisResetStarted);
 
   // RESET_MSG has **no RequestId** (offset 8 is Reserved), so it cannot be
   // paired by ID; only one RESET may be in flight at a time.
-  TETHERKIT_ASSIGN_OR_RETURN(const std::uint32_t written, EncodeReset(request_buffer_));
-  TETHERKIT_ASSIGN_OR_RETURN(
-      const Exchange exchange,
-      Transact(std::span<const std::byte>{request_buffer_.data(), written},
-               MessageType::kResetComplete));
+  TETHERNET_ASSIGN_OR_RETURN(const std::uint32_t written, EncodeReset(request_buffer_));
+  TETHERNET_ASSIGN_OR_RETURN(const Exchange exchange,
+                             Transact(std::span<const std::byte>{request_buffer_.data(), written},
+                                      MessageType::kResetComplete));
 
-  TETHERKIT_ASSIGN_OR_RETURN(const ResetComplete complete,
-                             DecodeResetComplete(exchange.response));
+  TETHERNET_ASSIGN_OR_RETURN(const ResetComplete complete, DecodeResetComplete(exchange.response));
 
   if (complete.status != ToRaw(StatusCode::kSuccess)) {
     const std::string_view name = StatusName(complete.status);
@@ -636,9 +629,9 @@ Status StateMachine::Reset() {
                             name.empty() ? Text(Msg::kRndisUnknownStatus) : name)));
   }
 
-  TETHERKIT_INFO_TR(Msg::kRndisResetDone, Text(complete.addressing_reset
-                                                    ? Msg::kRndisAddressingLost
-                                                    : Msg::kRndisAddressingKept));
+  TETHERNET_INFO_TR(
+      Msg::kRndisResetDone,
+      Text(complete.addressing_reset ? Msg::kRndisAddressingLost : Msg::kRndisAddressingKept));
   observer_->OnDeviceReset(complete.addressing_reset);
 
   if (complete.addressing_reset) {
@@ -651,9 +644,9 @@ Status StateMachine::Reset() {
     //   SET OID_802_3_MULTICAST_LIST is ever added, replay it here too.)
     const std::uint32_t filter =
         active_packet_filter_ != 0 ? active_packet_filter_ : config_.packet_filter;
-    TETHERKIT_RETURN_IF_ERROR(SetOidUint32(Oid::kGenCurrentPacketFilter, filter));
+    TETHERNET_RETURN_IF_ERROR(SetOidUint32(Oid::kGenCurrentPacketFilter, filter));
     active_packet_filter_ = filter;
-    TETHERKIT_INFO_TR(Msg::kRndisPacketFilterReplayed, filter);
+    TETHERNET_INFO_TR(Msg::kRndisPacketFilterReplayed, filter);
   }
 
   consecutive_keepalive_failures_ = 0;
@@ -670,7 +663,7 @@ void StateMachine::SendHalt() noexcept {
   // state uninitialized.
   const auto written = EncodeHalt(NextRequestId(), request_buffer_);
   if (!written) {
-    TETHERKIT_WARN_TR(Msg::kRndisEncodeHaltFailed, written.error().ToString());
+    TETHERNET_WARN_TR(Msg::kRndisEncodeHaltFailed, written.error().ToString());
     return;
   }
   if (const auto status =
@@ -678,10 +671,10 @@ void StateMachine::SendHalt() noexcept {
       !status) {
     // Failures on the shutdown path are only logged -- the device may already
     // have been unplugged, which is perfectly normal.
-    TETHERKIT_DEBUG_TR(Msg::kRndisSendHaltFailed, status.error().ToString());
+    TETHERNET_DEBUG_TR(Msg::kRndisSendHaltFailed, status.error().ToString());
     return;
   }
-  TETHERKIT_DEBUG_TR(Msg::kRndisHaltSent);
+  TETHERNET_DEBUG_TR(Msg::kRndisHaltSent);
 }
 
 void StateMachine::Stop() {
@@ -696,7 +689,7 @@ void StateMachine::Stop() {
   // believing the host is still there, and the next plug-in starts unclean.
   if (active_packet_filter_ != 0) {
     if (const auto status = SetOidUint32(Oid::kGenCurrentPacketFilter, 0); !status) {
-      TETHERKIT_DEBUG_TR(Msg::kRndisClearPacketFilterFailed, status.error().ToString());
+      TETHERNET_DEBUG_TR(Msg::kRndisClearPacketFilterFailed, status.error().ToString());
     } else {
       active_packet_filter_ = 0;
     }
@@ -706,4 +699,4 @@ void StateMachine::Stop() {
   TransitionTo(State::kUninitialized);
 }
 
-}  // namespace tetherkit::rndis
+}  // namespace tethernet::rndis

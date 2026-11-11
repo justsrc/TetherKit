@@ -2,23 +2,23 @@
 //
 // Key verification: unaligned access must be correct (offsets of RNDIS messages in USB
 // buffers are not guaranteed to be aligned).
+#include "tethernet/common/byte_order.h"
+
+#include <doctest.h>
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
 
-#include <doctest.h>
-
-#include "tetherkit/common/byte_order.h"
-
-using tetherkit::AlignUp;
-using tetherkit::IsPowerOfTwo;
-using tetherkit::LoadBe16;
-using tetherkit::LoadLe16;
-using tetherkit::LoadLe32;
-using tetherkit::LoadLe64;
-using tetherkit::StoreBe16;
-using tetherkit::StoreLe32;
-using tetherkit::StoreLe64;
+using tethernet::AlignUp;
+using tethernet::IsPowerOfTwo;
+using tethernet::LoadBe16;
+using tethernet::LoadLe16;
+using tethernet::LoadLe32;
+using tethernet::LoadLe64;
+using tethernet::StoreBe16;
+using tethernet::StoreLe32;
+using tethernet::StoreLe64;
 
 TEST_SUITE("common.byte_order") {
   TEST_CASE("little-endian reads interpret byte order as specified") {
@@ -68,8 +68,8 @@ TEST_SUITE("common.byte_order") {
 
   TEST_CASE("single-byte reads and writes perform no conversion") {
     std::array<std::byte, 1> buffer{};
-    tetherkit::StoreLe<std::uint8_t>(buffer.data(), 0xA5U);
-    CHECK(tetherkit::LoadLe<std::uint8_t>(buffer.data()) == 0xA5U);
+    tethernet::StoreLe<std::uint8_t>(buffer.data(), 0xA5U);
+    CHECK(tethernet::LoadLe<std::uint8_t>(buffer.data()) == 0xA5U);
   }
 
   TEST_CASE("AlignUp rounds up to a power of two") {

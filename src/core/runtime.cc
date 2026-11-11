@@ -1,4 +1,9 @@
-#include "tetherkit/core/runtime.h"
+#include "tethernet/core/runtime.h"
+
+#include "tethernet/common/i18n.h"
+#include "tethernet/common/logging.h"
+#include "tethernet/common/scheduling.h"
+#include "tethernet/common/time.h"
 
 #include <algorithm>
 #include <chrono>
@@ -6,12 +11,7 @@
 #include <string>
 #include <utility>
 
-#include "tetherkit/common/i18n.h"
-#include "tetherkit/common/logging.h"
-#include "tetherkit/common/scheduling.h"
-#include "tetherkit/common/time.h"
-
-namespace tetherkit::core {
+namespace tethernet::core {
 
 std::string_view RunStateName(RunState state) noexcept {
   switch (state) {
@@ -143,18 +143,18 @@ Status Runtime::RunStartSequence() {
   // ---- Step 1: libusb context and event thread ----
   //
   // (The root check was already done synchronously in Start().)
-  TETHERKIT_ASSIGN_OR_RETURN(usb_context_, usb::Context::Create());
+  TETHERNET_ASSIGN_OR_RETURN(usb_context_, usb::Context::Create());
 
   // ---- Step 2: discover and open the device ----
-  TETHERKIT_ASSIGN_OR_RETURN(const auto candidates,
+  TETHERNET_ASSIGN_OR_RETURN(const auto candidates,
                              usb::FindRndisDevices(*usb_context_, config_.device_filter));
   if (candidates.empty()) {
     return std::unexpected(Error::Generic(Tr(Msg::kCoreNoDeviceFound)));
   }
   if (candidates.size() > 1) {
-    TETHERKIT_INFO_TR(Msg::kCoreMultipleDevices, candidates.size());
+    TETHERNET_INFO_TR(Msg::kCoreMultipleDevices, candidates.size());
   }
-  TETHERKIT_ASSIGN_OR_RETURN(device_, usb::Device::Open(*usb_context_, candidates.front()));
+  TETHERNET_ASSIGN_OR_RETURN(device_, usb::Device::Open(*usb_context_, candidates.front()));
   RefreshSnapshot();
 
   // ---- Step 3: RNDIS control channel and state machine ----
@@ -167,10 +167,10 @@ Status Runtime::RunStartSequence() {
 
   // Interrupt notifications must go over an async transfer or the control
   // thread would wedge forever -- see the UsbControlChannel notes in
-  // include/tetherkit/usb/device.h. It must be started **before** the state
+  // include/tethernet/usb/device.h. It must be started **before** the state
   // machine's Start(), because the initialization handshake itself waits for
   // notifications.
-  TETHERKIT_RETURN_IF_ERROR(control_channel_->StartNotificationListener());
+  TETHERNET_RETURN_IF_ERROR(control_channel_->StartNotificationListener());
 
   // Let the RNDIS negotiation use the real endpoint max packet size (it
   // affects how MaxTransferSize is derived).
@@ -178,7 +178,7 @@ Status Runtime::RunStartSequence() {
   rndis_config.requested_mtu = config_.mtu;
   state_machine_ = std::make_unique<rndis::StateMachine>(*control_channel_, *this, rndis_config);
 
-  TETHERKIT_RETURN_IF_ERROR(state_machine_->Start());
+  TETHERNET_RETURN_IF_ERROR(state_machine_->Start());
 
   // Only now do we have the negotiation results: device MAC, final MTU,
   // aggregation caps, alignment requirements.
@@ -197,7 +197,7 @@ Status Runtime::RunStartSequence() {
       std::ranges::copy(info.permanent_address, adopted.begin());
       system_mac = &adopted;
     }
-    TETHERKIT_ASSIGN_OR_RETURN(auto pair, net::FethPair::Create(parameters.mtu, system_mac));
+    TETHERNET_ASSIGN_OR_RETURN(auto pair, net::FethPair::Create(parameters.mtu, system_mac));
     feth_pair_ = std::make_unique<net::FethPair>(std::move(pair));
   }
   // Flush the interfaces into the snapshot as soon as they exist: if any later
@@ -216,7 +216,7 @@ Status Runtime::RunStartSequence() {
     // Max frame = MTU + Ethernet header. Note the kernel bpfwrite hard cap is
     // MTU + 18, so this must never exceed it.
     bpf_config.max_frame_bytes = parameters.mtu + rndis::kEthernetHeaderBytes;
-    TETHERKIT_ASSIGN_OR_RETURN(bpf_link_,
+    TETHERNET_ASSIGN_OR_RETURN(bpf_link_,
                                net::BpfLink::Open(feth_pair_->DriverSide().Name(), bpf_config));
   }
 
@@ -228,7 +228,7 @@ Status Runtime::RunStartSequence() {
     // or be truncated.
     data_config.rx_transfer_bytes =
         std::max(data_config.rx_transfer_bytes, config_.rndis.host_max_transfer_size);
-    TETHERKIT_ASSIGN_OR_RETURN(data_channel_,
+    TETHERNET_ASSIGN_OR_RETURN(data_channel_,
                                usb::UsbDataChannel::Create(*device_, parameters, data_config));
   }
 
@@ -237,7 +237,7 @@ Status Runtime::RunStartSequence() {
     BridgeConfig bridge_config = config_.bridge;
     bridge_config.max_frame_bytes = parameters.mtu + rndis::kEthernetHeaderBytes;
     bridge_ = std::make_unique<Bridge>(*data_channel_, *bpf_link_, bridge_config);
-    TETHERKIT_RETURN_IF_ERROR(bridge_->Start());
+    TETHERNET_RETURN_IF_ERROR(bridge_->Start());
   }
 
   RefreshSnapshot();
@@ -274,7 +274,7 @@ void Runtime::RunControlLoop() {
       const BridgeStats current = bridge_->Snapshot();
       const double seconds =
           static_cast<double>(now - last_stats_nanos) / static_cast<double>(kNanosPerSecond);
-      TETHERKIT_INFO("{}", FormatStatsLine(previous, current, seconds));
+      TETHERNET_INFO("{}", FormatStatsLine(previous, current, seconds));
       previous = current;
       last_stats_nanos = now;
     }
@@ -304,24 +304,24 @@ void Runtime::RunControlLoop() {
   }
 
   if (fatal_error_.load(std::memory_order_acquire)) {
-    TETHERKIT_ERROR_TR(Msg::kCoreExitingOnFatal);
+    TETHERNET_ERROR_TR(Msg::kCoreExitingOnFatal);
   }
 }
 
 void Runtime::PrintNextSteps() const {
   const std::string_view name = feth_pair_->SystemSide().Name();
-  TETHERKIT_INFO("");
-  TETHERKIT_INFO_TR(Msg::kCoreInterfaceReady, name);
-  TETHERKIT_INFO_TR(Msg::kCoreNextStepsAssignIp);
-  TETHERKIT_INFO("    sudo ipconfig set {} DHCP", name);
-  TETHERKIT_INFO_TR(Msg::kCoreNextStepsVerify);
-  TETHERKIT_INFO("    ipconfig getifaddr {}", name);
-  TETHERKIT_INFO("    ipconfig getsummary {}", name);
-  TETHERKIT_INFO_TR(Msg::kCoreNextStepsDefaultRoute);
-  TETHERKIT_INFO("    sudo route -n change default $(ipconfig getoption {} router)", name);
-  TETHERKIT_INFO_TR(Msg::kCoreNextStepsTemporaryNote1);
-  TETHERKIT_INFO_TR(Msg::kCoreNextStepsTemporaryNote2);
-  TETHERKIT_INFO("");
+  TETHERNET_INFO("");
+  TETHERNET_INFO_TR(Msg::kCoreInterfaceReady, name);
+  TETHERNET_INFO_TR(Msg::kCoreNextStepsAssignIp);
+  TETHERNET_INFO("    sudo ipconfig set {} DHCP", name);
+  TETHERNET_INFO_TR(Msg::kCoreNextStepsVerify);
+  TETHERNET_INFO("    ipconfig getifaddr {}", name);
+  TETHERNET_INFO("    ipconfig getsummary {}", name);
+  TETHERNET_INFO_TR(Msg::kCoreNextStepsDefaultRoute);
+  TETHERNET_INFO("    sudo route -n change default $(ipconfig getoption {} router)", name);
+  TETHERNET_INFO_TR(Msg::kCoreNextStepsTemporaryNote1);
+  TETHERNET_INFO_TR(Msg::kCoreNextStepsTemporaryNote2);
+  TETHERNET_INFO("");
 }
 
 // =============================================================================
@@ -329,7 +329,7 @@ void Runtime::PrintNextSteps() const {
 // =============================================================================
 
 void Runtime::Teardown() {
-  TETHERKIT_INFO_TR(Msg::kCoreStopping);
+  TETHERNET_INFO_TR(Msg::kCoreStopping);
 
   // Teardown in the exact **reverse** of the start-up order.
   //
@@ -385,7 +385,7 @@ void Runtime::Teardown() {
     snapshot_.link_up = false;
   }
   RefreshSnapshot();
-  TETHERKIT_INFO_TR(Msg::kCoreStopped);
+  TETHERNET_INFO_TR(Msg::kCoreStopped);
 }
 
 // =============================================================================
@@ -440,7 +440,7 @@ void Runtime::SetRunState(RunState next) {
 
 void Runtime::RecordFatal(const Error& error) {
   const std::string message = error.ToString();
-  TETHERKIT_ERROR("{}", message);
+  TETHERNET_ERROR("{}", message);
 
   {
     const std::lock_guard<std::mutex> guard(snapshot_mutex_);
@@ -475,7 +475,7 @@ void Runtime::OnStateChanged(rndis::State from, rndis::State to) {
 
 void Runtime::OnNegotiated(const rndis::NegotiatedParameters& parameters,
                            const rndis::DeviceInfo& info) {
-  TETHERKIT_INFO_TR(Msg::kCoreRndisReady, rndis::FormatMac(info.permanent_address).data(),
+  TETHERNET_INFO_TR(Msg::kCoreRndisReady, rndis::FormatMac(info.permanent_address).data(),
                     parameters.mtu, info.LinkSpeedMbps());
 
   Emit(RuntimeEvent{.kind = RuntimeEvent::Kind::kNegotiated,
@@ -485,7 +485,7 @@ void Runtime::OnNegotiated(const rndis::NegotiatedParameters& parameters,
 }
 
 void Runtime::OnLinkStateChanged(bool connected) {
-  TETHERKIT_INFO_TR(Msg::kCoreLinkState,
+  TETHERNET_INFO_TR(Msg::kCoreLinkState,
                     Text(connected ? Msg::kCoreLinkConnected : Msg::kCoreLinkDisconnected));
 
   {
@@ -504,7 +504,7 @@ void Runtime::OnLinkStateChanged(bool connected) {
 }
 
 void Runtime::OnDeviceReset(bool addressing_lost) {
-  TETHERKIT_WARN_TR(Msg::kCoreDeviceReset,
+  TETHERNET_WARN_TR(Msg::kCoreDeviceReset,
                     Text(addressing_lost ? Msg::kCoreAddressingLost : Msg::kCoreAddressingKept));
 
   // The device discarded all outstanding packets during the reset. Pause
@@ -526,4 +526,4 @@ void Runtime::OnFatalError(const Error& error) {
   RecordFatal(std::move(annotated).WithContext(Tr(Msg::kCoreLinkUnrecoverable)));
 }
 
-}  // namespace tetherkit::core
+}  // namespace tethernet::core

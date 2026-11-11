@@ -6,6 +6,9 @@
 // context means both marshalling across threads and the landmine of "the
 // closure logs one more line -> self-deadlock". Buffering plus polling kills
 // both problems at once.
+#include "tethernet/capi/tethernet_c.h"
+#include "tethernet/common/logging.h"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -13,13 +16,11 @@
 #include <string_view>
 
 #include "capi_support.h"
-#include "tetherkit/capi/tetherkit_c.h"
-#include "tetherkit/common/logging.h"
 
 namespace {
 
-using tetherkit::capi::CopyText;
-using tetherkit::capi::WallNanos;
+using tethernet::capi::CopyText;
+using tethernet::capi::WallNanos;
 
 /// Capacity of the ring buffer.
 ///
@@ -33,8 +34,7 @@ constexpr std::size_t kLogRingCapacity = 256;
 /// when the host is stuck, the newest scene is more useful than the beginning.
 class LogRing {
  public:
-  void Push(tk_log_level_t level, std::string_view thread_name,
-            std::string_view message) noexcept {
+  void Push(tn_log_level_t level, std::string_view thread_name, std::string_view message) noexcept {
     const std::lock_guard<std::mutex> guard(mutex_);
     if (count_ == kLogRingCapacity) {
       // Overwrite the oldest entry: advance the read pointer, which is
@@ -43,7 +43,7 @@ class LogRing {
       --count_;
       ++dropped_;
     }
-    tk_log_record_t& record = records_[(head_ + count_) % kLogRingCapacity];
+    tn_log_record_t& record = records_[(head_ + count_) % kLogRingCapacity];
     record.level = static_cast<std::int32_t>(level);
     record.wall_nanos = WallNanos();
     CopyText(record.thread, thread_name);
@@ -51,7 +51,7 @@ class LogRing {
     ++count_;
   }
 
-  std::size_t Drain(tk_log_record_t* out_records, std::size_t capacity,
+  std::size_t Drain(tn_log_record_t* out_records, std::size_t capacity,
                     std::uint64_t* out_dropped) noexcept {
     const std::lock_guard<std::mutex> guard(mutex_);
     if (out_dropped != nullptr) {
@@ -79,7 +79,7 @@ class LogRing {
 
  private:
   std::mutex mutex_;
-  std::array<tk_log_record_t, kLogRingCapacity> records_{};
+  std::array<tn_log_record_t, kLogRingCapacity> records_{};
   /// Index of the next record to read.
   std::size_t head_ = 0;
   std::size_t count_ = 0;
@@ -94,28 +94,28 @@ LogRing& Ring() noexcept {
   return ring;
 }
 
-/// Installs the callback for tetherkit::SetLogSink.
+/// Installs the callback for tethernet::SetLogSink.
 ///
 /// It runs inside the log mutex, so the implementation may only "copy plus
 /// take one lock of its own", and must never log again (that would deadlock
 /// on itself).
-void SinkTrampoline(tetherkit::LogLevel level, std::string_view thread_name,
+void SinkTrampoline(tethernet::LogLevel level, std::string_view thread_name,
                     std::string_view message, void* /*user*/) noexcept {
-  Ring().Push(static_cast<tk_log_level_t>(level), thread_name, message);
+  Ring().Push(static_cast<tn_log_level_t>(level), thread_name, message);
 }
 
 }  // namespace
 
-void tk_set_log_level(int32_t level) {
-  if (level < TK_LOG_TRACE || level > TK_LOG_OFF) {
+void tn_set_log_level(int32_t level) {
+  if (level < TN_LOG_TRACE || level > TN_LOG_OFF) {
     return;
   }
-  tetherkit::SetLogLevel(static_cast<tetherkit::LogLevel>(level));
+  tethernet::SetLogLevel(static_cast<tethernet::LogLevel>(level));
 }
 
-void tk_enable_log_capture(bool enabled) {
+void tn_enable_log_capture(bool enabled) {
   if (enabled) {
-    tetherkit::SetLogSink(&SinkTrampoline, nullptr);
+    tethernet::SetLogSink(&SinkTrampoline, nullptr);
     return;
   }
 
@@ -130,11 +130,11 @@ void tk_enable_log_capture(bool enabled) {
   // SetLogSink -- SetLogSink takes the log mutex, and the log sink path is
   // "log lock -> LogRing lock", so taking them in the reverse order would
   // invert the lock order.
-  tetherkit::SetLogSink(nullptr, nullptr);
+  tethernet::SetLogSink(nullptr, nullptr);
   Ring().Clear();
 }
 
-size_t tk_drain_logs(tk_log_record_t* out_records, size_t capacity, uint64_t* out_dropped) {
+size_t tn_drain_logs(tn_log_record_t* out_records, size_t capacity, uint64_t* out_dropped) {
   if (out_dropped != nullptr) {
     *out_dropped = 0;
   }

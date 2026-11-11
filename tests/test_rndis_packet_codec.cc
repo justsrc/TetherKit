@@ -13,22 +13,22 @@
 //      transfer reports a spurious error);
 //   5. All malformed inputs are recognized as kMalformed without reading out
 //      of bounds.
+#include "tethernet/common/byte_order.h"
+#include "tethernet/rndis/packet_codec.h"
+#include "tethernet/rndis/protocol.h"
+
+#include <doctest.h>
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <span>
 #include <vector>
 
-#include <doctest.h>
-
 #include "language_guard.h"
 
-#include "tetherkit/common/byte_order.h"
-#include "tetherkit/rndis/packet_codec.h"
-#include "tetherkit/rndis/protocol.h"
-
-using namespace tetherkit;         // NOLINT(google-build-using-namespace)
-using namespace tetherkit::rndis;  // NOLINT(google-build-using-namespace)
+using namespace tethernet;         // NOLINT(google-build-using-namespace)
+using namespace tethernet::rndis;  // NOLINT(google-build-using-namespace)
 
 namespace {
 
@@ -441,7 +441,7 @@ TEST_SUITE("rndis.packet_codec") {
 
   TEST_CASE("MalformedReason names are complete") {
     // The names are user-facing text and follow the language, so pin it first.
-    const tetherkit::testing::ScopedLanguage guard{tetherkit::Language::kEnglish};
+    const tethernet::testing::ScopedLanguage guard{tethernet::Language::kEnglish};
     CHECK(MalformedReasonName(MalformedReason::kNone) == "none");
     CHECK_FALSE(MalformedReasonName(MalformedReason::kNotPacketMessage).empty());
     CHECK_FALSE(MalformedReasonName(MalformedReason::kDataOutOfBounds).empty());

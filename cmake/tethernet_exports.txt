@@ -1,0 +1,13 @@
+# Exported-symbol allowlist for libtethernet.dylib (-exported_symbols_list).
+#
+# Only the C ABI is exported. C++-side symbols (mangled tethernet::* names and
+# the static libusb copy) are hidden, for two reasons:
+#   1. The host process may already have another libusb loaded; exporting
+#      identically named symbols would let them pollute each other.
+#   2. C++ symbols carry an ABI fingerprint: once they leak out, that is a
+#      promise of their stability, and we only want to promise the
+#      tethernet_c.h layer.
+#
+# The leading underscore is the Mach-O naming convention for C symbols
+# (C's tn_version -> _tn_version).
+_tn_*

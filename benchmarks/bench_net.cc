@@ -17,6 +17,17 @@
 // this way is correct and should not be deliberately avoided.
 #include "bench_net.h"
 
+#include "tethernet/net/bpf_link.h"
+#include "tethernet/net/feth_device.h"
+
+#include <net/if.h>
+#include <netinet/in.h>
+#include <sys/ioctl.h>
+#include <sys/socket.h>
+#include <sys/sockio.h>
+#include <unistd.h>
+
+#include <arpa/inet.h>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -26,19 +37,9 @@
 #include <span>
 #include <vector>
 
-#include <arpa/inet.h>
-#include <net/if.h>
-#include <netinet/in.h>
-#include <sys/ioctl.h>
-#include <sys/socket.h>
-#include <sys/sockio.h>
-#include <unistd.h>
-
 #include "harness.h"
-#include "tetherkit/net/bpf_link.h"
-#include "tetherkit/net/feth_device.h"
 
-namespace tetherkit::bench {
+namespace tethernet::bench {
 namespace {
 
 constexpr std::uint32_t kFullFrameBytes = 1514;
@@ -351,4 +352,4 @@ void ShutdownNetBenchmarks() noexcept {
   g_fixture = nullptr;
 }
 
-}  // namespace tetherkit::bench
+}  // namespace tethernet::bench

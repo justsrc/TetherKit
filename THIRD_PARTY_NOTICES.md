@@ -13,8 +13,8 @@ Copyright (c) 2012-2013 Toby Gray <toby.gray@realvnc.com>
 Copyright (c) 2013-2018 Chris Dickens <christopher.a.dickens@gmail.com>
 and other contributors (see libusb AUTHORS).
 
-TetherKit links libusb dynamically and redistributes an unmodified copy of
-libusb-1.0.0.dylib inside TetherKit.app, so that the app runs without Homebrew
+Tethernet links libusb dynamically and redistributes an unmodified copy of
+libusb-1.0.0.dylib inside Tethernet.app, so that the app runs without Homebrew
 installed. The library is loaded via dyld dynamic linking and the
 copy on disk can be replaced by the user.
 

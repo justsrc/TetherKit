@@ -1,18 +1,18 @@
 // Unit tests for error.h / logging.h.
-#include <cerrno>
-#include <string>
+#include "tethernet/common/error.h"
+#include "tethernet/common/logging.h"
 
 #include <doctest.h>
 
-#include "tetherkit/common/error.h"
-#include "tetherkit/common/logging.h"
+#include <cerrno>
+#include <string>
 
-using tetherkit::Error;
-using tetherkit::ErrorDomain;
-using tetherkit::LogLevel;
-using tetherkit::Ok;
-using tetherkit::Result;
-using tetherkit::Status;
+using tethernet::Error;
+using tethernet::ErrorDomain;
+using tethernet::LogLevel;
+using tethernet::Ok;
+using tethernet::Result;
+using tethernet::Status;
 
 namespace {
 
@@ -24,10 +24,10 @@ Status SucceedingStep() {
   return Ok();
 }
 
-/// Demonstrates the TETHERKIT_RETURN_IF_ERROR propagation chain.
+/// Demonstrates the TETHERNET_RETURN_IF_ERROR propagation chain.
 Status PipelineWithFailure() {
-  TETHERKIT_RETURN_IF_ERROR(SucceedingStep());
-  TETHERKIT_RETURN_IF_ERROR(FailingStep());
+  TETHERNET_RETURN_IF_ERROR(SucceedingStep());
+  TETHERNET_RETURN_IF_ERROR(FailingStep());
   return Ok();
 }
 
@@ -39,7 +39,7 @@ Result<int> ProducingStep(bool succeed) {
 }
 
 Result<int> ConsumingPipeline(bool succeed) {
-  TETHERKIT_ASSIGN_OR_RETURN(const int value, ProducingStep(succeed));
+  TETHERNET_ASSIGN_OR_RETURN(const int value, ProducingStep(succeed));
   return value * 2;
 }
 
@@ -71,7 +71,7 @@ TEST_SUITE("common.error") {
   }
 
   TEST_CASE("RNDIS domain outputs the raw status code value") {
-    // tk_common deliberately does not know the symbolic names of RNDIS status codes -- that
+    // tn_common deliberately does not know the symbolic names of RNDIS status codes -- that
     // table lives in only one place, rndis/protocol.cc (single source, avoids inconsistencies).
     // Therefore Error::ToString() here only outputs the hexadecimal value; the symbolic name is
     // appended to the context string by the rndis layer when constructing the Error (see
@@ -112,24 +112,24 @@ TEST_SUITE("common.error") {
   }
 
   TEST_CASE("log level setting and checking") {
-    const LogLevel original = tetherkit::GetLogLevel();
+    const LogLevel original = tethernet::GetLogLevel();
 
-    tetherkit::SetLogLevel(LogLevel::kWarn);
-    CHECK(tetherkit::GetLogLevel() == LogLevel::kWarn);
-    CHECK_FALSE(tetherkit::detail::IsLogLevelEnabled(LogLevel::kInfo));
-    CHECK(tetherkit::detail::IsLogLevelEnabled(LogLevel::kWarn));
-    CHECK(tetherkit::detail::IsLogLevelEnabled(LogLevel::kError));
+    tethernet::SetLogLevel(LogLevel::kWarn);
+    CHECK(tethernet::GetLogLevel() == LogLevel::kWarn);
+    CHECK_FALSE(tethernet::detail::IsLogLevelEnabled(LogLevel::kInfo));
+    CHECK(tethernet::detail::IsLogLevelEnabled(LogLevel::kWarn));
+    CHECK(tethernet::detail::IsLogLevelEnabled(LogLevel::kError));
 
-    tetherkit::SetLogLevel(LogLevel::kOff);
-    CHECK_FALSE(tetherkit::detail::IsLogLevelEnabled(LogLevel::kError));
+    tethernet::SetLogLevel(LogLevel::kOff);
+    CHECK_FALSE(tethernet::detail::IsLogLevelEnabled(LogLevel::kError));
 
-    tetherkit::SetLogLevel(original);
+    tethernet::SetLogLevel(original);
   }
 
   TEST_CASE("extract the file name from __FILE__") {
-    CHECK(tetherkit::detail::BaseName("/a/b/c/bpf_link.cc") == "bpf_link.cc");
-    CHECK(tetherkit::detail::BaseName("bpf_link.cc") == "bpf_link.cc");
-    CHECK(tetherkit::detail::BaseName("") == "");
+    CHECK(tethernet::detail::BaseName("/a/b/c/bpf_link.cc") == "bpf_link.cc");
+    CHECK(tethernet::detail::BaseName("bpf_link.cc") == "bpf_link.cc");
+    CHECK(tethernet::detail::BaseName("") == "");
   }
 
 }  // TEST_SUITE("common.error")

@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 #
-# Build the TetherKit GUI: TetherKit.app and tetherkit-helper.
+# Build the Tethernet GUI: Tethernet.app and tethernet-helper.
 #
 # Usage:
 #   ./gui/Scripts/build-gui.sh              # uses the default build/ directory
-#   TETHERKIT_BUILD_DIR=/path ./gui/Scripts/build-gui.sh
+#   TETHERNET_BUILD_DIR=/path ./gui/Scripts/build-gui.sh
 #   ./gui/Scripts/build-gui.sh --debug      # debug build -- faster compile, breakpoints
 #
 # There is exactly one artifact:
-#   dist/TetherKit.app        -- the double-clickable application
+#   dist/Tethernet.app        -- the double-clickable application
 #
 # The privileged-helper install payload (helper binary + dylibs + plist +
 # install script) is embedded under the .app's Contents/Library/HelperTools/;
@@ -29,7 +29,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 GUI_DIR="${REPO_ROOT}/gui"
-BUILD_DIR="${TETHERKIT_BUILD_DIR:-${REPO_ROOT}/build}"
+BUILD_DIR="${TETHERNET_BUILD_DIR:-${REPO_ROOT}/build}"
 DIST_DIR="${REPO_ROOT}/dist"
 
 SWIFT_CONFIGURATION="release"
@@ -56,8 +56,8 @@ die() { printf '\033[31merror: \033[0m%s\n' "$1" >&2; exit 1; }
 command -v swift >/dev/null || die "swift not found; install Xcode or the command line tools first"
 
 LIB_DIR="${BUILD_DIR}/lib"
-if [[ ! -f "${LIB_DIR}/libtetherkit.dylib" ]]; then
-  die "cannot find ${LIB_DIR}/libtetherkit.dylib
+if [[ ! -f "${LIB_DIR}/libtethernet.dylib" ]]; then
+  die "cannot find ${LIB_DIR}/libtethernet.dylib
   build the C++ part first:
     cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
     cmake --build build -j"
@@ -66,7 +66,7 @@ fi
 VERSION="$(sed -n 's/^  VERSION \([0-9.]*\)$/\1/p' "${REPO_ROOT}/CMakeLists.txt" | head -1)"
 [[ -n "${VERSION}" ]] || die "could not parse the version from CMakeLists.txt"
 
-log "TetherKit ${VERSION} (Swift ${SWIFT_CONFIGURATION} build)"
+log "Tethernet ${VERSION} (Swift ${SWIFT_CONFIGURATION} build)"
 
 # ------------------------------------------------------------------------------
 # Compile Swift
@@ -75,12 +75,12 @@ log "Compiling the Swift targets"
 # An empty array conflicts with set -u under macOS's bundled bash 3.2
 # ("${arr[@]}" reports unbound variable), so the expansion must use the
 # ${arr[@]+...} guard form.
-TETHERKIT_LIB_DIR="${LIB_DIR}" swift build \
+TETHERNET_LIB_DIR="${LIB_DIR}" swift build \
   --package-path "${GUI_DIR}" \
   --configuration "${SWIFT_CONFIGURATION}" \
   ${SWIFT_BUILD_FLAGS[@]+"${SWIFT_BUILD_FLAGS[@]}"}
 
-SWIFT_BIN_DIR="$(TETHERKIT_LIB_DIR="${LIB_DIR}" swift build \
+SWIFT_BIN_DIR="$(TETHERNET_LIB_DIR="${LIB_DIR}" swift build \
   --package-path "${GUI_DIR}" \
   --configuration "${SWIFT_CONFIGURATION}" \
   ${SWIFT_BUILD_FLAGS[@]+"${SWIFT_BUILD_FLAGS[@]}"} \
@@ -89,26 +89,26 @@ SWIFT_BIN_DIR="$(TETHERKIT_LIB_DIR="${LIB_DIR}" swift build \
 # ------------------------------------------------------------------------------
 # Assemble the .app
 # ------------------------------------------------------------------------------
-APP_DIR="${DIST_DIR}/TetherKit.app"
+APP_DIR="${DIST_DIR}/Tethernet.app"
 log "Assembling ${APP_DIR}"
 
 rm -rf "${APP_DIR}"
 mkdir -p "${APP_DIR}/Contents/MacOS" "${APP_DIR}/Contents/Frameworks" \
          "${APP_DIR}/Contents/Resources"
 
-cp "${SWIFT_BIN_DIR}/TetherKitApp" "${APP_DIR}/Contents/MacOS/TetherKit"
-sed "s/__TETHERKIT_VERSION__/${VERSION}/g" \
+cp "${SWIFT_BIN_DIR}/TethernetApp" "${APP_DIR}/Contents/MacOS/Tethernet"
+sed "s/__TETHERNET_VERSION__/${VERSION}/g" \
   "${GUI_DIR}/Resources/App-Info.plist" > "${APP_DIR}/Contents/Info.plist"
 cp "${GUI_DIR}/Resources/AppIcon.icns" "${APP_DIR}/Contents/Resources/"
 
 # cp -a here is mandatory, never install:
-#   libtetherkit.dylib and libtetherkit.0.dylib are both symlinks to
+#   libtethernet.dylib and libtethernet.0.dylib are both symlinks to
 #   .0.1.1.dylib. install does not preserve symlinks -- it copies each as an
 #   independent real file, and install_name_tool then gets applied to only
 #   one of them while @rpath happens to resolve to the untouched one: a copy
 #   that is never used gets fixed, the problem persists, and nothing warns.
 #   Recorded in docs/GUI-SPIKE.md section 7.
-cp -a "${LIB_DIR}"/libtetherkit*.dylib "${APP_DIR}/Contents/Frameworks/"
+cp -a "${LIB_DIR}"/libtethernet*.dylib "${APP_DIR}/Contents/Frameworks/"
 
 # ------------------------------------------------------------------------------
 # Assemble the privileged-helper payload (embedded into the .app)
@@ -129,9 +129,9 @@ PAYLOAD_DIR="${APP_DIR}/Contents/Library/HelperTools"
 log "Assembling ${PAYLOAD_DIR}"
 
 mkdir -p "${PAYLOAD_DIR}"
-cp "${SWIFT_BIN_DIR}/tetherkit-helper" "${PAYLOAD_DIR}/com.tetherkit.helper"
-cp -a "${LIB_DIR}"/libtetherkit*.dylib "${PAYLOAD_DIR}/"
-cp "${GUI_DIR}/Resources/com.tetherkit.helper.plist" "${PAYLOAD_DIR}/"
+cp "${SWIFT_BIN_DIR}/tethernet-helper" "${PAYLOAD_DIR}/com.tethernet.helper"
+cp -a "${LIB_DIR}"/libtethernet*.dylib "${PAYLOAD_DIR}/"
+cp "${GUI_DIR}/Resources/com.tethernet.helper.plist" "${PAYLOAD_DIR}/"
 # The install/uninstall scripts also ride in the payload, so a machine that
 # has only the .app (no repo) can install and uninstall.
 cp "${SCRIPT_DIR}/install-helper.sh" "${SCRIPT_DIR}/uninstall-helper.sh" "${PAYLOAD_DIR}/"
@@ -152,7 +152,7 @@ rm -rf "${DIST_DIR}/helper"
 #   (docs/GUI-SPIKE.md section 7).
 #
 # Which file gets patched:
-#   libusb is a dependency of **libtetherkit.dylib**, not of the executable.
+#   libusb is a dependency of **libtethernet.dylib**, not of the executable.
 #   Running otool -L on the executable returns nothing and the whole section
 #   is silently skipped: the install looks perfect while the binary still
 #   depends on Homebrew. Recorded in that same section 7.
@@ -161,15 +161,15 @@ embed_libusb() {
   local destination_dir="$1"
   # The real file (not a symlink) is the patch target.
   local real_dylib
-  real_dylib="$(ls "${destination_dir}"/libtetherkit.*.*.*.dylib 2>/dev/null | head -1)"
-  [[ -n "${real_dylib}" ]] || die "no real libtetherkit file found in ${destination_dir}"
+  real_dylib="$(ls "${destination_dir}"/libtethernet.*.*.*.dylib 2>/dev/null | head -1)"
+  [[ -n "${real_dylib}" ]] || die "no real libtethernet file found in ${destination_dir}"
 
   local libusb_path
   libusb_path="$(otool -L "${real_dylib}" | awk '/libusb-1\.0/ {print $1; exit}')"
   if [[ -z "${libusb_path}" || "${libusb_path}" == @* ]]; then
     return 0  # no absolute-path dependency, nothing to do
   fi
-  [[ -f "${libusb_path}" ]] || die "libtetherkit depends on ${libusb_path}, but the file does not exist"
+  [[ -f "${libusb_path}" ]] || die "libtethernet depends on ${libusb_path}, but the file does not exist"
 
   embedded_libusb_path="${libusb_path}"
 
@@ -229,8 +229,8 @@ strip_build_rpath() {
     codesign --force --sign - --timestamp=none "${binary}" >/dev/null
   fi
 }
-strip_build_rpath "${APP_DIR}/Contents/MacOS/TetherKit"
-strip_build_rpath "${PAYLOAD_DIR}/com.tetherkit.helper"
+strip_build_rpath "${APP_DIR}/Contents/MacOS/Tethernet"
+strip_build_rpath "${PAYLOAD_DIR}/com.tethernet.helper"
 
 # ------------------------------------------------------------------------------
 # Signing
@@ -242,7 +242,7 @@ strip_build_rpath "${PAYLOAD_DIR}/com.tetherkit.helper"
 # the other way around, any inner change invalidates the outer signature.
 # ------------------------------------------------------------------------------
 log "Ad-hoc signing"
-codesign --force --sign - --timestamp=none "${PAYLOAD_DIR}/com.tetherkit.helper" >/dev/null
+codesign --force --sign - --timestamp=none "${PAYLOAD_DIR}/com.tethernet.helper" >/dev/null
 codesign --force --sign - --timestamp=none --deep "${APP_DIR}" >/dev/null
 
 # ------------------------------------------------------------------------------
@@ -254,13 +254,13 @@ codesign --verify --deep --strict "${APP_DIR}" || die ".app signature verificati
 # LC_BUILD_VERSION's sdk stamp must be >= 26, otherwise the whole app
 # renders legacy traffic lights on Tahoe (AGENTS.md pitfall 19). Enforce
 # the "recheck on every release" rule in the script, not in memory.
-sdk_stamp="$(otool -l "${APP_DIR}/Contents/MacOS/TetherKit" | awk '/LC_BUILD_VERSION/{s=1} s && / sdk /{print $NF; exit}')"
+sdk_stamp="$(otool -l "${APP_DIR}/Contents/MacOS/Tethernet" | awk '/LC_BUILD_VERSION/{s=1} s && / sdk /{print $NF; exit}')"
 if [[ "$(printf '%s' "${sdk_stamp}" | cut -d. -f1)" -lt 26 ]]; then
   die "sdk stamp is ${sdk_stamp:-missing}; Tahoe would render legacy chrome (need >= 26, see -platform_version in Package.swift)"
 fi
 echo "  OK LC_BUILD_VERSION sdk = ${sdk_stamp}"
 
-if otool -L "${APP_DIR}/Contents/Frameworks"/libtetherkit.*.*.*.dylib | grep -q '/opt/homebrew'; then
+if otool -L "${APP_DIR}/Contents/Frameworks"/libtethernet.*.*.*.dylib | grep -q '/opt/homebrew'; then
   echo "  WARNING the artifact still depends on /opt/homebrew; it will not run once copied to another machine"
 else
   echo "  OK no absolute-path Homebrew dependency"

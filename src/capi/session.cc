@@ -3,6 +3,13 @@
 // This layer holds almost no logic; it does three things: POD config ->
 // RuntimeConfig, RuntimeSnapshot -> POD status, RuntimeEvent -> ring queue.
 // The real orchestration lives in core::Runtime.
+#include "tethernet/capi/tethernet_c.h"
+#include "tethernet/common/i18n.h"
+#include "tethernet/common/time.h"
+#include "tethernet/core/runtime.h"
+#include "tethernet/net/feth_device.h"
+#include "tethernet/rndis/state_machine.h"
+
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -15,21 +22,15 @@
 #include <utility>
 
 #include "capi_support.h"
-#include "tetherkit/capi/tetherkit_c.h"
-#include "tetherkit/common/i18n.h"
-#include "tetherkit/common/time.h"
-#include "tetherkit/core/runtime.h"
-#include "tetherkit/net/feth_device.h"
-#include "tetherkit/rndis/state_machine.h"
 
 namespace {
 
-using tetherkit::capi::ClearError;
-using tetherkit::capi::CopyText;
-using tetherkit::capi::FillError;
-using tetherkit::capi::WallNanos;
-using tetherkit::core::RunState;
-using tetherkit::core::RuntimeEvent;
+using tethernet::capi::ClearError;
+using tethernet::capi::CopyText;
+using tethernet::capi::FillError;
+using tethernet::capi::WallNanos;
+using tethernet::core::RunState;
+using tethernet::core::RuntimeEvent;
 
 // ---------------------------------------------------------------------------
 // Enum value alignment check
@@ -40,26 +41,26 @@ using tetherkit::core::RuntimeEvent;
 // the wrong status, and nothing reports an error), so it is nailed down at
 // compile time.
 // ---------------------------------------------------------------------------
-static_assert(static_cast<int>(RunState::kIdle) == TK_RUN_IDLE);
-static_assert(static_cast<int>(RunState::kStarting) == TK_RUN_STARTING);
-static_assert(static_cast<int>(RunState::kRunning) == TK_RUN_RUNNING);
-static_assert(static_cast<int>(RunState::kStopping) == TK_RUN_STOPPING);
-static_assert(static_cast<int>(RunState::kStopped) == TK_RUN_STOPPED);
-static_assert(static_cast<int>(RunState::kFailed) == TK_RUN_FAILED);
+static_assert(static_cast<int>(RunState::kIdle) == TN_RUN_IDLE);
+static_assert(static_cast<int>(RunState::kStarting) == TN_RUN_STARTING);
+static_assert(static_cast<int>(RunState::kRunning) == TN_RUN_RUNNING);
+static_assert(static_cast<int>(RunState::kStopping) == TN_RUN_STOPPING);
+static_assert(static_cast<int>(RunState::kStopped) == TN_RUN_STOPPED);
+static_assert(static_cast<int>(RunState::kFailed) == TN_RUN_FAILED);
 
-static_assert(static_cast<int>(tetherkit::rndis::State::kUninitialized) == TK_RNDIS_UNINITIALIZED);
-static_assert(static_cast<int>(tetherkit::rndis::State::kInitializing) == TK_RNDIS_INITIALIZING);
-static_assert(static_cast<int>(tetherkit::rndis::State::kInitialized) == TK_RNDIS_INITIALIZED);
-static_assert(static_cast<int>(tetherkit::rndis::State::kDataInitialized) ==
-              TK_RNDIS_DATA_INITIALIZED);
-static_assert(static_cast<int>(tetherkit::rndis::State::kHalting) == TK_RNDIS_HALTING);
+static_assert(static_cast<int>(tethernet::rndis::State::kUninitialized) == TN_RNDIS_UNINITIALIZED);
+static_assert(static_cast<int>(tethernet::rndis::State::kInitializing) == TN_RNDIS_INITIALIZING);
+static_assert(static_cast<int>(tethernet::rndis::State::kInitialized) == TN_RNDIS_INITIALIZED);
+static_assert(static_cast<int>(tethernet::rndis::State::kDataInitialized) ==
+              TN_RNDIS_DATA_INITIALIZED);
+static_assert(static_cast<int>(tethernet::rndis::State::kHalting) == TN_RNDIS_HALTING);
 
-static_assert(static_cast<int>(RuntimeEvent::Kind::kRndisState) == TK_EVENT_RNDIS_STATE);
-static_assert(static_cast<int>(RuntimeEvent::Kind::kNegotiated) == TK_EVENT_NEGOTIATED);
-static_assert(static_cast<int>(RuntimeEvent::Kind::kLink) == TK_EVENT_LINK);
-static_assert(static_cast<int>(RuntimeEvent::Kind::kDeviceReset) == TK_EVENT_DEVICE_RESET);
-static_assert(static_cast<int>(RuntimeEvent::Kind::kFatal) == TK_EVENT_FATAL);
-static_assert(static_cast<int>(RuntimeEvent::Kind::kRunState) == TK_EVENT_RUN_STATE);
+static_assert(static_cast<int>(RuntimeEvent::Kind::kRndisState) == TN_EVENT_RNDIS_STATE);
+static_assert(static_cast<int>(RuntimeEvent::Kind::kNegotiated) == TN_EVENT_NEGOTIATED);
+static_assert(static_cast<int>(RuntimeEvent::Kind::kLink) == TN_EVENT_LINK);
+static_assert(static_cast<int>(RuntimeEvent::Kind::kDeviceReset) == TN_EVENT_DEVICE_RESET);
+static_assert(static_cast<int>(RuntimeEvent::Kind::kFatal) == TN_EVENT_FATAL);
+static_assert(static_cast<int>(RuntimeEvent::Kind::kRunState) == TN_EVENT_RUN_STATE);
 
 /// The event ring buffer.
 ///
@@ -71,7 +72,7 @@ static_assert(static_cast<int>(RuntimeEvent::Kind::kRunState) == TK_EVENT_RUN_ST
 /// in the snapshot, and missing a few does not affect correctness.
 constexpr std::size_t kEventRingCapacity = 128;
 
-class EventRing final : public tetherkit::core::RuntimeEventSink {
+class EventRing final : public tethernet::core::RuntimeEventSink {
  public:
   /// Called by the control thread.
   void OnRuntimeEvent(const RuntimeEvent& event) noexcept override {
@@ -80,7 +81,7 @@ class EventRing final : public tetherkit::core::RuntimeEventSink {
       head_ = (head_ + 1) % kEventRingCapacity;
       --count_;
     }
-    tk_event_t& slot = events_[(head_ + count_) % kEventRingCapacity];
+    tn_event_t& slot = events_[(head_ + count_) % kEventRingCapacity];
     slot.kind = static_cast<std::int32_t>(event.kind);
     slot.wall_nanos = WallNanos();
     slot.a = event.a;
@@ -90,7 +91,7 @@ class EventRing final : public tetherkit::core::RuntimeEventSink {
   }
 
   /// Called by the host thread.
-  std::size_t Drain(tk_event_t* out_events, std::size_t capacity) noexcept {
+  std::size_t Drain(tn_event_t* out_events, std::size_t capacity) noexcept {
     const std::lock_guard<std::mutex> guard(mutex_);
     std::size_t taken = 0;
     while (taken < capacity && count_ > 0) {
@@ -106,7 +107,7 @@ class EventRing final : public tetherkit::core::RuntimeEventSink {
 
  private:
   std::mutex mutex_;
-  std::array<tk_event_t, kEventRingCapacity> events_{};
+  std::array<tn_event_t, kEventRingCapacity> events_{};
   std::size_t head_ = 0;
   std::size_t count_ = 0;
 };
@@ -121,10 +122,10 @@ class EventRing final : public tetherkit::core::RuntimeEventSink {
   return value != 0 ? value : fallback;
 }
 
-[[nodiscard]] tetherkit::core::RuntimeConfig ToRuntimeConfig(const tk_session_config_t& config,
+[[nodiscard]] tethernet::core::RuntimeConfig ToRuntimeConfig(const tn_session_config_t& config,
                                                              EventRing& sink) {
-  const tetherkit::core::RuntimeConfig defaults;
-  tetherkit::core::RuntimeConfig result;
+  const tethernet::core::RuntimeConfig defaults;
+  tethernet::core::RuntimeConfig result;
 
   result.device_filter.vendor_id = config.vendor_id;
   result.device_filter.product_id = config.product_id;
@@ -159,17 +160,17 @@ class EventRing final : public tetherkit::core::RuntimeEventSink {
 //   first -- its destructor joins the control thread, and the control thread
 //   may push events into events until the very last moment.
 //   The other way around is a use-after-free.
-struct tk_session {
+struct tn_session {
   EventRing events;
-  std::unique_ptr<tetherkit::core::Runtime> runtime;
+  std::unique_ptr<tethernet::core::Runtime> runtime;
 };
 
-void tk_session_config_init(tk_session_config_t* out_config) {
+void tn_session_config_init(tn_session_config_t* out_config) {
   if (out_config == nullptr) {
     return;
   }
-  const tetherkit::core::RuntimeConfig defaults;
-  *out_config = tk_session_config_t{};
+  const tethernet::core::RuntimeConfig defaults;
+  *out_config = tn_session_config_t{};
   out_config->mtu = defaults.mtu;
   out_config->adopt_device_mac = defaults.adopt_device_mac;
   out_config->rx_transfer_count = defaults.data_channel.rx_transfer_count;
@@ -179,11 +180,11 @@ void tk_session_config_init(tk_session_config_t* out_config) {
   out_config->bpf_buffer_kib = defaults.bpf.kernel_buffer_bytes / 1024;
 }
 
-tk_session_t* tk_session_create(const tk_session_config_t* config, tk_error_t* out_error) {
+tn_session_t* tn_session_create(const tn_session_config_t* config, tn_error_t* out_error) {
   ClearError(out_error);
   if (config == nullptr) {
-    tetherkit::capi::FillGenericError(out_error,
-                                      tetherkit::Tr(tetherkit::Msg::kCapiSessionConfigNull));
+    tethernet::capi::FillGenericError(out_error,
+                                      tethernet::Tr(tethernet::Msg::kCapiSessionConfigNull));
     return nullptr;
   }
 
@@ -191,16 +192,16 @@ tk_session_t* tk_session_create(const tk_session_config_t* config, tk_error_t* o
   // the registry callback here is enough -- the root-free group of entry
   // points (version, enumeration, preflight) therefore stays free of side
   // effects and never touches /var/run.
-  tetherkit::capi::InstallInterfaceRegistry();
+  tethernet::capi::InstallInterfaceRegistry();
 
-  auto session = std::unique_ptr<tk_session>(new (std::nothrow) tk_session());
+  auto session = std::unique_ptr<tn_session>(new (std::nothrow) tn_session());
   if (session == nullptr) {
-    tetherkit::capi::FillGenericError(out_error,
-                                      tetherkit::Tr(tetherkit::Msg::kCapiSessionOutOfMemory));
+    tethernet::capi::FillGenericError(out_error,
+                                      tethernet::Tr(tethernet::Msg::kCapiSessionOutOfMemory));
     return nullptr;
   }
 
-  auto runtime = tetherkit::core::Runtime::Create(ToRuntimeConfig(*config, session->events));
+  auto runtime = tethernet::core::Runtime::Create(ToRuntimeConfig(*config, session->events));
   if (!runtime) {
     FillError(out_error, runtime.error());
     return nullptr;
@@ -209,10 +210,10 @@ tk_session_t* tk_session_create(const tk_session_config_t* config, tk_error_t* o
   return session.release();
 }
 
-tk_result_t tk_session_start(tk_session_t* session, tk_error_t* out_error) {
+tn_result_t tn_session_start(tn_session_t* session, tn_error_t* out_error) {
   ClearError(out_error);
   if (session == nullptr) {
-    return TK_ERR_INVALID_ARGUMENT;
+    return TN_ERR_INVALID_ARGUMENT;
   }
 
   if (const auto status = session->runtime->Start(); !status) {
@@ -220,32 +221,32 @@ tk_result_t tk_session_start(tk_session_t* session, tk_error_t* out_error) {
     // The only synchronous failure is the root check (see Runtime::Start), so
     // it gets a dedicated code -- that lets the GUI pop up "authorization
     // required" instead of a generic "start failed".
-    return tetherkit::net::IsRunningAsRoot() ? TK_ERR_FAILED : TK_ERR_PERMISSION;
+    return tethernet::net::IsRunningAsRoot() ? TN_ERR_FAILED : TN_ERR_PERMISSION;
   }
-  return TK_OK;
+  return TN_OK;
 }
 
-tk_result_t tk_session_stop(tk_session_t* session) {
+tn_result_t tn_session_stop(tn_session_t* session) {
   if (session == nullptr) {
-    return TK_ERR_INVALID_ARGUMENT;
+    return TN_ERR_INVALID_ARGUMENT;
   }
   session->runtime->Stop();
-  return TK_OK;
+  return TN_OK;
 }
 
-void tk_session_destroy(tk_session_t* session) {
+void tn_session_destroy(tn_session_t* session) {
   // The Runtime destructor calls Stop() (idempotent), so a plain delete is
   // enough here.
   delete session;  // NOLINT(cppcoreguidelines-owning-memory)
 }
 
-tk_result_t tk_session_status_get(tk_session_t* session, tk_session_status_t* out_status) {
+tn_result_t tn_session_status_get(tn_session_t* session, tn_session_status_t* out_status) {
   if (session == nullptr || out_status == nullptr) {
-    return TK_ERR_INVALID_ARGUMENT;
+    return TN_ERR_INVALID_ARGUMENT;
   }
 
-  const tetherkit::core::RuntimeSnapshot snapshot = session->runtime->Snapshot();
-  *out_status = tk_session_status_t{};
+  const tethernet::core::RuntimeSnapshot snapshot = session->runtime->Snapshot();
+  *out_status = tn_session_status_t{};
 
   out_status->run_state = static_cast<std::int32_t>(snapshot.run_state);
   out_status->rndis_state = static_cast<std::int32_t>(snapshot.rndis_state);
@@ -261,8 +262,7 @@ tk_result_t tk_session_status_get(tk_session_t* session, tk_session_status_t* ou
   // the device *is* this interface, and the peer's ARP table and DHCP lease
   // are both built from the permanent address, so showing it in the UI is
   // what matches what the user sees on the router.
-  static_assert(sizeof(out_status->device_mac) ==
-                std::tuple_size_v<tetherkit::rndis::MacAddress>);
+  static_assert(sizeof(out_status->device_mac) == std::tuple_size_v<tethernet::rndis::MacAddress>);
   std::ranges::copy(snapshot.device_info.permanent_address, std::begin(out_status->device_mac));
 
   out_status->mtu = snapshot.parameters.mtu;
@@ -282,13 +282,13 @@ tk_result_t tk_session_status_get(tk_session_t* session, tk_session_status_t* ou
   // than letting the host difference its own clock readings: scheduling
   // stretches the real interval between two fetches, and using the host's
   // timer period as the denominator overstates the rate.
-  out_status->monotonic_nanos = static_cast<std::int64_t>(tetherkit::MonotonicNanos());
+  out_status->monotonic_nanos = static_cast<std::int64_t>(tethernet::MonotonicNanos());
 
   CopyText(out_status->fatal, snapshot.fatal_message);
-  return TK_OK;
+  return TN_OK;
 }
 
-size_t tk_session_poll_events(tk_session_t* session, tk_event_t* out_events, size_t capacity) {
+size_t tn_session_poll_events(tn_session_t* session, tn_event_t* out_events, size_t capacity) {
   if (session == nullptr || capacity == 0) {
     return 0;
   }

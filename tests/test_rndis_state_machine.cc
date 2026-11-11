@@ -5,18 +5,18 @@
 // (the device pushing an out-of-band message, a keep-alive failure, a replay
 // demand after a reset). MockControlChannel plays the device side here, so
 // all of those paths get covered.
+#include "tethernet/rndis/state_machine.h"
+
+#include <doctest.h>
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
 
-#include <doctest.h>
-
 #include "language_guard.h"
-
 #include "mock_control_channel.h"
-#include "tetherkit/rndis/state_machine.h"
 
 // Same reasoning as the identically named helper in test_net_link.cc: writing
 // `r ? "" : r.error().ToString()` directly inside REQUIRE_MESSAGE does not
@@ -29,22 +29,22 @@ std::string Why(const T& result) {
 }
 }  // namespace
 
-using namespace tetherkit;                   // NOLINT(google-build-using-namespace)
-using namespace tetherkit::rndis;            // NOLINT(google-build-using-namespace)
-using tetherkit::testing::MakeDeviceKeepAlive;
-using tetherkit::testing::MakeIndicateStatus;
-using tetherkit::testing::MakeInitializeComplete;
-using tetherkit::testing::MakeKeepAliveComplete;
-using tetherkit::testing::MakeQueryComplete;
-using tetherkit::testing::MakeQueryCompleteMac;
-using tetherkit::testing::MakeQueryCompleteUint32;
-using tetherkit::testing::MakeResetComplete;
-using tetherkit::testing::MakeSetComplete;
-using tetherkit::testing::MakeWellBehavedDevice;
-using tetherkit::testing::MockControlChannel;
-using tetherkit::testing::OidOf;
-using tetherkit::testing::RecordingObserver;
-using tetherkit::testing::RequestIdOf;
+using namespace tethernet;         // NOLINT(google-build-using-namespace)
+using namespace tethernet::rndis;  // NOLINT(google-build-using-namespace)
+using tethernet::testing::MakeDeviceKeepAlive;
+using tethernet::testing::MakeIndicateStatus;
+using tethernet::testing::MakeInitializeComplete;
+using tethernet::testing::MakeKeepAliveComplete;
+using tethernet::testing::MakeQueryComplete;
+using tethernet::testing::MakeQueryCompleteMac;
+using tethernet::testing::MakeQueryCompleteUint32;
+using tethernet::testing::MakeResetComplete;
+using tethernet::testing::MakeSetComplete;
+using tethernet::testing::MakeWellBehavedDevice;
+using tethernet::testing::MockControlChannel;
+using tethernet::testing::OidOf;
+using tethernet::testing::RecordingObserver;
+using tethernet::testing::RequestIdOf;
 
 namespace {
 
@@ -343,7 +343,7 @@ TEST_SUITE("rndis.state_machine") {
 
   TEST_CASE("messages aimed at connection-oriented devices are explicitly rejected") {
     // The error message wording is asserted below; pin the language.
-    const tetherkit::testing::ScopedLanguage guard{tetherkit::Language::kEnglish};
+    const tethernet::testing::ScopedLanguage guard{tethernet::Language::kEnglish};
     MockControlChannel channel;
     channel.SetRequestHandler([](std::span<const std::byte> request, MockControlChannel& mock) {
       if (LoadLe32(request.data() + kMessageTypeOffset) == ToRaw(MessageType::kInitialize)) {
@@ -397,7 +397,7 @@ TEST_SUITE("rndis.state_machine") {
 
   TEST_CASE("reaching the keepalive failure threshold reports a fatal error") {
     // The fatal error wording is asserted below; pin the language.
-    const tetherkit::testing::ScopedLanguage guard{tetherkit::Language::kEnglish};
+    const tethernet::testing::ScopedLanguage guard{tethernet::Language::kEnglish};
     MockControlChannel channel;
     // The device answers only INITIALIZE / QUERY / SET and never KEEPALIVE ->
     // every poll times out.

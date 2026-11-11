@@ -2,8 +2,15 @@
 // enumeration.
 //
 // The GUI itself (uid 501) calls only this group; the session and the
-// interface configuration that need root are handed to tetherkit-helper. This
+// interface configuration that need root are handed to tethernet-helper. This
 // split is one of the core conclusions of docs/GUI-SPIKE.md.
+#include "tethernet/capi/tethernet_c.h"
+#include "tethernet/common/i18n.h"
+#include "tethernet/net/feth_device.h"
+#include "tethernet/usb/context.h"
+#include "tethernet/usb/device.h"
+#include "tethernet/version.h"
+
 #include <libusb.h>
 
 #include <algorithm>
@@ -18,18 +25,12 @@
 #include <vector>
 
 #include "capi_support.h"
-#include "tetherkit/capi/tetherkit_c.h"
-#include "tetherkit/common/i18n.h"
-#include "tetherkit/net/feth_device.h"
-#include "tetherkit/usb/context.h"
-#include "tetherkit/usb/device.h"
-#include "tetherkit/version.h"
 
 namespace {
 
-using tetherkit::capi::ClearError;
-using tetherkit::capi::CopyText;
-using tetherkit::capi::FillError;
+using tethernet::capi::ClearError;
+using tethernet::capi::CopyText;
+using tethernet::capi::FillError;
 
 /// Reads a USB string descriptor into a fixed-size buffer. An index of 0 means
 /// the device provides no such string.
@@ -44,7 +45,7 @@ void ReadStringDescriptor(::libusb_device_handle* handle, std::uint8_t index, ch
   if (index == 0) {
     return;
   }
-  std::array<unsigned char, TK_USB_STRING_CAPACITY> buffer{};
+  std::array<unsigned char, TN_USB_STRING_CAPACITY> buffer{};
   const int length = ::libusb_get_string_descriptor_ascii(
       handle, index, buffer.data(), static_cast<int>(buffer.size()));
   if (length <= 0) {
@@ -59,13 +60,13 @@ void ReadStringDescriptor(::libusb_device_handle* handle, std::uint8_t index, ch
 ///
 /// Why "best effort": reading a string descriptor requires libusb_open first,
 /// and the device may already be held exclusively by another process on this
-/// machine (a running tetherkit-helper, say), in which case the darwin backend
+/// machine (a running tethernet-helper, say), in which case the darwin backend
 /// returns LIBUSB_ERROR_ACCESS. That is not an error, it is just an
 /// unavailable name -- at that point the string memory back-fills the value
-/// read last time (see the end of tk_list_devices), and only when there is no
+/// read last time (see the end of tn_list_devices), and only when there is no
 /// memory either does it fall back to VID:PID. It must never make the whole
 /// enumeration fail.
-void TryReadStrings(::libusb_context* context, tk_device_info_t& info) noexcept {
+void TryReadStrings(::libusb_context* context, tn_device_info_t& info) noexcept {
   ::libusb_device** list = nullptr;
   const ssize_t count = ::libusb_get_device_list(context, &list);
   if (count < 0) {
@@ -120,13 +121,13 @@ void TryReadStrings(::libusb_context* context, tk_device_info_t& info) noexcept 
 ///
 /// On initialization failure this returns nullptr and fills in the error, and
 /// it does **not** cache the failure -- the next call retries.
-tetherkit::usb::Context* SharedEnumerationContext(tk_error_t* out_error) {
+tethernet::usb::Context* SharedEnumerationContext(tn_error_t* out_error) {
   static std::mutex mutex;
-  static std::unique_ptr<tetherkit::usb::Context> context;
+  static std::unique_ptr<tethernet::usb::Context> context;
 
   const std::lock_guard<std::mutex> guard(mutex);
   if (context == nullptr) {
-    auto created = tetherkit::usb::Context::Create();
+    auto created = tethernet::usb::Context::Create();
     if (!created) {
       FillError(out_error, created.error());
       return nullptr;
@@ -145,7 +146,7 @@ tetherkit::usb::Context* SharedEnumerationContext(tk_error_t* out_error) {
 /// ReconcileDeviceStrings.
 struct StringMemory {
   std::mutex mutex;
-  std::vector<tetherkit::capi::RememberedDeviceStrings> entries;
+  std::vector<tethernet::capi::RememberedDeviceStrings> entries;
 };
 
 StringMemory& SharedStringMemory() {
@@ -153,9 +154,9 @@ StringMemory& SharedStringMemory() {
   return memory;
 }
 
-void FillDeviceInfo(const tetherkit::usb::DeviceCandidate& candidate,
-                    tk_device_info_t& info) noexcept {
-  info = tk_device_info_t{};
+void FillDeviceInfo(const tethernet::usb::DeviceCandidate& candidate,
+                    tn_device_info_t& info) noexcept {
+  info = tn_device_info_t{};
   info.vendor_id = candidate.vendor_id;
   info.product_id = candidate.product_id;
   info.bus_number = candidate.bus_number;
@@ -173,105 +174,104 @@ void FillDeviceInfo(const tetherkit::usb::DeviceCandidate& candidate,
 
 namespace {
 
-/// tk_language_t > C++ Language. Unknown values return nullopt, which makes
+/// tn_language_t > C++ Language. Unknown values return nullopt, which makes
 /// the set call a no-op: a caller still passing a removed language id (the
 /// old Chinese value 1) keeps working and simply stays in English.
-[[nodiscard]] std::optional<tetherkit::Language> ToLanguage(std::int32_t value) noexcept {
+[[nodiscard]] std::optional<tethernet::Language> ToLanguage(std::int32_t value) noexcept {
   switch (value) {
-    case TK_LANGUAGE_ENGLISH:
-      return tetherkit::Language::kEnglish;
+    case TN_LANGUAGE_ENGLISH:
+      return tethernet::Language::kEnglish;
     default:
       return std::nullopt;
   }
 }
 
-[[nodiscard]] std::int32_t FromLanguage(tetherkit::Language /*language*/) noexcept {
+[[nodiscard]] std::int32_t FromLanguage(tethernet::Language /*language*/) noexcept {
   // English is the only language shipped today; the parameter is kept so the
   // signature survives a second language unchanged.
-  return TK_LANGUAGE_ENGLISH;
+  return TN_LANGUAGE_ENGLISH;
 }
 
 }  // namespace
 
-void tk_set_language(int32_t language) {
-  if (const std::optional<tetherkit::Language> parsed = ToLanguage(language);
-      parsed.has_value()) {
-    tetherkit::SetLanguage(*parsed);
+void tn_set_language(int32_t language) {
+  if (const std::optional<tethernet::Language> parsed = ToLanguage(language); parsed.has_value()) {
+    tethernet::SetLanguage(*parsed);
   }
 }
 
-int32_t tk_get_language(void) {
-  return FromLanguage(tetherkit::GetLanguage());
+int32_t tn_get_language(void) {
+  return FromLanguage(tethernet::GetLanguage());
 }
 
-int32_t tk_detect_system_language(void) {
-  return FromLanguage(tetherkit::DetectLanguageFromEnvironment());
+int32_t tn_detect_system_language(void) {
+  return FromLanguage(tethernet::DetectLanguageFromEnvironment());
 }
 
-void tk_version(tk_version_info_t* out_version) {
+void tn_version(tn_version_info_t* out_version) {
   if (out_version == nullptr) {
     return;
   }
-  *out_version = tk_version_info_t{};
-  const tetherkit::Version version = tetherkit::GetVersion();
+  *out_version = tn_version_info_t{};
+  const tethernet::Version version = tethernet::GetVersion();
   out_version->major = version.major;
   out_version->minor = version.minor;
   out_version->patch = version.patch;
-  CopyText(out_version->text, tetherkit::GetVersionString());
-  CopyText(out_version->build, tetherkit::GetBuildDescription());
-  CopyText(out_version->libusb, tetherkit::usb::Context::VersionString());
+  CopyText(out_version->text, tethernet::GetVersionString());
+  CopyText(out_version->build, tethernet::GetBuildDescription());
+  CopyText(out_version->libusb, tethernet::usb::Context::VersionString());
 }
 
-tk_result_t tk_check_environment(tk_environment_t* out_environment) {
+tn_result_t tn_check_environment(tn_environment_t* out_environment) {
   if (out_environment == nullptr) {
-    return TK_ERR_INVALID_ARGUMENT;
+    return TN_ERR_INVALID_ARGUMENT;
   }
-  *out_environment = tk_environment_t{};
+  *out_environment = tn_environment_t{};
 
-  out_environment->is_root = tetherkit::net::IsRunningAsRoot();
+  out_environment->is_root = tethernet::net::IsRunningAsRoot();
 
   // These sysctls are a **creation-time snapshot** of feth; changing them
   // after the interface exists has no effect, so they must be queried up
   // front. When they do not qualify, the reason is handed to the GUI as-is --
   // the user has to see which switch is turned on to know what to change.
-  if (const auto status = tetherkit::net::VerifyFethSysctls(); status) {
+  if (const auto status = tethernet::net::VerifyFethSysctls(); status) {
     out_environment->sysctls_ok = true;
   } else {
     out_environment->sysctls_ok = false;
     CopyText(out_environment->sysctl_detail, status.error().ToString());
   }
 
-  if (const auto max_mtu = tetherkit::net::QueryFethMaxMtu(); max_mtu) {
+  if (const auto max_mtu = tethernet::net::QueryFethMaxMtu(); max_mtu) {
     out_environment->feth_max_mtu = *max_mtu;
   }
 
   // Deliberately always returns success: "the environment does not qualify" is
   // a **result** to be shown to the user, not a call failure.
-  return TK_OK;
+  return TN_OK;
 }
 
-tk_result_t tk_list_devices(tk_device_info_t* out_devices, size_t capacity, size_t* out_count,
-                            bool read_strings, tk_error_t* out_error) {
+tn_result_t tn_list_devices(tn_device_info_t* out_devices, size_t capacity, size_t* out_count,
+                            bool read_strings, tn_error_t* out_error) {
   if (out_count == nullptr) {
-    return TK_ERR_INVALID_ARGUMENT;
+    return TN_ERR_INVALID_ARGUMENT;
   }
   ClearError(out_error);
   *out_count = 0;
 
-  tetherkit::usb::Context* context = SharedEnumerationContext(out_error);
+  tethernet::usb::Context* context = SharedEnumerationContext(out_error);
   if (context == nullptr) {
-    return TK_ERR_FAILED;
+    return TN_ERR_FAILED;
   }
 
-  auto candidates = tetherkit::usb::FindRndisDevices(*context, {});
+  auto candidates = tethernet::usb::FindRndisDevices(*context, {});
   if (!candidates) {
     FillError(out_error, candidates.error());
-    return TK_ERR_FAILED;
+    return TN_ERR_FAILED;
   }
 
   *out_count = candidates->size();
   if (out_devices == nullptr) {
-    return TK_OK;
+    return TN_OK;
   }
 
   const std::size_t writable = std::min(capacity, candidates->size());
@@ -288,9 +288,9 @@ tk_result_t tk_list_devices(tk_device_info_t* out_devices, size_t capacity, size
   // writable prefix: when the capacity is too small the devices after that
   // are still present, and their memory must not be dropped as "unplugged".
   {
-    std::vector<tetherkit::capi::DeviceIdentity> present;
+    std::vector<tethernet::capi::DeviceIdentity> present;
     present.reserve(candidates->size());
-    for (const tetherkit::usb::DeviceCandidate& candidate : *candidates) {
+    for (const tethernet::usb::DeviceCandidate& candidate : *candidates) {
       present.push_back({.bus_number = candidate.bus_number,
                          .device_address = candidate.device_address,
                          .vendor_id = candidate.vendor_id,
@@ -298,7 +298,7 @@ tk_result_t tk_list_devices(tk_device_info_t* out_devices, size_t capacity, size
     }
     StringMemory& memory = SharedStringMemory();
     const std::lock_guard<std::mutex> guard(memory.mutex);
-    tetherkit::capi::ReconcileDeviceStrings(memory.entries, present, {out_devices, writable});
+    tethernet::capi::ReconcileDeviceStrings(memory.entries, present, {out_devices, writable});
   }
-  return TK_OK;
+  return TN_OK;
 }

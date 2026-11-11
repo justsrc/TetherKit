@@ -1,12 +1,12 @@
-# tk_core -- data-path bridging and runtime orchestration
+# tn_core -- data-path bridging and runtime orchestration
 #
-# Wires tk_usb's RNDIS data channel to tk_net's link backend and manages the
+# Wires tn_usb's RNDIS data channel to tn_net's link backend and manages the
 # data-path threads. It is the only layer that depends on all three of
 # usb / net / rndis at once.
 
 add_library(
-  tk_core STATIC
+  tn_core STATIC
   bridge.cc
   runtime.cc)
 
-target_link_libraries(tk_core PUBLIC tetherkit_base tk_common tk_rndis tk_net tk_usb)
+target_link_libraries(tn_core PUBLIC tethernet_base tn_common tn_rndis tn_net tn_usb)

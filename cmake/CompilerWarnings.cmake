@@ -1,11 +1,11 @@
 # CompilerWarnings.cmake -- centralized warning options.
 #
-# Provides the INTERFACE target tetherkit_warnings; every project-owned target
+# Provides the INTERFACE target tethernet_warnings; every project-owned target
 # links it, while third_party/ code does not (keeps the noise down).
 
-add_library(tetherkit_warnings INTERFACE)
+add_library(tethernet_warnings INTERFACE)
 
-set(_tk_warnings
+set(_tn_warnings
     -Wall
     -Wextra
     -Wpedantic
@@ -31,8 +31,8 @@ set(_tk_warnings
     # pins sizes with static_assert(sizeof(...)).
 )
 
-target_compile_options(tetherkit_warnings INTERFACE ${_tk_warnings})
+target_compile_options(tethernet_warnings INTERFACE ${_tn_warnings})
 
-if(TETHERKIT_WARNINGS_AS_ERRORS)
-  target_compile_options(tetherkit_warnings INTERFACE -Werror)
+if(TETHERNET_WARNINGS_AS_ERRORS)
+  target_compile_options(tethernet_warnings INTERFACE -Werror)
 endif()

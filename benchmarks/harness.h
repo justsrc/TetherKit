@@ -18,19 +18,19 @@
 //      measurement is trustworthy.
 #pragma once
 
+#include "tethernet/common/time.h"
+
 #include <algorithm>
-#include <ranges>
 #include <cstdint>
 #include <cstdio>
 #include <functional>
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
-#include "tetherkit/common/time.h"
-
-namespace tetherkit::bench {
+namespace tethernet::bench {
 
 /// Prevents the compiler from optimizing away the code under measurement.
 ///
@@ -170,4 +170,4 @@ void PrintMarkdownReport(const std::vector<Result>& results, std::string_view ti
 /// benchmark results are only meaningful with context.
 void PrintEnvironment();
 
-}  // namespace tetherkit::bench
+}  // namespace tethernet::bench

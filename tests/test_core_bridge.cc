@@ -5,7 +5,12 @@
 // backpressure, pausing and graceful shutdown.
 //
 // These cases only make full sense under ThreadSanitizer:
-//   cmake -B build-tsan -DTETHERKIT_ENABLE_TSAN=ON && ctest --test-dir build-tsan -R core
+//   cmake -B build-tsan -DTETHERNET_ENABLE_TSAN=ON && ctest --test-dir build-tsan -R core
+#include "tethernet/core/bridge.h"
+#include "tethernet/net/loopback_link.h"
+
+#include <doctest.h>
+
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -13,19 +18,14 @@
 #include <thread>
 #include <vector>
 
-#include <doctest.h>
-
 #include "language_guard.h"
-
 #include "mock_data_channel.h"
-#include "tetherkit/core/bridge.h"
-#include "tetherkit/net/loopback_link.h"
 
-using namespace tetherkit;        // NOLINT(google-build-using-namespace)
-using namespace tetherkit::core;  // NOLINT(google-build-using-namespace)
-using tetherkit::net::LoopbackConfig;
-using tetherkit::net::LoopbackLink;
-using tetherkit::testing::MockDataChannel;
+using namespace tethernet;        // NOLINT(google-build-using-namespace)
+using namespace tethernet::core;  // NOLINT(google-build-using-namespace)
+using tethernet::net::LoopbackConfig;
+using tethernet::net::LoopbackLink;
+using tethernet::testing::MockDataChannel;
 
 namespace {
 
@@ -509,7 +509,7 @@ TEST_SUITE("core.bridge") {
 
   TEST_CASE("stats line renders rates and drops") {
     // The stats line is user-facing text; pin the language before asserting.
-    const tetherkit::testing::ScopedLanguage guard{tetherkit::Language::kEnglish};
+    const tethernet::testing::ScopedLanguage guard{tethernet::Language::kEnglish};
     MockDataChannel channel;
     LoopbackLink link(LoopbackConfig{.sent_capacity = 4096});
     Bridge bridge(channel, link, TestConfig());

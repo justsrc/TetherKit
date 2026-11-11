@@ -12,9 +12,9 @@
 // `const ScopedLanguage guard{Language::kEnglish};`.
 #pragma once
 
-#include "tetherkit/common/i18n.h"
+#include "tethernet/common/i18n.h"
 
-namespace tetherkit::testing {
+namespace tethernet::testing {
 
 /// Switches the language within the scope; restores the entry value in the
 /// destructor.
@@ -35,4 +35,4 @@ class ScopedLanguage {
   Language previous_;
 };
 
-}  // namespace tetherkit::testing
+}  // namespace tethernet::testing
