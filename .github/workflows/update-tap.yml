@@ -17,15 +17,18 @@
 #   checkpoint in front of even creating the branch, so a compromised
 #   workflow cannot get a branch up without someone saying yes first.
 #
-# Credentials: two, because git and the API are different capabilities.
-#   - HOMEBREW_TAP_DEPLOY_KEY: a write-scoped deploy key on the tap, used for
-#     the git push of the bump branch. Git only; it cannot open a pull
-#     request.
-#   - HOMEBREW_TAP_TOKEN: a fine-grained token with pull-requests: write on
-#     justsrc/homebrew-tap only, used for the PR creation. GITHUB_TOKEN
-#     cannot cross repositories, which is why a token is needed at all.
-#   Each credential is scoped to one repository and one capability, so a leak
-#   of either exposes the tap and nothing else.
+# Credentials: one, HOMEBREW_TAP_TOKEN. A fine-grained token scoped to
+# justsrc/homebrew-tap with contents:write and pull_requests:write. It does
+# all three tap operations: the clone, the push of the bump branch, and the
+# PR creation. GITHUB_TOKEN cannot cross repositories, which is why a token
+# is needed at all; the token cannot reach any repository other than the tap.
+#
+# One credential covers all three operations, so there is one secret to
+# provision and one to rotate.
+#
+# The token CAN write the tap's main directly. What stops it is the tap
+# repo's own ruleset, which requires changes to land as a pull request. See
+# AGENTS.md pitfall 26: the ruleset is the guarantee, not the credential.
 
 name: Update Homebrew Tap
 
@@ -39,8 +42,6 @@ on:
     # Declared so release.yml's named secrets map validates: an undeclared
     # secret name fails a workflow_call at startup, with zero jobs and no logs.
     secrets:
-      HOMEBREW_TAP_DEPLOY_KEY:
-        required: true
       HOMEBREW_TAP_TOKEN:
         required: true
   # For manual re-syncs: after a broken tap or a failed automatic sync.
@@ -51,9 +52,8 @@ on:
         required: true
         type: string
 
-# The tap push happens over the scoped deploy key and the PR over the scoped
-# token, so the GITHUB_TOKEN this workflow holds needs no write access
-# anywhere in this repo.
+# The tap work happens over the scoped token, so the GITHUB_TOKEN this
+# workflow holds needs no write access anywhere in this repo.
 permissions:
   contents: read
 
@@ -90,19 +90,15 @@ jobs:
             echo "version=${tag#v}"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Set up the deploy key
+      # The tap is cloned over https with the token. One credential covers the
+      # clone, the push and the PR.
+      - name: Check out the tap
         env:
-          DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
           # env passage, not direct expansion: a secret expression must never
           # sit inside run: text.
-          mkdir -p ~/.ssh
-          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null
-
-      - name: Check out the tap
-        run: git clone git@github.com:justsrc/homebrew-tap.git tap
+          gh repo clone justsrc/homebrew-tap tap
 
       - name: "Preflight: verify the formulas exist"
         working-directory: tap
@@ -167,16 +163,28 @@ jobs:
       # users install from, so its contents get a human read before they
       # reach anybody's machine.
       - name: Commit to a branch
+        id: commit
         working-directory: tap
         env:
           TAP_TAG: ${{ inputs.tag }}
           TAP_VERSION: ${{ steps.src.outputs.version }}
           TAP_BRANCH: bump-tetherkit-${{ inputs.tag }}
+          # The credential helper reads the token from the environment when
+          # git asks for it, so it is passed as GH_TOKEN and never as part of
+          # a command line. This workflow's own GITHUB_TOKEN cannot write to
+          # the tap, so it must not shadow the tap token here.
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
+          # env passage, not direct expansion: a secret expression must never
+          # sit inside run: text.
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           if git diff --quiet; then
+            # Already at this version. Say so and, crucially, tell the next
+            # step not to open a PR: without this output the PR step would
+            # run anyway and fail on a branch that was never pushed.
             echo "formula already at ${TAP_TAG}, nothing to do."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           # Branch first, then commit: the commit must land ON the branch. The
@@ -186,22 +194,40 @@ jobs:
           #
           # The branch name carries the tag, so a re-run for the same version
           # lands on the same branch instead of stacking a second one.
-          git checkout -b "${TAP_BRANCH}"
+          git switch -c "${TAP_BRANCH}"
           git commit -am "tetherkit + tetherkit-cli ${TAP_VERSION}"
+          # Authenticate the push with a credential helper rather than by
+          # putting the token in the remote URL. A credential in the URL is
+          # readable from .git/config, shows up in the process argument list,
+          # and would land in the CI log if the push failed.
+          #
+          # `gh auth git-credential` serves GH_TOKEN from the environment, and
+          # GH_TOKEN outranks GITHUB_TOKEN, so the push uses the tap token
+          # rather than this workflow's own GITHUB_TOKEN. The empty
+          # credential.helper resets any helper inherited from the runner's
+          # global config, so the only helper in play is the one below.
+          git config --local credential.helper ""
+          git config --local credential.https://github.com.helper \
+            '!gh auth git-credential'
           # --force: a re-run for the same tag rewrites the same branch, and
-          # the branch is this workflow's own scratch space. Nothing else
-          # writes it.
+          # the branch is this workflow's own scratch space.
           git push --force origin "${TAP_BRANCH}"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
           echo "Bump branch ${TAP_BRANCH} pushed" >> "$GITHUB_STEP_SUMMARY"
 
-      # Opening the PR is the API half, and it needs the scoped token: the
-      # deploy key authorizes git pushes only.
+      # Opening the PR is the API half, and it needs the same scoped token.
+      #
+      # The `changed` guard matters on a re-run for a tag that is already
+      # synced: the commit step exits early without pushing a branch, so there
+      # is nothing to open a PR from, and gh pr create would fail on a
+      # missing head branch.
+
       - name: Open the pull request
+        if: steps.commit.outputs.changed == 'true'
         env:
           TAP_TAG: ${{ inputs.tag }}
           TAP_VERSION: ${{ steps.src.outputs.version }}
           TAP_BRANCH: bump-tetherkit-${{ inputs.tag }}
-          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
           # env passage, not direct expansion: a secret expression must never

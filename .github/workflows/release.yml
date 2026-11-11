@@ -177,13 +177,11 @@ jobs:
     with:
       tag: ${{ github.ref_name }}
     # Narrow mapping instead of secrets: inherit: the callee needs exactly
-    # its two secrets, and the caller's remaining secrets stay out of its
-    # scope.
+    # one secret, and the caller's remaining secrets stay out of its scope.
     #
-    # HOMEBREW_TAP_DEPLOY_KEY is the write-scoped deploy key (git push of the
-    # bump branch); HOMEBREW_TAP_TOKEN is the fine-grained token with
-    # pull-requests: write (the PR itself). Both are declared in the callee's
-    # workflow_call secrets block, so the names validate at startup.
+    # HOMEBREW_TAP_TOKEN is the fine-grained token scoped to
+    # justsrc/homebrew-tap (contents:write for the branch push,
+    # pull_requests:write for the PR). Declared in the callee's
+    # workflow_call secrets block, so the name validates at startup.
     secrets:
-      HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
       HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
