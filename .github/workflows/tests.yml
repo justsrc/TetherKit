@@ -4,11 +4,13 @@
 # Split out of ci.yml. The five legacy jobs keep their steps and checks; later
 # additions are the ASan+UBSan job, the weekly schedule trigger, the
 # least-privilege permissions block, and the xcode-27 image legs. Deliberate
-# deviations from the ci.yml text, four in all: actions/checkout is pinned to
-# the latest major (v5 -> v7); the select-newest Xcode steps filter pre-release
-# toolchains (beta and release candidate); the matrix os values carry the
-# current image labels (macos-15, macos-26, xcode-27); and the abi-check grep
-# evidence strings are English (this directory was translated wholesale).
+# deviations from the ci.yml text, four in all: actions/checkout is pinned to a
+# full commit SHA with the release tag in a trailing comment (the repo-wide
+# convention, see .github/dependabot.yml); the select-newest Xcode steps filter
+# pre-release toolchains (beta and release candidate); the matrix os values
+# carry the current image labels (macos-15, macos-26, xcode-27); and the
+# abi-check grep evidence strings are English (this directory was translated
+# wholesale).
 # Triggers narrowed
 # from "push to main and swift-app branches + v* tags" to "push to main + PR +
 # manual + weekly schedule" because:
