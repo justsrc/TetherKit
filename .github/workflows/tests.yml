@@ -84,7 +84,7 @@ jobs:
         build_type: [RelWithDebInfo, Release]
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Pin Xcode 27.1 on the xcode-27 leg
         if: matrix.os == 'xcode-27'
@@ -145,7 +145,7 @@ jobs:
     name: Compile for macOS 13.3
     runs-on: macos-26
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install libusb
         run: brew install libusb
@@ -185,7 +185,7 @@ jobs:
         os: [macos-15, macos-26, xcode-27]
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Select the newest Xcode in the image without trusting the image's
       # default: the original trigger was macos-14's Xcode 15.0 default, whose
@@ -251,7 +251,7 @@ jobs:
     name: ThreadSanitizer
     runs-on: macos-26
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install libusb
         run: brew install libusb
@@ -283,7 +283,7 @@ jobs:
     name: ASan + UBSan
     runs-on: macos-26
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install libusb
         run: brew install libusb
@@ -368,7 +368,7 @@ jobs:
         os: [macos-15, macos-26, xcode-27]
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install libusb
         run: brew install libusb

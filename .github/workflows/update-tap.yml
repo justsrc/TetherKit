@@ -6,10 +6,26 @@
 #   guard). A release-event hook would never fire.
 #   So this workflow is workflow_call, invoked explicitly by release.yml.
 #
-# Credentials: the tap carries a write-scoped deploy key; the private key
-# lives in this repo's HOMEBREW_TAP_DEPLOY_KEY secret. GITHUB_TOKEN cannot
-# cross repositories, which is why it has to be a deploy key. The key's scope
-# is exactly that one repository, so a leak only exposes the tap.
+# The tap update goes through a pull request, never a direct push to main:
+#   The tap is what users `brew install` from, so its contents are the highest
+#   value target in this pipeline. A direct push lands unreviewed. This
+#   workflow therefore pushes a bump branch and opens a PR; the maintainer
+#   merges it. The tap repo's own ruleset blocks direct pushes to main, so
+#   the PR is the only path.
+#
+#   The release environment (declared on the job below) puts a human
+#   checkpoint in front of even creating the branch, so a compromised
+#   workflow cannot get a branch up without someone saying yes first.
+#
+# Credentials: two, because git and the API are different capabilities.
+#   - HOMEBREW_TAP_DEPLOY_KEY: a write-scoped deploy key on the tap, used for
+#     the git push of the bump branch. Git only; it cannot open a pull
+#     request.
+#   - HOMEBREW_TAP_TOKEN: a fine-grained token with pull-requests: write on
+#     justsrc/homebrew-tap only, used for the PR creation. GITHUB_TOKEN
+#     cannot cross repositories, which is why a token is needed at all.
+#   Each credential is scoped to one repository and one capability, so a leak
+#   of either exposes the tap and nothing else.
 
 name: Update Homebrew Tap
 
@@ -25,6 +41,8 @@ on:
     secrets:
       HOMEBREW_TAP_DEPLOY_KEY:
         required: true
+      HOMEBREW_TAP_TOKEN:
+        required: true
   # For manual re-syncs: after a broken tap or a failed automatic sync.
   workflow_dispatch:
     inputs:
@@ -33,8 +51,9 @@ on:
         required: true
         type: string
 
-# The tap push happens over the scoped deploy key, so the GITHUB_TOKEN this
-# workflow holds needs no write access anywhere in this repo.
+# The tap push happens over the scoped deploy key and the PR over the scoped
+# token, so the GITHUB_TOKEN this workflow holds needs no write access
+# anywhere in this repo.
 permissions:
   contents: read
 
@@ -44,6 +63,10 @@ jobs:
     runs-on: macos-26
     # Bounds a hung audit or build instead of burning the runner's minutes.
     timeout-minutes: 30
+    # The human checkpoint in front of the tap. The environment carries a
+    # required-reviewer rule, so this job waits for a maintainer to approve
+    # the deployment before it creates the bump branch.
+    environment: release
 
     steps:
       - name: Compute the source tarball sha256
@@ -140,11 +163,15 @@ jobs:
 
           brew uninstall tetherkit tetherkit-cli
 
-      - name: Commit and push
+      # A branch and a pull request, never a push to main. The tap is what
+      # users install from, so its contents get a human read before they
+      # reach anybody's machine.
+      - name: Commit to a branch
         working-directory: tap
         env:
           TAP_TAG: ${{ inputs.tag }}
           TAP_VERSION: ${{ steps.src.outputs.version }}
+          TAP_BRANCH: bump-tetherkit-${{ inputs.tag }}
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -152,6 +179,60 @@ jobs:
             echo "formula already at ${TAP_TAG}, nothing to do."
             exit 0
           fi
+          # Branch first, then commit: the commit must land ON the branch. The
+          # opposite order commits on the checked-out default branch and only
+          # then creates the branch at that commit, which leaves the default
+          # branch itself carrying the change in the local clone.
+          #
+          # The branch name carries the tag, so a re-run for the same version
+          # lands on the same branch instead of stacking a second one.
+          git checkout -b "${TAP_BRANCH}"
           git commit -am "tetherkit + tetherkit-cli ${TAP_VERSION}"
-          git push
-          echo "Tap synced to ${TAP_TAG}" >> "$GITHUB_STEP_SUMMARY"
+          # --force: a re-run for the same tag rewrites the same branch, and
+          # the branch is this workflow's own scratch space. Nothing else
+          # writes it.
+          git push --force origin "${TAP_BRANCH}"
+          echo "Bump branch ${TAP_BRANCH} pushed" >> "$GITHUB_STEP_SUMMARY"
+
+      # Opening the PR is the API half, and it needs the scoped token: the
+      # deploy key authorizes git pushes only.
+      - name: Open the pull request
+        env:
+          TAP_TAG: ${{ inputs.tag }}
+          TAP_VERSION: ${{ steps.src.outputs.version }}
+          TAP_BRANCH: bump-tetherkit-${{ inputs.tag }}
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          # env passage, not direct expansion: a secret expression must never
+          # sit inside run: text.
+          #
+          # Re-running for a version that already has a PR would fail with
+          # "a pull request for branch X already exists", so an open PR for
+          # this branch is treated as success. The branch push above already
+          # refreshed its content either way.
+          if gh pr list --repo justsrc/homebrew-tap --head "${TAP_BRANCH}" \
+               --state open --json number --jq '.[0].number' | grep -q .; then
+            echo "A pull request for ${TAP_BRANCH} is already open; nothing to do."
+            gh pr list --repo justsrc/homebrew-tap --head "${TAP_BRANCH}" \
+              --state open --json url --jq '.[0].url' \
+              >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          gh pr create --repo justsrc/homebrew-tap \
+            --base main \
+            --head "${TAP_BRANCH}" \
+            --title "tetherkit + tetherkit-cli ${TAP_VERSION}" \
+            --body "Automated tap bump for TetherKit ${TAP_TAG}.
+
+          The formulas point at the ${TAP_TAG} source tarball; the sha256 was
+          recomputed from that tarball and both formulas were installed from
+          this branch before the push (brew install --build-from-source,
+          with codesign --verify --deep --strict on the app).
+
+          This PR needs a maintainer merge: the tap is what users install
+          from, so its contents do not change without a human reading them."
+
+          gh pr list --repo justsrc/homebrew-tap --head "${TAP_BRANCH}" \
+            --state open --json url --jq '.[0].url' >> "$GITHUB_STEP_SUMMARY"

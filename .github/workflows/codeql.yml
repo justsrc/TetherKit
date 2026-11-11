@@ -7,23 +7,20 @@
 # in the libusb transfer pool, the BPF buffer walk, and the
 # reinterpret_cast-heavy private ABI bridge are exactly its turf.
 #
-# third_party/doctest stays in the analysis set on purpose: paths-ignore is
-# inert for C/C++ manual builds (github/codeql-action#3890; the docs confine
-# paths filtering to build-mode none, and the workflow would warn about it at
-# run time). SARIF post-filtering means a new third-party action for exactly
-# one benign vendored-code alert (cpp/use-after-free at
-# third_party/doctest/doctest.h:3710). Accepted as baseline noise instead.
-#
 # Free for public repos. Must run on macOS: CMakeLists fatals on non-Apple
 # platforms.
 #
-# pull_request trigger restricted to workflow edits (paths:
-# ['.github/workflows/**']): running a many-minute C++ build on every PR push
-# isn't worth it, but workflow changes self-verify before landing. dependabot.yml
-# and .github/scripts/ edits never match this filter; note it only gates
-# pull_request runs, pushes to main still analyze them. Dependabot's weekly
-# grouped action-bump PR deliberately rides along because it edits workflow
-# files. The concurrency group below is event-scoped (the tests.yml doctrine):
+# pull_request runs on every PR, not only on workflow edits. The old
+# paths-filtered trigger was a cost decision (a many-minute C++ build per PR
+# push) taken when the alert list was empty. It is now the wrong trade: the
+# check's whole value is catching a defect BEFORE it lands, and the defects
+# worth catching live in src/, not in .github/workflows/. With the filter, a
+# pull_request run saw almost nothing, so "C++ analysis" could not be a
+# required status check without deadlocking PRs that never trigger it. macOS
+# minutes are free for public repos, so the cost is wall-clock on the PR, not
+# money.
+#
+# The concurrency group below is event-scoped (the tests.yml doctrine):
 # push-to-main, the Monday cron and pull_request runs sit in different groups
 # and never cancel each other; within one event, canceling a superseded run is
 # safe because the newer run's SARIF simply replaces its alerts.
@@ -37,8 +34,6 @@ on:
   push:
     branches: [main]
   pull_request:
-    paths:
-      - ".github/workflows/**"
   workflow_dispatch:
 
 permissions:
@@ -61,12 +56,12 @@ jobs:
     name: C++ analysis
     runs-on: macos-26
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install libusb
         run: brew install libusb
 
-      - uses: github/codeql-action/init@v4
+      - uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           languages: cpp
           # Manual build mode: the build commands come from the next step.
@@ -74,8 +69,45 @@ jobs:
 
       - name: Build
         run: |
-          # Tests and benchmarks stay enabled: everything compiles, everything
-          # lands in the analysis set.
+          # Tests are OFF, so doctest never enters the analysis set.
+          #
+          # Why this mechanism and not the obvious ones:
+          #   - paths / paths-ignore in a CodeQL config file are inert for C++
+          #     in manual build mode. The codeql-action maintainer states it
+          #     directly (github/codeql-action#3890): "When using build-mode:
+          #     autobuild or build-mode: manual, custom steps to ignore
+          #     specified files are indeed still needed, and paths-ignore does
+          #     not work." The docs confine path filtering to build-mode none.
+          #   - SARIF post-filtering (advanced-security/filter-sarif) would work,
+          #     but that action must live in a repository owned by an
+          #     Enterprise account, so it is not available here. It would also
+          #     add a third-party action to the release path.
+          #   - What GitHub does document for compiled languages is the right
+          #     answer: "To restrict the analysis of a compiled language, you
+          #     should configure your build process to compile only the
+          #     specified files." For C++ the database contains exactly the
+          #     translation units the build compiled.
+          #
+          # So the build decides the analysis set, and this project already
+          # has the switch: doctest is an INTERFACE library linked only into
+          # tetherkit_tests (tests/CMakeLists.txt), so with
+          # TETHERKIT_BUILD_TESTS=OFF no test TU is compiled, doctest.h is
+          # never parsed, and third_party/doctest never reaches the database.
+          #
+          # That retires cpp/use-after-free at third_party/doctest/doctest.h:3710
+          # at the source instead of dismissing it. That alert is a false
+          # positive on a union assignment (the buffer is freed and a new one
+          # is assigned before the read; CodeQL's C++ model cannot see across
+          # the union member write), and it lives in a vendored test framework
+          # that never ships. Upstream doctest 2.5.3 carries the identical
+          # code, so upgrading does not clear it either.
+          #
+          # The cost, stated plainly: tests/ drops out of the analysis set
+          # along with doctest. That is first-party test code, not shipped
+          # code, and the shipped surface (src/, include/) stays fully
+          # analyzed -- which is where the BPF buffer walk and the
+          # reinterpret_cast-heavy private ABI bridge live, and those are
+          # exactly the findings worth having.
           #
           # CodeQL's macOS tracer forces traced child processes onto the x86_64
           # slice under Rosetta (observed: build defaulted to x86_64; run 42513807606).
@@ -88,9 +120,10 @@ jobs:
           # "simplification" would silently reintroduce the bug.
           cmake -S . -B build \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-            -DCMAKE_OSX_ARCHITECTURES=arm64
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DTETHERKIT_BUILD_TESTS=OFF
           cmake --build build -j"$(sysctl -n hw.ncpu)"
 
-      - uses: github/codeql-action/analyze@v4
+      - uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           category: "/language:cpp"
