@@ -97,9 +97,10 @@ jobs:
           #     specified files are indeed still needed, and paths-ignore does
           #     not work." The docs confine path filtering to build-mode none.
           #   - SARIF post-filtering (advanced-security/filter-sarif) would work,
-          #     but that action must live in a repository owned by an
-          #     Enterprise account, so it is not available here. It would also
-          #     add a third-party action to the release path.
+          #     but it is one more action to trust and pin on the analysis
+          #     path, and it would need the workflow to upload the SARIF
+          #     itself rather than letting the action do it. Not worth it for
+          #     one benign vendored alert.
           #   - What GitHub does document for compiled languages is the right
           #     answer: "To restrict the analysis of a compiled language, you
           #     should configure your build process to compile only the
