@@ -48,7 +48,7 @@ struct ContentView: View {
                 Button(L(.openReleasePage)) { NSWorkspace.shared.open(release.pageURL) }
                 Button(L(.copyBrewUpgradeCommand)) {
                     NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString("brew upgrade tetherkit", forType: .string)
+                    NSPasteboard.general.setString("brew upgrade tethernet", forType: .string)
                 }
                 Button(L(.ok), role: .cancel) {}
             } else {
@@ -78,7 +78,7 @@ struct ContentView: View {
     /// The body of the "Check for Updates..." popup.
     ///
     /// The brew command name matches the GUI formula in the tap
-    /// (tetherkit) -- when the CLI was renamed to tethernet-cli this name
+    /// (tethernet) -- when the CLI was renamed to tethernet-cli this name
     /// went to the GUI; users who build by hand follow the second
     /// sentence.
     private var updateCheckDescription: String {

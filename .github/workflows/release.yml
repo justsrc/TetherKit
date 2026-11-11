@@ -121,20 +121,14 @@ jobs:
           Homebrew is recommended (built from source, no Gatekeeper prompt):
 
           ```bash
-          brew install justsrc/tap/tetherkit           # GUI, TetherKit.app
-          brew install justsrc/tap/tetherkit-cli       # command-line tool
+          brew install justsrc/tap/tethernet           # GUI, Tethernet.app
+          brew install justsrc/tap/tethernet-cli       # command-line tool
           ```
 
-          After installing the GUI, `open "$(brew --prefix)/opt/tetherkit/TetherKit.app"`.
+          After installing the GUI, `open "$(brew --prefix)/opt/tethernet/Tethernet.app"`.
           On first run, click "Install privileged components" and enter the
           admin password once; the first launch also creates the Finder alias
           automatically, after which Tethernet turns up in Spotlight.
-
-          > Note for users of older versions: starting with this release the
-          > formula name `tetherkit` belongs to the GUI, and the CLI is renamed
-          > `tetherkit-cli` (the binary carries that name too). If you
-          > previously installed the CLI, run
-          > `brew uninstall tetherkit && brew install tetherkit-cli`.
 
           ## Command line
 

@@ -70,11 +70,11 @@ Intel. The command-line tool goes back to macOS 13.3 Ventura. Nothing needs to b
 SIP stays on, the Apple Silicon security policy stays at *Full Security*.
 
 ```bash
-# The GUI, TetherKit.app (macOS 14+)
-brew install justsrc/tap/tetherkit
+# The GUI, Tethernet.app (macOS 14+)
+brew install justsrc/tap/tethernet
 
-# The command-line tool, tetherkit-cli (macOS 13.3+)
-brew install justsrc/tap/tetherkit-cli
+# The command-line tool, tethernet-cli (macOS 13.3+)
+brew install justsrc/tap/tethernet-cli
 ```
 
 Both formulae build from source and pull in `libusb` automatically. The tap
@@ -84,21 +84,11 @@ Launch the GUI like this (on first launch the app drops a Finder alias into
 /Applications, so Spotlight can find and launch Tethernet from then on):
 
 ```bash
-open "$(brew --prefix)/opt/tetherkit/TetherKit.app"
+open "$(brew --prefix)/opt/tethernet/Tethernet.app"
 ```
 
 On first run the app walks you through installing the privileged helper —
 one click, one admin password prompt.
-
-To upgrade:
-
-```bash
-brew upgrade tetherkit tetherkit-cli
-```
-
-> **Note for existing users**: as of v0.1.2 the formula name `tetherkit` belongs
-> to the GUI; the CLI was renamed `tetherkit-cli` (binary included). If you had
-> the CLI installed, run `brew uninstall tetherkit && brew install tetherkit-cli`.
 
 You can also grab prebuilt artifacts straight from
 [Releases](https://github.com/justsrc/Tethernet/releases) (arm64 only). They are

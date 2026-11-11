@@ -474,7 +474,7 @@ extension L10nKey {
             return "You are on the latest version (v%@)."
         case .updateAvailable:
             return "Version v%@ is available. If you installed via Homebrew, run "
-                    + "brew upgrade tetherkit in a terminal; if you build from source, pull the "
+                    + "brew upgrade tethernet in a terminal; if you build from source, pull the "
                     + "latest code and rebuild."
         case .updateCheckFailed: return "The check could not be completed: %@"
         case .updateDevBuild:
