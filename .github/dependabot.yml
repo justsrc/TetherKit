@@ -35,6 +35,35 @@
 #
 # Groups: one group for the whole ecosystem, so a week with several stale
 # pins is one PR to review rather than four.
+#
+# MERGING A DEPENDABOT PR (the procedure, since it is not the obvious one):
+#
+#   1. Use the MERGE COMMIT strategy, not squash. A squash merge puts a commit
+#      on main that is authored by dependabot[bot], and a workflow on such a
+#      commit gets a read-only GITHUB_TOKEN, so the CodeQL SARIF upload fails
+#      with "403: Resource not accessible by integration". codeql.yml skips
+#      that upload so the run stays green, but a merge commit keeps publishing
+#      results.
+#
+#   2. The PR arrives with zero reviews and is BLOCKED on "review required".
+#      That is expected: Dependabot cannot approve its own PR. You bypass it
+#      the same way you bypass your own PRs, because the "Require review"
+#      ruleset lists the admin role as a bypass actor:
+#        gh api repos/justsrc/TetherKit/pulls/<PR>/merge -X PUT -f merge_method=merge
+#      The REST endpoint engages the bypass. `gh pr merge` refuses at its own
+#      pre-flight when the PR is BLOCKED (cli/cli#13388, still open) and only
+#      offers --admin, which is the wrong tool: --admin overrides BOTH
+#      rulesets, including the required status checks, whereas the bypass
+#      engages only the review rule.
+#
+#   3. Read the diff before merging. The whole point of the SHA convention is
+#      that a new action version is a decision, not an automatic consequence:
+#      a version-update PR is the last human checkpoint before a new release of
+#      a third-party action can run in workflows that hold the tap deploy key.
+#      A compromised release of a pinned action arrives here as an ordinary
+#      version-update PR precisely because SHA pinning kills the alert channel
+#      (see above), so this review is the only place that compromise would be
+#      caught.
 
 version: 2
 updates:

@@ -10,8 +10,23 @@
 # Free for public repos. Must run on macOS: CMakeLists fatals on non-Apple
 # platforms.
 #
-# Dependabot PRs arrive weekly now that the actions are SHA-pinned. The
-# procedure for merging one is in .github/dependabot.yml.
+# Merging a Dependabot PR (how this interacts with the read-only token):
+#   Prefer the MERGE COMMIT strategy, not squash. A squash merge produces a
+#   commit on main that is AUTHORED BY DEPENDABOT, and any workflow running on
+#   such a commit gets a read-only GITHUB_TOKEN, so the SARIF upload 403s.
+#   A merge commit is authored by the human merger and keeps write scope.
+#   The analyze step below also skips the upload for a Dependabot-authored
+#   push, so the run stays green either way, but the merge-commit path is the
+#   one that keeps publishing results.
+#   The review requirement on the bot PR is bypassed BY YOU, the same way it
+#   is for your own PRs: the "Require review" ruleset lists the admin role as
+#   a bypass actor with bypass_mode pull_request, so
+#     gh api repos/justsrc/TetherKit/pulls/<PR>/merge -X PUT -f merge_method=merge
+#   engages the bypass. (`gh pr merge` refuses at its own pre-flight when
+#   mergeStateStatus is BLOCKED; that is cli/cli#13388, still open. The REST
+#   endpoint does the right thing.) Do NOT add Dependabot to the bypass list:
+#   that would let the bot merge its own PR unreviewed, which is exactly what
+#   the SHA pinning below exists to prevent.
 #
 # pull_request runs on every PR, not only on workflow edits. The old
 # paths-filtered trigger was a cost decision (a many-minute C++ build per PR
