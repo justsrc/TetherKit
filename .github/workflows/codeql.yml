@@ -11,9 +11,9 @@
 # platforms.
 #
 # Merging a Dependabot PR (how this interacts with the read-only token):
-#   Prefer the MERGE COMMIT strategy, not squash. A squash merge produces a
-#   commit on main that is AUTHORED BY DEPENDABOT, and any workflow running on
-#   such a commit gets a read-only GITHUB_TOKEN, so the SARIF upload 403s.
+#   Prefer the MERGE COMMIT strategy. Squash and rebase both produce a main
+#   tip authored by dependabot[bot], and any workflow running on such a
+#   commit gets a read-only GITHUB_TOKEN, so the SARIF upload 403s.
 #   A merge commit is authored by the human merger and keeps write scope.
 #   The analyze step below also skips the upload for a Dependabot-authored
 #   push, so the run stays green either way, but the merge-commit path is the
@@ -148,8 +148,9 @@ jobs:
       # Why: a Dependabot PR merged with SQUASH produces a commit on main
       # that is authored by Dependabot, and any workflow running on such a
       # commit gets a read-only GITHUB_TOKEN. The SARIF upload then fails
-      # with "403: Resource not accessible by integration" (the action logs a
-      # warning and rethrows, so the step fails and the run goes red).
+      # with "403: Resource not accessible by integration" (the upload
+      # library warns and rethrows; the action's outer catch then fails the
+      # step via core.setFailed, so the run goes red).
       # GitHub's own guidance is to merge bot PRs with a MERGE COMMIT instead,
       # which keeps the commit authored by the human merger. This guard is
       # the belt to that braces: it keeps the analysis running and the run
@@ -158,16 +159,20 @@ jobs:
       # The pull_request path is NOT affected and must not be guarded. Code
       # scanning always allows uploading results when the pull_request event
       # triggers the run, because the results are scoped to that one pull
-      # request; the action's upload-lib.ts carries an explicit pull_request
-      # branch for it. Guarding it would be a regression: no upload means no
-      # result, and a required check that never reports blocks the PR
-      # forever (the failure mode documented in cli/cli#13388's neighbourhood:
-      # a scan that skips itself can never satisfy a rule that demands one).
+      # request. (upload-lib.ts's pull_request branch only fills base_ref and
+      # base_sha into the upload payload; the permission itself is GitHub's
+      # service-side policy.) Guarding it would be a regression: no upload
+      # means no result, and a required check that never reports blocks the
+      # PR forever (the failure mode documented in cli/cli#13388's
+      # neighbourhood: a scan that skips itself can never satisfy a rule
+      # that demands one).
       #
-      # 'never' keeps the SARIF in the workspace and prints the results into
-      # the job log, so the analysis is not wasted. This is the action's own
-      # input for the purpose (analyze/action.yml: upload: always |
-      # failure-only | never) at the pinned v4.39.3.
+      # 'never' skips only the upload: the analysis still runs, the summary
+      # counts are printed into the job log, and the SARIF is written to
+      # ../results (outside the workspace, not uploaded and not kept as an
+      # artifact). This is the action's own input for the purpose
+      # (analyze/action.yml: upload: always | failure-only | never) at the
+      # pinned v4.39.3.
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:

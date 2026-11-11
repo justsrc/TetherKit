@@ -237,8 +237,21 @@ jobs:
           # "a pull request for branch X already exists", so an open PR for
           # this branch is treated as success. The branch push above already
           # refreshed its content either way.
-          if gh pr list --repo justsrc/homebrew-tap --head "${TAP_BRANCH}" \
-               --state open --json number --jq '.[0].number' | grep -q .; then
+          #
+          # The existence check is explicit rather than a bare `grep -q .`:
+          # gh prints a bare newline when nothing matches, and whether that
+          # counts as "something" depends on the grep implementation. (With
+          # the runner's BSD grep it does not match, so the old form worked
+          # here -- but only by that accident.) Testing for a non-empty
+          # number is the same check with no implementation dependence.
+          #
+          # It also fails loudly: if the gh call itself fails, the assignment
+          # takes the non-zero status and `set -e` ends the step there, so the
+          # error surfaces at the check instead of at a later `gh pr create`.
+          existing_pr="$(gh pr list --repo justsrc/homebrew-tap \
+            --head "${TAP_BRANCH}" --state open --json number \
+            --jq '.[0].number // empty')"
+          if [ -n "${existing_pr}" ]; then
             echo "A pull request for ${TAP_BRANCH} is already open; nothing to do."
             gh pr list --repo justsrc/homebrew-tap --head "${TAP_BRANCH}" \
               --state open --json url --jq '.[0].url' \
@@ -254,8 +267,16 @@ jobs:
 
           The formulas point at the ${TAP_TAG} source tarball; the sha256 was
           recomputed from that tarball and both formulas were installed from
-          this branch before the push (brew install --build-from-source,
-          with codesign --verify --deep --strict on the app).
+          this working tree before the branch was created and pushed (brew
+          install --build-from-source, with codesign --verify --deep --strict
+          on the app).
+
+          Checklist after merging: dispatch the tap's bottle.yml
+          (workflow_dispatch, formula: tetherkit, then tetherkit-cli) so the
+          new version's bottles are built, pushed to GHCR, and the formulas'
+          bottle blocks are updated. Until that runs, brew install for the new
+          version fails with a 404 on the GHCR manifest -- use
+          --build-from-source in the meantime.
 
           This PR needs a maintainer merge: the tap is what users install
           from, so its contents do not change without a human reading them."
