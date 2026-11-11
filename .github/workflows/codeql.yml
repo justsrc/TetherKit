@@ -10,6 +10,9 @@
 # Free for public repos. Must run on macOS: CMakeLists fatals on non-Apple
 # platforms.
 #
+# Dependabot PRs arrive weekly now that the actions are SHA-pinned. The
+# procedure for merging one is in .github/dependabot.yml.
+#
 # pull_request runs on every PR, not only on workflow edits. The old
 # paths-filtered trigger was a cost decision (a many-minute C++ build per PR
 # push) taken when the alert list was empty. It is now the wrong trade: the
@@ -124,6 +127,33 @@ jobs:
             -DTETHERKIT_BUILD_TESTS=OFF
           cmake --build build -j"$(sysctl -n hw.ncpu)"
 
-      - uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+      # The upload is skipped for a commit authored by Dependabot.
+      #
+      # Why: a Dependabot PR merged with SQUASH produces a commit on main
+      # that is authored by Dependabot, and any workflow running on such a
+      # commit gets a read-only GITHUB_TOKEN. The SARIF upload then fails
+      # with "403: Resource not accessible by integration" (the action logs a
+      # warning and rethrows, so the step fails and the run goes red).
+      # GitHub's own guidance is to merge bot PRs with a MERGE COMMIT instead,
+      # which keeps the commit authored by the human merger. This guard is
+      # the belt to that braces: it keeps the analysis running and the run
+      # green either way.
+      #
+      # The pull_request path is NOT affected and must not be guarded. Code
+      # scanning always allows uploading results when the pull_request event
+      # triggers the run, because the results are scoped to that one pull
+      # request; the action's upload-lib.ts carries an explicit pull_request
+      # branch for it. Guarding it would be a regression: no upload means no
+      # result, and a required check that never reports blocks the PR
+      # forever (the failure mode documented in cli/cli#13388's neighbourhood:
+      # a scan that skips itself can never satisfy a rule that demands one).
+      #
+      # 'never' keeps the SARIF in the workspace and prints the results into
+      # the job log, so the analysis is not wasted. This is the action's own
+      # input for the purpose (analyze/action.yml: upload: always |
+      # failure-only | never) at the pinned v4.39.3.
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           category: "/language:cpp"
+          upload: ${{ github.event_name == 'push' && github.event.head_commit.author.username == 'dependabot[bot]' && 'never' || 'always' }}
