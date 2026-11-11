@@ -171,25 +171,44 @@ embed_libusb() {
   fi
   [[ -f "${libusb_path}" ]] || die "libtetherkit depends on ${libusb_path}, but the file does not exist"
 
+  embedded_libusb_path="${libusb_path}"
+
   local libusb_name
   libusb_name="$(basename "${libusb_path}")"
   cp -a "${libusb_path}" "${destination_dir}/${libusb_name}"
-  chmod u+w "${destination_dir}/${libusb_name}"
 
   install_name_tool -change "${libusb_path}" "@loader_path/${libusb_name}" "${real_dylib}"
-  install_name_tool -id "@loader_path/${libusb_name}" "${destination_dir}/${libusb_name}"
 
   # Re-signing after byte edits is mandatory.
   #   arm64 requires valid signatures on executables and dylibs;
   #   install_name_tool invalidates the original one, after which load is
   #   rejected outright by the kernel (Killed: 9) with no reason in any log.
-  codesign --force --sign - --timestamp=none "${destination_dir}/${libusb_name}" >/dev/null
+  #   Note: libusb itself is left unmodified and keeps its original ad-hoc signature.
   codesign --force --sign - --timestamp=none "${real_dylib}" >/dev/null
 }
 
+embedded_libusb_path=""
 log "Embedding libusb"
 embed_libusb "${APP_DIR}/Contents/Frameworks"
 embed_libusb "${PAYLOAD_DIR}"
+
+# ------------------------------------------------------------------------------
+# Third-party notices and licenses
+# ------------------------------------------------------------------------------
+log "Shipping third-party licenses"
+LICENSES_DIR="${APP_DIR}/Contents/Resources/Licenses"
+mkdir -p "${LICENSES_DIR}"
+cp "${REPO_ROOT}/THIRD_PARTY_NOTICES.md" "${LICENSES_DIR}/"
+
+# Copy the LGPL from the SAME tree as the dylib that was just embedded, so the
+# license version can never drift from the binary it describes.
+if [[ -n "${embedded_libusb_path}" ]]; then
+  libusb_root="$(dirname "$(dirname "$(realpath "${embedded_libusb_path}")")")"
+  [[ -f "${libusb_root}/COPYING" ]] || die "no COPYING next to ${embedded_libusb_path}"
+  cp "${libusb_root}/COPYING" "${LICENSES_DIR}/libusb-COPYING"
+elif [[ -f "${REPO_ROOT}/docs/licenses/libusb-COPYING" ]]; then
+  cp "${REPO_ROOT}/docs/licenses/libusb-COPYING" "${LICENSES_DIR}/libusb-COPYING"
+fi
 
 # ------------------------------------------------------------------------------
 # Strip the rpath that points at the build directory

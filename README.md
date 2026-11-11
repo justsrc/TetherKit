@@ -410,6 +410,6 @@ The documents below are written in English.
 
 ---
 
-## License
+## Licenses
 
-See [LICENSE](LICENSE).
+TetherKit is released under the [MIT License](LICENSE). Third-party components and their licenses (including libusb under LGPL-2.1) are documented in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

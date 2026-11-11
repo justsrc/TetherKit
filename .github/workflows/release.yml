@@ -67,7 +67,8 @@ jobs:
         id: pkg
         run: |
           name="tetherkit-cli-${GITHUB_REF_NAME}-macos-arm64.tar.gz"
-          tar -C build/bin -czf "$name" tetherkit-cli
+          cp THIRD_PARTY_NOTICES.md build/bin/
+          tar -C build/bin -czf "$name" tetherkit-cli THIRD_PARTY_NOTICES.md
           {
             echo "name=${name}"
             echo "sha256=$(shasum -a 256 "$name" | awk '{print $1}')"
