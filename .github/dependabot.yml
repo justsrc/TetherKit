@@ -4,7 +4,7 @@
 # SHA, with the release tag in a trailing comment
 # (actions/checkout@<sha> # v7.0.1). A mutable tag is a supply-chain
 # liability: whoever controls the action's repository can repoint the tag at
-# malicious code, and our workflows hold a deploy key that can write to the
+# malicious code, and our workflows hold a token that can write to the
 # public Homebrew tap that users install from. Pinning to a SHA makes the
 # reference immutable, which is what GitHub's own hardening guide calls the
 # most secure option, and what the OpenSSF Scorecard Pinned-Dependencies
@@ -30,11 +30,16 @@
 # have nothing to open for the github-actions ecosystem. That is the
 # intended trade: a version-update PR still lands the fix, and the
 # alternative (a mutable tag) means a retagged release reaches this repo
-# without any PR at all. The alerts channel that remains effective is
-# CodeQL's workflow scanning, which reads the workflow files themselves.
+# without any PR at all.
+#
+# No alert channel remains for the action pins themselves. codeql.yml
+# analyzes C++ only, not workflow files, so it is not a substitute here
+# either. The version-update PR below is the only place a compromised
+# action release would be seen, which is why the merge procedure below
+# treats reading that diff as mandatory.
 #
 # Groups: one group for the whole ecosystem, so a week with several stale
-# pins is one PR to review rather than four.
+# pins is one PR to review rather than one per action.
 #
 # MERGING A DEPENDABOT PR (the procedure, since it is not the obvious one):
 #
@@ -59,7 +64,7 @@
 #   3. Read the diff before merging. The whole point of the SHA convention is
 #      that a new action version is a decision, not an automatic consequence:
 #      a version-update PR is the last human checkpoint before a new release of
-#      a third-party action can run in workflows that hold the tap deploy key.
+#      a third-party action can run in workflows that hold the tap token.
 #      A compromised release of a pinned action arrives here as an ordinary
 #      version-update PR precisely because SHA pinning kills the alert channel
 #      (see above), so this review is the only place that compromise would be
