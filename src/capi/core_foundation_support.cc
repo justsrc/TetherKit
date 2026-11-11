@@ -2,7 +2,7 @@
 
 #include <vector>
 
-namespace tetherkit::capi {
+namespace tethernet::capi {
 
 ScopedCFRef<CFStringRef> MakeCFString(std::string_view text) {
   return ScopedCFRef<CFStringRef>{::CFStringCreateWithBytes(
@@ -41,9 +41,9 @@ SCDynamicStoreRef SharedDynamicStore() {
   // No lock is needed -- since C++11 the initialization of a function-local
   // static is thread-safe (the magic static), so concurrent first calls let
   // only one thread actually run the initialization.
-  static SCDynamicStoreRef store = ::SCDynamicStoreCreate(
-      kCFAllocatorDefault, CFSTR("TetherKit"), /*callout=*/nullptr, /*context=*/nullptr);
+  static SCDynamicStoreRef store = ::SCDynamicStoreCreate(kCFAllocatorDefault, CFSTR("Tethernet"),
+                                                          /*callout=*/nullptr, /*context=*/nullptr);
   return store;
 }
 
-}  // namespace tetherkit::capi
+}  // namespace tethernet::capi

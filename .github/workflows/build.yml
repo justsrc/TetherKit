@@ -1,6 +1,6 @@
 # Build: a manually triggered full build with artifact upload.
 #
-# Dispatch-only full build: C++ (warnings as errors) + the libtetherkit shared
+# Dispatch-only full build: C++ (warnings as errors) + the libtethernet shared
 # library + GUI packaging. Artifacts are uploaded for each run.
 
 name: Build
@@ -81,54 +81,54 @@ jobs:
         run: |
           cmake -S . -B build \
             -DCMAKE_BUILD_TYPE="${DISPATCHED_BUILD_TYPE}" \
-            -DTETHERKIT_WARNINGS_AS_ERRORS=ON
+            -DTETHERNET_WARNINGS_AS_ERRORS=ON
 
       - name: Build
         run: cmake --build build -j"$(sysctl -n hw.ncpu)"
 
-      # Basic tetherkit-cli smoke checks; --list only enumerates devices and
+      # Basic tethernet-cli smoke checks; --list only enumerates devices and
       # state, no root needed.
       - name: Smoke test (--list needs no root)
         run: |
-          ./build/bin/tetherkit-cli --version
-          ./build/bin/tetherkit-cli --list
+          ./build/bin/tethernet-cli --version
+          ./build/bin/tethernet-cli --list
 
-      - name: Assemble TetherKit.app
+      - name: Assemble Tethernet.app
         run: cmake --build build --target gui
 
       - name: Self-checks
         run: |
-          codesign --verify --deep --strict dist/TetherKit.app
+          codesign --verify --deep --strict dist/Tethernet.app
           # The non-root path of --install must fail loudly instead of
           # half-installing.
-          payload="dist/TetherKit.app/Contents/Library/HelperTools"
-          if "${payload}/com.tetherkit.helper" --install; then
+          payload="dist/Tethernet.app/Contents/Library/HelperTools"
+          if "${payload}/com.tethernet.helper" --install; then
             echo "::error::helper --install unexpectedly succeeded without root"
             exit 1
           fi
           # The Finder-alias install mode always exits 0 (result on stdout).
-          ./dist/TetherKit.app/Contents/MacOS/TetherKit --install-finder-alias
+          ./dist/Tethernet.app/Contents/MacOS/Tethernet --install-finder-alias
 
-      - name: Package TetherKit.app
+      - name: Package Tethernet.app
         run: |
           # ditto preserves the bundle structure and extended attributes; it is
           # the standard way to package a .app.
-          name="TetherKit-${GITHUB_RUN_NUMBER}-${DISPATCHED_OS}-${DISPATCHED_BUILD_TYPE}.zip"
-          ditto -c -k --keepParent dist/TetherKit.app "$name"
+          name="Tethernet-${GITHUB_RUN_NUMBER}-${DISPATCHED_OS}-${DISPATCHED_BUILD_TYPE}.zip"
+          ditto -c -k --keepParent dist/Tethernet.app "$name"
 
       # upload-artifact v7 supports single-file direct upload (archive: false):
       # the downloaded artifact IS the ditto zip above, not a zip inside another
       # zip. With archive: false the name input is ignored (the file name wins).
-      - name: Upload TetherKit.app artifact
+      - name: Upload Tethernet.app artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          path: TetherKit-${{ github.run_number }}-${{ env.DISPATCHED_OS }}-${{ env.DISPATCHED_BUILD_TYPE }}.zip
+          path: Tethernet-${{ github.run_number }}-${{ env.DISPATCHED_OS }}-${{ env.DISPATCHED_BUILD_TYPE }}.zip
           archive: false
           retention-days: 14
 
-      - name: Upload libtetherkit shared-library artifact
+      - name: Upload libtethernet shared-library artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: tetherkit-libs-${{ github.run_number }}-${{ env.DISPATCHED_OS }}-${{ env.DISPATCHED_BUILD_TYPE }}
-          path: build/lib/libtetherkit*.dylib
+          name: tethernet-libs-${{ github.run_number }}-${{ env.DISPATCHED_OS }}-${{ env.DISPATCHED_BUILD_TYPE }}
+          path: build/lib/libtethernet*.dylib
           retention-days: 14

@@ -1,4 +1,4 @@
-# TetherKit code formatting configuration.
+# Tethernet code formatting configuration.
 # Google style as the baseline, with line width relaxed to 100 columns to fit
 # protocol constant tables and long type names.
 ---
@@ -12,7 +12,7 @@ TabWidth: 2
 UseTab: Never
 AccessModifierOffset: -1
 
-# Pointer/reference hugs the type: TetherKit writes `Foo* p`, not `Foo *p`
+# Pointer/reference hugs the type: Tethernet writes `Foo* p`, not `Foo *p`
 DerivePointerAlignment: false
 PointerAlignment: Left
 ReferenceAlignment: Left
@@ -34,7 +34,7 @@ PackConstructorInitializers: NextLine
 SortIncludes: CaseSensitive
 IncludeBlocks: Regroup
 IncludeCategories:
-  - Regex: '^"tetherkit/'
+  - Regex: '^"tethernet/'
     Priority: 1
   - Regex: '^<(doctest|libusb)'
     Priority: 2

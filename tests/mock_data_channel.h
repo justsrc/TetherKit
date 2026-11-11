@@ -12,6 +12,9 @@
 // correctness under TSan.
 #pragma once
 
+#include "tethernet/common/frame_ring.h"
+#include "tethernet/usb/data_channel.h"
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -21,10 +24,7 @@
 #include <mutex>
 #include <vector>
 
-#include "tetherkit/common/frame_ring.h"
-#include "tetherkit/usb/data_channel.h"
-
-namespace tetherkit::testing {
+namespace tethernet::testing {
 
 /// Data channel that emulates device behavior.
 class MockDataChannel final : public usb::DataChannel {
@@ -218,4 +218,4 @@ class MockDataChannel final : public usb::DataChannel {
   std::atomic<std::uint64_t> async_send_errors_{0};
 };
 
-}  // namespace tetherkit::testing
+}  // namespace tethernet::testing

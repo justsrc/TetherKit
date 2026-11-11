@@ -1,12 +1,12 @@
-// TetherKit command-line entry point.
+// Tethernet command-line entry point.
 //
 // Kept deliberately thin: parse arguments -> assemble a RuntimeConfig -> hand
 // it to core::Runtime -> handle signals. All substantive logic lives in the
 // library so it can be covered by unit tests.
-#include "tetherkit/common/i18n.h"
-#include "tetherkit/common/logging.h"
-#include "tetherkit/core/runtime.h"
-#include "tetherkit/version.h"
+#include "tethernet/common/i18n.h"
+#include "tethernet/common/logging.h"
+#include "tethernet/core/runtime.h"
+#include "tethernet/version.h"
 
 #include <signal.h>  // NOLINT(modernize-deprecated-headers) -- sigaction lives only in this header
 #include <unistd.h>
@@ -23,14 +23,14 @@
 
 namespace {
 
-using tetherkit::Error;
-using tetherkit::Language;
-using tetherkit::LogLevel;
-using tetherkit::Msg;
-using tetherkit::Result;
-using tetherkit::Status;
-using tetherkit::Text;
-using tetherkit::Tr;
+using tethernet::Error;
+using tethernet::Language;
+using tethernet::LogLevel;
+using tethernet::Msg;
+using tethernet::Result;
+using tethernet::Status;
+using tethernet::Text;
+using tethernet::Tr;
 
 /// Global shutdown flag.
 ///
@@ -78,7 +78,7 @@ extern "C" void HandleSignal(int /*signal_number*/) {
   if (::sigaction(SIGPIPE, &ignore, nullptr) != 0) {
     return std::unexpected(Error::FromErrno(0, Tr(Msg::kCliIgnoreSigpipeFailed)));
   }
-  return tetherkit::Ok();
+  return tethernet::Ok();
 }
 
 // =============================================================================
@@ -116,8 +116,8 @@ void ApplyLanguageOption(int argc, char** argv) {
     if (std::string_view{argv[i]} != "--lang") {
       continue;
     }
-    if (Language language{}; tetherkit::ParseLanguage(argv[i + 1], &language)) {
-      tetherkit::SetLanguage(language);
+    if (Language language{}; tethernet::ParseLanguage(argv[i + 1], &language)) {
+      tethernet::SetLanguage(language);
     }
     return;
   }
@@ -159,7 +159,7 @@ void ApplyLanguageOption(int argc, char** argv) {
 
 /// Result of parsing.
 struct ParsedArguments {
-  tetherkit::core::RuntimeConfig config;
+  tethernet::core::RuntimeConfig config;
   bool show_help = false;
   bool show_version = false;
   bool list_devices = false;
@@ -198,78 +198,78 @@ struct ParsedArguments {
       continue;
     }
     if (argument == "--no-color") {
-      tetherkit::SetLogColorEnabled(false);
+      tethernet::SetLogColorEnabled(false);
       continue;
     }
 
     if (argument == "--vid") {
-      TETHERKIT_ASSIGN_OR_RETURN(const auto text, take_value(i, argument));
-      TETHERKIT_ASSIGN_OR_RETURN(const auto value, ParseUint(text, 16));
+      TETHERNET_ASSIGN_OR_RETURN(const auto text, take_value(i, argument));
+      TETHERNET_ASSIGN_OR_RETURN(const auto value, ParseUint(text, 16));
       parsed.config.device_filter.vendor_id = static_cast<std::uint16_t>(value);
       continue;
     }
     if (argument == "--pid") {
-      TETHERKIT_ASSIGN_OR_RETURN(const auto text, take_value(i, argument));
-      TETHERKIT_ASSIGN_OR_RETURN(const auto value, ParseUint(text, 16));
+      TETHERNET_ASSIGN_OR_RETURN(const auto text, take_value(i, argument));
+      TETHERNET_ASSIGN_OR_RETURN(const auto value, ParseUint(text, 16));
       parsed.config.device_filter.product_id = static_cast<std::uint16_t>(value);
       continue;
     }
     if (argument == "--mtu") {
-      TETHERKIT_ASSIGN_OR_RETURN(const auto text, take_value(i, argument));
-      TETHERKIT_ASSIGN_OR_RETURN(parsed.config.mtu, ParseUint(text));
+      TETHERNET_ASSIGN_OR_RETURN(const auto text, take_value(i, argument));
+      TETHERNET_ASSIGN_OR_RETURN(parsed.config.mtu, ParseUint(text));
       continue;
     }
     if (argument == "--rx-transfers") {
-      TETHERKIT_ASSIGN_OR_RETURN(const auto text, take_value(i, argument));
-      TETHERKIT_ASSIGN_OR_RETURN(parsed.config.data_channel.rx_transfer_count, ParseUint(text));
+      TETHERNET_ASSIGN_OR_RETURN(const auto text, take_value(i, argument));
+      TETHERNET_ASSIGN_OR_RETURN(parsed.config.data_channel.rx_transfer_count, ParseUint(text));
       continue;
     }
     if (argument == "--tx-transfers") {
-      TETHERKIT_ASSIGN_OR_RETURN(const auto text, take_value(i, argument));
-      TETHERKIT_ASSIGN_OR_RETURN(parsed.config.data_channel.tx_transfer_count, ParseUint(text));
+      TETHERNET_ASSIGN_OR_RETURN(const auto text, take_value(i, argument));
+      TETHERNET_ASSIGN_OR_RETURN(parsed.config.data_channel.tx_transfer_count, ParseUint(text));
       continue;
     }
     if (argument == "--rx-transfer-kb") {
-      TETHERKIT_ASSIGN_OR_RETURN(const auto text, take_value(i, argument));
-      TETHERKIT_ASSIGN_OR_RETURN(const auto kilobytes, ParseUint(text));
+      TETHERNET_ASSIGN_OR_RETURN(const auto text, take_value(i, argument));
+      TETHERNET_ASSIGN_OR_RETURN(const auto kilobytes, ParseUint(text));
       parsed.config.data_channel.rx_transfer_bytes = kilobytes * 1024;
       continue;
     }
     if (argument == "--max-transfer-kb") {
-      TETHERKIT_ASSIGN_OR_RETURN(const auto text, take_value(i, argument));
-      TETHERKIT_ASSIGN_OR_RETURN(const auto kilobytes, ParseUint(text));
+      TETHERNET_ASSIGN_OR_RETURN(const auto text, take_value(i, argument));
+      TETHERNET_ASSIGN_OR_RETURN(const auto kilobytes, ParseUint(text));
       parsed.config.rndis.host_max_transfer_size = kilobytes * 1024;
       continue;
     }
     if (argument == "--max-tx-packets") {
-      TETHERKIT_ASSIGN_OR_RETURN(const auto text, take_value(i, argument));
-      TETHERKIT_ASSIGN_OR_RETURN(parsed.config.rndis.max_tx_packets_per_message, ParseUint(text));
+      TETHERNET_ASSIGN_OR_RETURN(const auto text, take_value(i, argument));
+      TETHERNET_ASSIGN_OR_RETURN(parsed.config.rndis.max_tx_packets_per_message, ParseUint(text));
       continue;
     }
     if (argument == "--bpf-buffer-kb") {
-      TETHERKIT_ASSIGN_OR_RETURN(const auto text, take_value(i, argument));
-      TETHERKIT_ASSIGN_OR_RETURN(const auto kilobytes, ParseUint(text));
+      TETHERNET_ASSIGN_OR_RETURN(const auto text, take_value(i, argument));
+      TETHERNET_ASSIGN_OR_RETURN(const auto kilobytes, ParseUint(text));
       parsed.config.bpf.kernel_buffer_bytes = kilobytes * 1024;
       continue;
     }
     if (argument == "--stats") {
-      TETHERKIT_ASSIGN_OR_RETURN(const auto text, take_value(i, argument));
-      TETHERKIT_ASSIGN_OR_RETURN(parsed.config.stats_interval_millis, ParseUint(text));
+      TETHERNET_ASSIGN_OR_RETURN(const auto text, take_value(i, argument));
+      TETHERNET_ASSIGN_OR_RETURN(parsed.config.stats_interval_millis, ParseUint(text));
       continue;
     }
     if (argument == "--log") {
-      TETHERKIT_ASSIGN_OR_RETURN(const auto text, take_value(i, argument));
-      TETHERKIT_ASSIGN_OR_RETURN(const auto level, ParseLogLevel(text));
-      tetherkit::SetLogLevel(level);
+      TETHERNET_ASSIGN_OR_RETURN(const auto text, take_value(i, argument));
+      TETHERNET_ASSIGN_OR_RETURN(const auto level, ParseLogLevel(text));
+      tethernet::SetLogLevel(level);
       continue;
     }
     if (argument == "--lang") {
       // The value was already applied by ApplyLanguageOption before parsing
       // began (so that even this round's errors come out in the target
       // language). Here we only consume it and re-check the spelling.
-      TETHERKIT_ASSIGN_OR_RETURN(const auto text, take_value(i, argument));
+      TETHERNET_ASSIGN_OR_RETURN(const auto text, take_value(i, argument));
       Language ignored{};
-      if (!tetherkit::ParseLanguage(text, &ignored)) {
+      if (!tethernet::ParseLanguage(text, &ignored)) {
         return std::unexpected(Error::Generic(Tr(Msg::kCliUnknownLanguage, text)));
       }
       continue;
@@ -281,15 +281,15 @@ struct ParsedArguments {
 }
 
 /// `--list`: print the recognized RNDIS devices. **Does not need root**.
-[[nodiscard]] Status ListDevices(const tetherkit::usb::DeviceFilter& filter) {
-  TETHERKIT_ASSIGN_OR_RETURN(const auto context, tetherkit::usb::Context::Create());
-  TETHERKIT_ASSIGN_OR_RETURN(const auto candidates,
-                             tetherkit::usb::FindRndisDevices(*context, filter));
+[[nodiscard]] Status ListDevices(const tethernet::usb::DeviceFilter& filter) {
+  TETHERNET_ASSIGN_OR_RETURN(const auto context, tethernet::usb::Context::Create());
+  TETHERNET_ASSIGN_OR_RETURN(const auto candidates,
+                             tethernet::usb::FindRndisDevices(*context, filter));
 
   if (candidates.empty()) {
     PrintText(Msg::kCliNoDevices);
     PrintText(Msg::kCliNoDevicesHint);
-    return tetherkit::Ok();
+    return tethernet::Ok();
   }
 
   PrintText(Msg::kCliDevicesHeader);
@@ -301,7 +301,7 @@ struct ParsedArguments {
            candidate.used_android_quirk ? Text(Msg::kCliDeviceAndroidQuirk) : std::string_view{});
     std::fputs(line.c_str(), stdout);
   }
-  return tetherkit::Ok();
+  return tethernet::Ok();
 }
 
 }  // namespace
@@ -310,7 +310,7 @@ int main(int argc, char** argv) {
   // The language must be settled **before any** output. Infer from the
   // environment first, then let an explicit --lang override -- that way even
   // argument parsing's own errors come out in the user's language.
-  tetherkit::SetLanguage(tetherkit::DetectLanguageFromEnvironment());
+  tethernet::SetLanguage(tethernet::DetectLanguageFromEnvironment());
   ApplyLanguageOption(argc, argv);
 
   auto parsed = ParseArguments(argc, argv);
@@ -325,8 +325,8 @@ int main(int argc, char** argv) {
     return 0;
   }
   if (parsed->show_version) {
-    const std::string line = std::format("{}\n{}\n", tetherkit::GetVersionString(),
-                                         tetherkit::GetBuildDescription());
+    const std::string line =
+        std::format("{}\n{}\n", tethernet::GetVersionString(), tethernet::GetBuildDescription());
     std::fputs(line.c_str(), stdout);
     return 0;
   }
@@ -341,20 +341,20 @@ int main(int argc, char** argv) {
   }
 
   if (const auto status = InstallSignalHandlers(); !status) {
-    TETHERKIT_ERROR("{}", status.error().ToString());
+    TETHERNET_ERROR("{}", status.error().ToString());
     return 1;
   }
 
-  TETHERKIT_INFO("{}", tetherkit::GetVersionString());
+  TETHERNET_INFO("{}", tethernet::GetVersionString());
 
-  auto runtime = tetherkit::core::Runtime::Create(parsed->config);
+  auto runtime = tethernet::core::Runtime::Create(parsed->config);
   if (!runtime) {
-    TETHERKIT_ERROR("{}", runtime.error().ToString());
+    TETHERNET_ERROR("{}", runtime.error().ToString());
     return 1;
   }
 
   if (const auto status = (*runtime)->Start(); !status) {
-    TETHERKIT_ERROR_TR(Msg::kCliStartFailed, status.error().ToString());
+    TETHERNET_ERROR_TR(Msg::kCliStartFailed, status.error().ToString());
     return 1;
   }
 
@@ -366,7 +366,7 @@ int main(int argc, char** argv) {
     while (!g_stop_requested.load(std::memory_order_acquire)) {
       std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
-    TETHERKIT_INFO_TR(Msg::kCliStopSignalReceived);
+    TETHERNET_INFO_TR(Msg::kCliStopSignalReceived);
     (*runtime)->RequestStop();
   });
 

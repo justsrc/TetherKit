@@ -1,18 +1,12 @@
-<p align="center">
-  <img src="docs/assets/icon.png" width="128" alt="TetherKit icon">
-</p>
-
-# TetherKit
+# Tethernet
 
 **A kext-free HoRNDIS alternative that brings Android USB tethering on macOS back to life.**
 
-TetherKit is a **user-space RNDIS driver for macOS**: it turns an RNDIS device (Android USB
+Tethernet is a **user-space RNDIS driver for macOS**: it turns an RNDIS device (Android USB
 tethering, Windows Phone, embedded Linux gadgets, …) into a network interface that macOS can
 see and use — with **no kernel extension, no DriverKit, no SIP changes and no developer
 account**. Works the same on Apple Silicon and Intel. Ships with a GUI — pick a device,
-connect, configure IP in three clicks — plus a command-line tool, `tetherkit-cli`.
-
-![TetherKit main window](docs/assets/screenshot-main-en.jpg)
+connect, configure IP in three clicks — plus a command-line tool, `tethernet-cli`.
 
 - **USB side**: asynchronous bulk transfers via [libusb](https://libusb.info/), with a complete
   host-side RNDIS state machine.
@@ -33,12 +27,12 @@ connect, configure IP in three clicks — plus a command-line tool, `tetherkit-c
 
 If you landed here because **HoRNDIS stopped working after a macOS upgrade**, or because it
 shows up as blocked/"Disabled Software" with no *Allow* button on your Apple Silicon Mac —
-that is what TetherKit is for.
+that is what Tethernet is for.
 
 [HoRNDIS](https://github.com/jwise/HoRNDIS) was the answer for years, and it is good software.
 But it is a **kernel extension**, and that is the part macOS keeps tightening:
 
-| | HoRNDIS | TetherKit |
+| | HoRNDIS | Tethernet |
 |---|---|---|
 | Kind of software | Kernel extension (kext) | Plain user-space program |
 | Apple Silicon | Needs *Reduced Security* set in Recovery + a reboot before a third-party kext can load at all | Nothing to change — it is not a driver as far as the OS is concerned |
@@ -47,7 +41,7 @@ But it is a **kernel extension**, and that is the part macOS keeps tightening:
 | Worst case failure | Kernel panic | The process exits |
 | Upstream status | Latest release 9.2 (Aug 2024); ["MacOS Sonoma not supported"](https://github.com/jwise/HoRNDIS/issues/169) still open | Actively developed |
 
-TetherKit reaches the same goal from the other side: instead of teaching the kernel to speak
+Tethernet reaches the same goal from the other side: instead of teaching the kernel to speak
 RNDIS, it speaks RNDIS **in user space** over libusb, and hands the resulting Ethernet frames
 to macOS through a `feth` virtual interface pair. The kernel never loads any of our code.
 
@@ -64,7 +58,7 @@ The macOS kernel has **no** RNDIS driver. Plug in an Android phone with USB teth
 and no new interface shows up. Existing approaches either ship a kext (requires weakening SIP
 or Apple Silicon's security policy, a high signing bar, and breaks easily on system updates)
 or go through a Network Extension (requires a developer account plus system-extension
-approval). TetherKit takes a third route: **act as both the USB host and the network driver,
+approval). Tethernet takes a third route: **act as both the USB host and the network driver,
 entirely in user space**.
 
 ---
@@ -76,44 +70,34 @@ Intel. The command-line tool goes back to macOS 13.3 Ventura. Nothing needs to b
 SIP stays on, the Apple Silicon security policy stays at *Full Security*.
 
 ```bash
-# The GUI, TetherKit.app (macOS 14+)
-brew install justsrc/tap/tetherkit
+# The GUI, Tethernet.app (macOS 14+)
+brew install justsrc/tap/tethernet
 
-# The command-line tool, tetherkit-cli (macOS 13.3+)
-brew install justsrc/tap/tetherkit-cli
+# The command-line tool, tethernet-cli (macOS 13.3+)
+brew install justsrc/tap/tethernet-cli
 ```
 
 Both formulae build from source and pull in `libusb` automatically. The tap
 lives at [justsrc/homebrew-tap](https://github.com/justsrc/homebrew-tap).
 
 Launch the GUI like this (on first launch the app drops a Finder alias into
-/Applications, so Spotlight can find and launch TetherKit from then on):
+/Applications, so Spotlight can find and launch Tethernet from then on):
 
 ```bash
-open "$(brew --prefix)/opt/tetherkit/TetherKit.app"
+open "$(brew --prefix)/opt/tethernet/Tethernet.app"
 ```
 
 On first run the app walks you through installing the privileged helper —
 one click, one admin password prompt.
 
-To upgrade:
-
-```bash
-brew upgrade tetherkit tetherkit-cli
-```
-
-> **Note for existing users**: as of v0.1.2 the formula name `tetherkit` belongs
-> to the GUI; the CLI was renamed `tetherkit-cli` (binary included). If you had
-> the CLI installed, run `brew uninstall tetherkit && brew install tetherkit-cli`.
-
 You can also grab prebuilt artifacts straight from
-[Releases](https://github.com/justsrc/TetherKit/releases) (arm64 only). They are
+[Releases](https://github.com/justsrc/Tethernet/releases) (arm64 only). They are
 **unsigned**, so a browser download gets quarantined by Gatekeeper and you have to
 clear the attribute yourself:
 
 ```bash
-xattr -d com.apple.quarantine tetherkit-cli     # CLI
-xattr -dr com.apple.quarantine TetherKit.app    # GUI (recursive)
+xattr -d com.apple.quarantine tethernet-cli     # CLI
+xattr -dr com.apple.quarantine Tethernet.app    # GUI (recursive)
 ```
 
 If that bothers you, use Homebrew above, or build it yourself as described in
@@ -124,11 +108,11 @@ quarantine attribute.
 
 ## Graphical interface
 
-TetherKit.app (SwiftUI) reduces the whole flow to three clicks — pick a device,
+Tethernet.app (SwiftUI) reduces the whole flow to three clicks — pick a device,
 connect, configure IP — and shows live throughput and logs.
 
-It comes in two pieces: `TetherKit.app` runs as a **normal user**, and anything
-that needs root is handed to `tetherkit-helper`, a privileged component launched
+It comes in two pieces: `Tethernet.app` runs as a **normal user**, and anything
+that needs root is handed to `tethernet-helper`, a privileged component launched
 on demand by launchd. Every privileged call carries an authorization credential
 the user has just confirmed. The app itself needs no entitlements.
 
@@ -161,16 +145,16 @@ primary service on its own.
 for a compact panel with shortcuts back to the main window. The connection
 itself lives in the privileged helper, so quitting the UI never drops it.
 
-**Update check**: "TetherKit → Check for Updates…" checks on demand; the app also
+**Update check**: "Tethernet → Check for Updates…" checks on demand; the app also
 checks once a day on its own (it only hits GitHub's public Releases API and
 reports nothing), lighting up a notice on the Manage page when a new version is
 out. The update itself still goes through `brew upgrade` or a source
 rebuild — with certificate-free distribution, auto-replacing the .app would be
 blocked by Gatekeeper, so the app deliberately only checks, never swaps. To
 disable the automatic check:
-`defaults write com.tetherkit.app updateCheckDisabled -bool YES`.
+`defaults write com.tethernet.app updateCheckDisabled -bool YES`.
 
-**Interface language**: "TetherKit → Language" offers Follow system / English,
+**Interface language**: "Tethernet → Language" offers Follow system / English,
 and the menu bar panel carries the same switch. Changes take effect
 **immediately** — no restart — and the log lines coming out of the library
 follow along (the language is pushed to the privileged helper too). The default
@@ -183,22 +167,22 @@ trade-offs are in [docs/GUI-ARCHITECTURE.md](docs/GUI-ARCHITECTURE.md).
 
 ## Command-line tool
 
-Besides the GUI there is a command-line tool, `tetherkit-cli` (installation above):
+Besides the GUI there is a command-line tool, `tethernet-cli` (installation above):
 
 ```bash
 # First check whether the device is recognized (**no root needed**)
-tetherkit-cli --list
+tethernet-cli --list
 
 # Start the driver
-sudo tetherkit-cli
+sudo tethernet-cli
 
 # In another terminal, configure the new interface (RNDIS devices usually run a DHCP server)
 sudo ipconfig set feth0 DHCP
 ipconfig getifaddr feth0
 ```
 
-> The commands above assume an installed `tetherkit-cli` (on your `PATH`). If you
-> built from source, substitute `./build/bin/tetherkit-cli`.
+> The commands above assume an installed `tethernet-cli` (on your `PATH`). If you
+> built from source, substitute `./build/bin/tethernet-cli`.
 
 On a successful start the program prints the interface it created along with the follow-up
 commands. `Ctrl-C` shuts down gracefully (the device is taken out of RNDIS first, then the
@@ -215,18 +199,18 @@ Common options (see `--help` for the full list):
 | `--max-transfer-kb` | The main throughput tuning knob — see [docs/PERFORMANCE.md](docs/PERFORMANCE.md) |
 | `--lang en\|auto` | Interface language, default `auto` (see below) |
 
-**Language**: by default the tool checks `TETHERKIT_LANG`, `LC_ALL`,
+**Language**: by default the tool checks `TETHERNET_LANG`, `LC_ALL`,
 `LC_MESSAGES` and `LANG` in that order and takes the first non-empty value.
 English is the only language shipped today, so `en` and `auto` both select it
 and any other value is rejected with an error.
 
 ```bash
-tetherkit-cli --lang en --help     # pick explicitly
-TETHERKIT_LANG=en tetherkit-cli --list
+tethernet-cli --lang en --help     # pick explicitly
+TETHERNET_LANG=en tethernet-cli --list
 ```
 
 > ⚠️ Whether `sudo` passes `LANG` through depends on your sudoers `env_keep`, so
-> `sudo tetherkit-cli` may not see the same environment as your terminal — pass
+> `sudo tethernet-cli` may not see the same environment as your terminal — pass
 > `--lang` explicitly in that case.
 
 ### Why root is needed
@@ -259,17 +243,17 @@ In other words, root is a requirement of the interface side, not the USB side �
 
 **Does Android USB tethering work on macOS at all?**
 Not out of the box — macOS ships no RNDIS driver, so an Android phone in USB tethering mode
-simply produces no network interface. That is what TetherKit adds.
+simply produces no network interface. That is what Tethernet adds.
 
 **Do I have to disable SIP, or lower the security policy on Apple Silicon?**
-No. Those are requirements of *kernel extensions*. TetherKit is an ordinary program; the
+No. Those are requirements of *kernel extensions*. Tethernet is an ordinary program; the
 kernel never loads any of its code. The privileged part is a small background component that
 needs an admin password once, at install time.
 
 **HoRNDIS shows as "Disabled Software" / has no *Allow* button. Can I fix it?**
 That is macOS refusing to load a third-party kext, not something the kext can fix from its
 side. On Apple Silicon, loading one at all requires booting into Recovery and lowering the
-security policy. TetherKit avoids the whole category of problem.
+security policy. Tethernet avoids the whole category of problem.
 
 **Does it work on M1 / M2 / M3 / M4?**
 Yes — Apple Silicon and Intel take the same code path. There is nothing architecture-specific
@@ -278,10 +262,10 @@ about it beyond ordinary compilation.
 **Is my device supported?**
 Anything that presents an RNDIS interface: most Android phones with USB tethering enabled,
 Windows Phone, and Linux `g_ether`/`u_ether` USB gadgets (Raspberry Pi Zero, BeagleBone …).
-Run `tetherkit-cli --list` to check — it needs no root.
+Run `tethernet-cli --list` to check — it needs no root.
 
 **Does iPhone tethering need this?**
-No. macOS supports iPhone USB tethering natively; TetherKit is for the devices it does not
+No. macOS supports iPhone USB tethering natively; Tethernet is for the devices it does not
 cover.
 
 ---
@@ -302,7 +286,7 @@ cover.
         └────────────────────────────────────────────┼─────────────────────────────────┘
                                                      │ read() / write() raw Ethernet frames
         ┌────────────────────────────────────────────┼─────────────────────────────────┐
-        │   TetherKit (user space)                   │                                 │
+        │   Tethernet (user space)                   │                                 │
         │                                            ▼                                 │
         │   ┌───────────────────────── data path bridge ─────────────────────────┐     │
         │   │ TX: BPF batch read → coalesce frames → RNDIS_PACKET_MSG → bulk OUT │     │
@@ -343,7 +327,7 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
 cmake --build build -j
 ```
 
-Output: `build/bin/tetherkit-cli`.
+Output: `build/bin/tethernet-cli`.
 
 ### Building the GUI
 
@@ -351,21 +335,21 @@ Requires the full Xcode toolchain. On top of the build directory above:
 
 ```bash
 cmake --build build --target gui        # same as ./gui/Scripts/build-gui.sh
-open dist/TetherKit.app
+open dist/Tethernet.app
 ```
 
 ### Build options
 
 | Option | Default | Description |
 |---|---|---|
-| `TETHERKIT_BUILD_TESTS` | `ON` | Build unit tests |
-| `TETHERKIT_BUILD_BENCHMARKS` | `ON` | Build benchmarks |
-| `TETHERKIT_WARNINGS_AS_ERRORS` | `OFF` | Treat warnings as errors |
-| `TETHERKIT_NATIVE_ARCH` | `OFF` | `-mcpu=native`; the binary is no longer portable |
-| `TETHERKIT_ENABLE_LTO` | `OFF` | Link-time optimization |
-| `TETHERKIT_ENABLE_ASAN` | `OFF` | AddressSanitizer |
-| `TETHERKIT_ENABLE_UBSAN` | `OFF` | UndefinedBehaviorSanitizer |
-| `TETHERKIT_ENABLE_TSAN` | `OFF` | ThreadSanitizer (**required to validate the lock-free structures**) |
+| `TETHERNET_BUILD_TESTS` | `ON` | Build unit tests |
+| `TETHERNET_BUILD_BENCHMARKS` | `ON` | Build benchmarks |
+| `TETHERNET_WARNINGS_AS_ERRORS` | `OFF` | Treat warnings as errors |
+| `TETHERNET_NATIVE_ARCH` | `OFF` | `-mcpu=native`; the binary is no longer portable |
+| `TETHERNET_ENABLE_LTO` | `OFF` | Link-time optimization |
+| `TETHERNET_ENABLE_ASAN` | `OFF` | AddressSanitizer |
+| `TETHERNET_ENABLE_UBSAN` | `OFF` | UndefinedBehaviorSanitizer |
+| `TETHERNET_ENABLE_TSAN` | `OFF` | ThreadSanitizer (**required to validate the lock-free structures**) |
 
 ### Tests
 
@@ -377,7 +361,7 @@ The lock-free queue and the multi-threaded data path are validated separately un
 ThreadSanitizer:
 
 ```bash
-cmake -S . -B build-tsan -DTETHERKIT_ENABLE_TSAN=ON
+cmake -S . -B build-tsan -DTETHERNET_ENABLE_TSAN=ON
 cmake --build build-tsan -j
 ctest --test-dir build-tsan --output-on-failure
 ```
@@ -387,7 +371,7 @@ ctest --test-dir build-tsan --output-on-failure
 ```bash
 cmake -S . -B build-rel -DCMAKE_BUILD_TYPE=Release
 cmake --build build-rel -j
-./build-rel/bin/tetherkit_bench
+./build-rel/bin/tethernet_bench
 ```
 
 Aggregated results: [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
@@ -410,6 +394,6 @@ The documents below are written in English.
 
 ---
 
-## License
+## Licenses
 
-See [LICENSE](LICENSE).
+Tethernet is released under the [MIT License](LICENSE). Third-party components and their licenses (including libusb under LGPL-2.1) are documented in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

@@ -1,4 +1,4 @@
-#include "tetherkit/common/logging.h"
+#include "tethernet/common/logging.h"
 
 #include <pthread.h>
 #include <unistd.h>
@@ -11,7 +11,7 @@
 #include <ctime>
 #include <mutex>
 
-namespace tetherkit {
+namespace tethernet {
 namespace {
 
 // The log configuration is process-wide singleton state, naturally a mutable
@@ -173,4 +173,4 @@ void EmitLogLine(LogLevel level, std::string_view file, unsigned line,
 }
 
 }  // namespace detail
-}  // namespace tetherkit
+}  // namespace tethernet

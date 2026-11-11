@@ -4,8 +4,24 @@
 //   * loopback backend -- runnable in any environment; it is the infrastructure for bridge
 //     layer tests and must itself be reliable;
 //   * feth + BPF -- requires root and is skipped rather than failed in non-root environments.
-//     Enabled explicitly with TETHERKIT_ROOT_TESTS=1 (to avoid accidentally running real
+//     Enabled explicitly with TETHERNET_ROOT_TESTS=1 (to avoid accidentally running real
 //     interface operations in CI).
+#include "tethernet/common/i18n.h"
+#include "tethernet/net/bpf_link.h"
+#include "tethernet/net/darwin_abi.h"
+#include "tethernet/net/feth_device.h"
+#include "tethernet/net/loopback_link.h"
+
+#include <doctest.h>
+
+#include <net/if.h>
+#include <netinet/in.h>
+#include <sys/ioctl.h>
+#include <sys/socket.h>
+#include <sys/sockio.h>
+#include <unistd.h>
+
+#include <arpa/inet.h>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -17,24 +33,8 @@
 #include <string_view>
 #include <vector>
 
-#include <arpa/inet.h>
-#include <net/if.h>
-#include <netinet/in.h>
-#include <sys/ioctl.h>
-#include <sys/socket.h>
-#include <sys/sockio.h>
-#include <unistd.h>
-
-#include <doctest.h>
-
-#include "tetherkit/common/i18n.h"
-#include "tetherkit/net/bpf_link.h"
-#include "tetherkit/net/darwin_abi.h"
-#include "tetherkit/net/feth_device.h"
-#include "tetherkit/net/loopback_link.h"
-
-using namespace tetherkit;       // NOLINT(google-build-using-namespace)
-using namespace tetherkit::net;  // NOLINT(google-build-using-namespace)
+using namespace tethernet;       // NOLINT(google-build-using-namespace)
+using namespace tethernet::net;  // NOLINT(google-build-using-namespace)
 
 namespace {
 
@@ -62,7 +62,7 @@ std::vector<std::byte> MakeEthernetFrame(std::uint32_t total_length, std::uint8_
 /// test case and there is no concurrent setenv in the process, so the check is suppressed.
 // NOLINTNEXTLINE(concurrency-mt-unsafe)
 bool RootTestsEnabled() {
-  const char* flag = std::getenv("TETHERKIT_ROOT_TESTS");
+  const char* flag = std::getenv("TETHERNET_ROOT_TESTS");
   return flag != nullptr && flag[0] == '1' && IsRunningAsRoot();
 }
 
@@ -84,7 +84,7 @@ std::string Why(const T& result) {
 /// it directly would print an address.
 void ReportSkip(std::string_view what) {
   const std::string message =
-      std::format("Skipped {}: requires root and TETHERKIT_ROOT_TESTS=1 (current euid={})", what,
+      std::format("Skipped {}: requires root and TETHERNET_ROOT_TESTS=1 (current euid={})", what,
                   IsRunningAsRoot() ? "0" : "not 0");
   MESSAGE(message);
 }
@@ -235,7 +235,7 @@ TEST_SUITE("net.abi") {
       // why holds a message identifier; the shipped language must really have
       // text for it (a missing row would render as an empty string and leave
       // "reason:" empty in sysctl errors).
-      const std::string_view why = tetherkit::TextIn(tetherkit::Language::kEnglish, entry.why);
+      const std::string_view why = tethernet::TextIn(tethernet::Language::kEnglish, entry.why);
       // The reason must be a real sentence, not one word.
       CHECK(why.size() > 10);
     }

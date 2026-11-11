@@ -1,5 +1,6 @@
-#include "tetherkit/common/i18n.h"
 #include "process_runner.h"
+
+#include "tethernet/common/i18n.h"
 
 #include <spawn.h>
 #include <sys/wait.h>
@@ -12,7 +13,7 @@
 
 extern char** environ;  // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
 
-namespace tetherkit::capi {
+namespace tethernet::capi {
 namespace {
 
 /// Reads a pipe until the far end closes it.
@@ -129,4 +130,4 @@ Result<ProcessResult> RunTool(std::string_view executable,
   return Spawn(executable, arguments);
 }
 
-}  // namespace tetherkit::capi
+}  // namespace tethernet::capi

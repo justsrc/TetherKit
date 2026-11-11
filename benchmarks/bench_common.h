@@ -1,11 +1,11 @@
 // Registration entry point for infrastructure-layer micro-benchmarks.
 #pragma once
 
-namespace tetherkit::bench {
+namespace tethernet::bench {
 
 class Runner;
 
-/// Registers all tk_common micro-benchmarks with the runner.
+/// Registers all tn_common micro-benchmarks with the runner.
 void RegisterCommonBenchmarks(Runner& runner);
 
-}  // namespace tetherkit::bench
+}  // namespace tethernet::bench

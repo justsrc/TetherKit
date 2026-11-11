@@ -2,7 +2,7 @@
 
 This document is the complete wire-format detail needed to implement the RNDIS
 **host side**. All values are consistent with
-[`include/tetherkit/rndis/protocol.h`](../include/tetherkit/rndis/protocol.h)
+[`include/tethernet/rndis/protocol.h`](../include/tethernet/rndis/protocol.h)
 (the single source of truth in the code) and were cross-checked against the Linux
 kernel implementation: `drivers/net/usb/rndis_host.c`,
 `include/linux/usb/rndis_host.h`, `drivers/usb/gadget/function/rndis.c`.

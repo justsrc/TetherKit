@@ -1,7 +1,7 @@
 # Check exemptions for the C ABI implementation layer
 #
-# Same reasoning as include/tetherkit/capi/.clang-tidy: the exported function
-# names must follow the C convention `tk_snake_case`, and the implementation
+# Same reasoning as include/tethernet/capi/.clang-tidy: the exported function
+# names must follow the C convention `tn_snake_case`, and the implementation
 # unavoidably contains C-style fixed-length buffer copies and raw pointers.
 InheritParentConfig: true
 

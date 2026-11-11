@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <ctime>
 
-namespace tetherkit::capi {
+namespace tethernet::capi {
 
 std::int64_t WallNanos() noexcept {
   ::timespec now{};
@@ -14,7 +14,7 @@ std::int64_t WallNanos() noexcept {
 
 void ReconcileDeviceStrings(std::vector<RememberedDeviceStrings>& memory,
                             std::span<const DeviceIdentity> present,
-                            std::span<tk_device_info_t> infos) {
+                            std::span<tn_device_info_t> infos) {
   // Evict the devices that are no longer on the bus first -- the order
   // matters: eviction runs before the back-fill, so a "different device"
   // plugged back into the same address never picks up the previous one's
@@ -23,7 +23,7 @@ void ReconcileDeviceStrings(std::vector<RememberedDeviceStrings>& memory,
     return std::ranges::find(present, entry.identity) == present.end();
   });
 
-  for (tk_device_info_t& info : infos) {
+  for (tn_device_info_t& info : infos) {
     const bool read_succeeded =
         info.manufacturer[0] != '\0' || info.product[0] != '\0' || info.serial[0] != '\0';
     const DeviceIdentity identity = IdentityOf(info);
@@ -56,7 +56,7 @@ void ReconcileDeviceStrings(std::vector<RememberedDeviceStrings>& memory,
 bool IsValidFethName(std::string_view name) noexcept {
   constexpr std::string_view kPrefix = "feth";
   // The name also has to fit into the kernel's IFNAMSIZ buffer.
-  if (name.size() <= kPrefix.size() || name.size() >= TK_INTERFACE_NAME_CAPACITY) {
+  if (name.size() <= kPrefix.size() || name.size() >= TN_INTERFACE_NAME_CAPACITY) {
     return false;
   }
   if (!name.starts_with(kPrefix)) {
@@ -66,4 +66,4 @@ bool IsValidFethName(std::string_view name) noexcept {
                              [](char character) { return character >= '0' && character <= '9'; });
 }
 
-}  // namespace tetherkit::capi
+}  // namespace tethernet::capi

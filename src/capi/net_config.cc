@@ -24,17 +24,21 @@
 //   options). MANUAL mode has no DNS source, so all we can do is add a DNS
 //   key to the service it created.
 //   That move is **not verified on a real device**, so we never promise
-//   success upward: tk_net_query always reads back the resolver that is
+//   success upward: tn_net_query always reads back the resolver that is
 //   actually in effect in the system, and the GUI shows the read-back result,
 //   not the value we pushed down.
-#include <SystemConfiguration/SystemConfiguration.h>
-#include <arpa/inet.h>
+#include "tethernet/capi/tethernet_c.h"
+#include "tethernet/common/i18n.h"
+#include "tethernet/common/logging.h"
+
 #include <net/if.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <SystemConfiguration/SystemConfiguration.h>
 #include <algorithm>
+#include <arpa/inet.h>
 #include <array>
 #include <chrono>
 #include <cstring>
@@ -48,29 +52,26 @@
 #include "capi_support.h"
 #include "core_foundation_support.h"
 #include "process_runner.h"
-#include "tetherkit/capi/tetherkit_c.h"
-#include "tetherkit/common/i18n.h"
-#include "tetherkit/common/logging.h"
 
 namespace {
 
-using tetherkit::Error;
-using tetherkit::Msg;
-using tetherkit::Result;
-using tetherkit::Status;
-using tetherkit::Text;
-using tetherkit::Tr;
-using tetherkit::capi::ClearError;
-using tetherkit::capi::CopyText;
-using tetherkit::capi::CopyToStdString;
-using tetherkit::capi::FillError;
-using tetherkit::capi::FillGenericError;
-using tetherkit::capi::IsValidFethName;
-using tetherkit::capi::MakeCFString;
-using tetherkit::capi::ProcessResult;
-using tetherkit::capi::RunTool;
-using tetherkit::capi::ScopedCFRef;
-using tetherkit::capi::SharedDynamicStore;
+using tethernet::Error;
+using tethernet::Msg;
+using tethernet::Result;
+using tethernet::Status;
+using tethernet::Text;
+using tethernet::Tr;
+using tethernet::capi::ClearError;
+using tethernet::capi::CopyText;
+using tethernet::capi::CopyToStdString;
+using tethernet::capi::FillError;
+using tethernet::capi::FillGenericError;
+using tethernet::capi::IsValidFethName;
+using tethernet::capi::MakeCFString;
+using tethernet::capi::ProcessResult;
+using tethernet::capi::RunTool;
+using tethernet::capi::ScopedCFRef;
+using tethernet::capi::SharedDynamicStore;
 
 constexpr std::string_view kIpconfigPath = "/usr/sbin/ipconfig";
 constexpr std::string_view kRoutePath = "/sbin/route";
@@ -89,7 +90,7 @@ constexpr std::chrono::milliseconds kDhcpPollInterval{250};
 // ---------------------------------------------------------------------------
 
 [[nodiscard]] bool IsValidIpv4(std::string_view text) noexcept {
-  if (text.empty() || text.size() >= TK_ADDRESS_CAPACITY) {
+  if (text.empty() || text.size() >= TN_ADDRESS_CAPACITY) {
     return false;
   }
   const std::string owned{text};
@@ -105,7 +106,7 @@ constexpr std::chrono::milliseconds kDhcpPollInterval{250};
   if (!IsValidFethName(interface_name)) {
     return std::unexpected(Error::Generic(Tr(Msg::kCapiInterfaceNotOurs, interface_name)));
   }
-  return tetherkit::Ok();
+  return tethernet::Ok();
 }
 
 // ---------------------------------------------------------------------------
@@ -121,7 +122,7 @@ constexpr std::chrono::milliseconds kDhcpPollInterval{250};
 [[nodiscard]] Status RunOrFail(std::string_view executable,
                                const std::vector<std::string>& arguments,
                                std::string_view what) {
-  TETHERKIT_ASSIGN_OR_RETURN(const ProcessResult result, RunTool(executable, arguments));
+  TETHERNET_ASSIGN_OR_RETURN(const ProcessResult result, RunTool(executable, arguments));
   if (!result.Succeeded()) {
     std::string detail{result.output};
     // Tool output usually carries a trailing newline; that reads badly when
@@ -133,7 +134,7 @@ constexpr std::chrono::milliseconds kDhcpPollInterval{250};
         Tr(Msg::kCapiCommandFailed, what, result.exit_code,
            detail.empty() ? std::string{Text(Msg::kCapiCommandNoOutput)} : detail)));
   }
-  return tetherkit::Ok();
+  return tethernet::Ok();
 }
 
 /// Reads the interface's current IPv4 address; returns std::nullopt when there
@@ -276,7 +277,7 @@ constexpr std::chrono::milliseconds kDhcpPollInterval{250};
 /// properly registered** service gets adopted". A wrong bet causes no damage
 /// -- the DNS simply does not take effect -- so a failure is only logged and
 /// never fails the whole static-IP configuration. The real result is reported
-/// by the tk_net_query read-back.
+/// by the tn_net_query read-back.
 ///
 /// One more thing to note: a value in SCDynamicStore is **owned by the session
 /// that set it**, and the value disappears when that session is released.
@@ -308,7 +309,7 @@ void TryPublishDns(SCDynamicStoreRef store, std::string_view service_id,
   const ScopedCFRef<CFStringRef> key =
       MakeCFString(std::format("State:/Network/Service/{}/DNS", service_id));
   if (::SCDynamicStoreSetValue(store, key.Get(), payload.Get()) == 0) {
-    TETHERKIT_WARN_TR(Msg::kCapiDnsPublishFailed, service_id);
+    TETHERNET_WARN_TR(Msg::kCapiDnsPublishFailed, service_id);
   }
 }
 
@@ -337,7 +338,7 @@ void TryPublishDns(SCDynamicStoreRef store, std::string_view service_id,
   if (const auto status =
           RunOrFail(kRoutePath, add_arguments, Text(Msg::kCapiWhatAddScopedRoute));
       status) {
-    return tetherkit::Ok();
+    return tethernet::Ok();
   }
   // When an identical route already exists, add fails with EEXIST -- retry
   // once with change.
@@ -352,7 +353,7 @@ void TryPublishDns(SCDynamicStoreRef store, std::string_view service_id,
   const std::vector<std::string> arguments{"-n", "change", "-inet", "default", std::string{router}};
   if (const auto status = RunOrFail(kRoutePath, arguments, Text(Msg::kCapiWhatSwitchGlobalRoute));
       status) {
-    return tetherkit::Ok();
+    return tethernet::Ok();
   }
   // The system may have no global default route at all (nothing is connected),
   // in which case change fails and add is the right call. That is exactly the
@@ -376,9 +377,8 @@ void TryPublishDns(SCDynamicStoreRef store, std::string_view service_id,
 }
 
 [[nodiscard]] Status ApplyDhcp(std::string_view interface_name, bool set_default_route) {
-  TETHERKIT_RETURN_IF_ERROR(
-      RunOrFail(kIpconfigPath, {"set", std::string{interface_name}, "DHCP"},
-                Text(Msg::kCapiWhatStartDhcp)));
+  TETHERNET_RETURN_IF_ERROR(RunOrFail(kIpconfigPath, {"set", std::string{interface_name}, "DHCP"},
+                                      Text(Msg::kCapiWhatStartDhcp)));
 
   // Wait for the lease. IPConfiguration automatically does four things: get
   // the lease, set up the scoped DNS, install the scoped default route, and
@@ -388,7 +388,7 @@ void TryPublishDns(SCDynamicStoreRef store, std::string_view service_id,
   }
 
   if (!set_default_route) {
-    return tetherkit::Ok();
+    return tethernet::Ok();
   }
   const std::optional<std::string> router = QueryDhcpRouter(interface_name);
   if (!router.has_value()) {
@@ -397,7 +397,7 @@ void TryPublishDns(SCDynamicStoreRef store, std::string_view service_id,
   return PromoteToGlobalDefaultRoute(*router);
 }
 
-[[nodiscard]] Status ApplyManual(std::string_view interface_name, const tk_ip_config_t& config) {
+[[nodiscard]] Status ApplyManual(std::string_view interface_name, const tn_ip_config_t& config) {
   if (!IsValidIpv4(config.address)) {
     return std::unexpected(
         Error::Generic(Tr(Msg::kCapiInvalidAddress, config.address)));
@@ -416,7 +416,7 @@ void TryPublishDns(SCDynamicStoreRef store, std::string_view service_id,
   }
 
   std::vector<std::string> dns_servers;
-  for (std::int32_t i = 0; i < config.dns_count && i < TK_DNS_MAX; ++i) {
+  for (std::int32_t i = 0; i < config.dns_count && i < TN_DNS_MAX; ++i) {
     const std::string_view server{config.dns[i]};
     if (server.empty()) {
       continue;
@@ -430,15 +430,14 @@ void TryPublishDns(SCDynamicStoreRef store, std::string_view service_id,
 
   // The address still goes out through IPConfiguration; see the file header
   // for the reason.
-  TETHERKIT_RETURN_IF_ERROR(RunOrFail(
-      kIpconfigPath,
-      {"set", std::string{interface_name}, "MANUAL", config.address, config.netmask},
+  TETHERNET_RETURN_IF_ERROR(RunOrFail(
+      kIpconfigPath, {"set", std::string{interface_name}, "MANUAL", config.address, config.netmask},
       Text(Msg::kCapiWhatApplyManual)));
 
   if (!router.empty()) {
-    TETHERKIT_RETURN_IF_ERROR(InstallScopedDefaultRoute(interface_name, router));
+    TETHERNET_RETURN_IF_ERROR(InstallScopedDefaultRoute(interface_name, router));
     if (config.set_default_route) {
-      TETHERKIT_RETURN_IF_ERROR(PromoteToGlobalDefaultRoute(router));
+      TETHERNET_RETURN_IF_ERROR(PromoteToGlobalDefaultRoute(router));
     }
   }
 
@@ -449,11 +448,11 @@ void TryPublishDns(SCDynamicStoreRef store, std::string_view service_id,
           service_id.has_value()) {
         TryPublishDns(store, *service_id, dns_servers);
       } else {
-        TETHERKIT_WARN_TR(Msg::kCapiNoServiceForDns, interface_name);
+        TETHERNET_WARN_TR(Msg::kCapiNoServiceForDns, interface_name);
       }
     }
   }
-  return tetherkit::Ok();
+  return tethernet::Ok();
 }
 
 [[nodiscard]] Status ApplyNone(std::string_view interface_name) {
@@ -463,15 +462,15 @@ void TryPublishDns(SCDynamicStoreRef store, std::string_view service_id,
 
 }  // namespace
 
-void tk_ip_config_init(tk_ip_config_t* out_config) {
+void tn_ip_config_init(tn_ip_config_t* out_config) {
   if (out_config == nullptr) {
     return;
   }
-  *out_config = tk_ip_config_t{};
+  *out_config = tn_ip_config_t{};
   // Default is DHCP: an RNDIS device almost always ships with its own DHCP
   // server, and for the vast majority of users that is the only option they
   // need.
-  out_config->mode = TK_IP_MODE_DHCP;
+  out_config->mode = TN_IP_MODE_DHCP;
   // Default: do **not** grab the global default route. It is only needed when
   // a higher-priority connected service also exists, and the typical
   // USB-tethering scenario is precisely that no other network is available --
@@ -479,54 +478,54 @@ void tk_ip_config_init(tk_ip_config_t* out_config) {
   out_config->set_default_route = false;
 }
 
-tk_result_t tk_net_apply(const char* interface_name, const tk_ip_config_t* config,
-                         tk_error_t* out_error) {
+tn_result_t tn_net_apply(const char* interface_name, const tn_ip_config_t* config,
+                         tn_error_t* out_error) {
   ClearError(out_error);
   if (config == nullptr) {
     FillGenericError(out_error, Tr(Msg::kCapiApplyConfigNull));
-    return TK_ERR_INVALID_ARGUMENT;
+    return TN_ERR_INVALID_ARGUMENT;
   }
   if (const auto status = ValidateInterface(interface_name); !status) {
     FillError(out_error, status.error());
-    return TK_ERR_INVALID_ARGUMENT;
+    return TN_ERR_INVALID_ARGUMENT;
   }
   if (::geteuid() != 0) {
     FillGenericError(out_error, Tr(Msg::kCapiApplyNeedsRoot));
-    return TK_ERR_PERMISSION;
+    return TN_ERR_PERMISSION;
   }
 
-  Status status = tetherkit::Ok();
+  Status status = tethernet::Ok();
   switch (config->mode) {
-    case TK_IP_MODE_DHCP:
+    case TN_IP_MODE_DHCP:
       status = ApplyDhcp(interface_name, config->set_default_route);
       break;
-    case TK_IP_MODE_MANUAL:
+    case TN_IP_MODE_MANUAL:
       status = ApplyManual(interface_name, *config);
       break;
-    case TK_IP_MODE_NONE:
+    case TN_IP_MODE_NONE:
       status = ApplyNone(interface_name);
       break;
     default:
       FillGenericError(out_error, Tr(Msg::kCapiUnknownIpMode, config->mode));
-      return TK_ERR_INVALID_ARGUMENT;
+      return TN_ERR_INVALID_ARGUMENT;
   }
 
   if (!status) {
     FillError(out_error, status.error());
-    return TK_ERR_FAILED;
+    return TN_ERR_FAILED;
   }
-  return TK_OK;
+  return TN_OK;
 }
 
-tk_result_t tk_net_clear(const char* interface_name, tk_error_t* out_error) {
+tn_result_t tn_net_clear(const char* interface_name, tn_error_t* out_error) {
   ClearError(out_error);
   if (const auto status = ValidateInterface(interface_name); !status) {
     FillError(out_error, status.error());
-    return TK_ERR_INVALID_ARGUMENT;
+    return TN_ERR_INVALID_ARGUMENT;
   }
   if (::geteuid() != 0) {
     FillGenericError(out_error, Tr(Msg::kCapiClearNeedsRoot));
-    return TK_ERR_PERMISSION;
+    return TN_ERR_PERMISSION;
   }
 
   // Remove the DNS key we wrote ourselves (if any) first, then let
@@ -543,22 +542,22 @@ tk_result_t tk_net_clear(const char* interface_name, tk_error_t* out_error) {
 
   if (const auto status = ApplyNone(interface_name); !status) {
     FillError(out_error, status.error());
-    return TK_ERR_FAILED;
+    return TN_ERR_FAILED;
   }
-  return TK_OK;
+  return TN_OK;
 }
 
-tk_result_t tk_net_query(const char* interface_name, tk_net_state_t* out_state,
-                         tk_error_t* out_error) {
+tn_result_t tn_net_query(const char* interface_name, tn_net_state_t* out_state,
+                         tn_error_t* out_error) {
   ClearError(out_error);
   if (out_state == nullptr) {
-    return TK_ERR_INVALID_ARGUMENT;
+    return TN_ERR_INVALID_ARGUMENT;
   }
   if (const auto status = ValidateInterface(interface_name); !status) {
     FillError(out_error, status.error());
-    return TK_ERR_INVALID_ARGUMENT;
+    return TN_ERR_INVALID_ARGUMENT;
   }
-  *out_state = tk_net_state_t{};
+  *out_state = tn_net_state_t{};
 
   // ---- Address and netmask: the real state in the kernel ----
   if (const std::optional<std::string> address = QueryAddress(interface_name, SIOCGIFADDR);
@@ -576,7 +575,7 @@ tk_result_t tk_net_query(const char* interface_name, tk_net_state_t* out_state,
   if (store == nullptr) {
     // Not being able to reach the dynamic store is not a query failure -- the
     // address half is already there, so return as usual.
-    return TK_OK;
+    return TN_OK;
   }
 
   const std::optional<std::string> service_id = FindServiceId(store, interface_name);
@@ -601,14 +600,14 @@ tk_result_t tk_net_query(const char* interface_name, tk_net_state_t* out_state,
     const ScopedCFRef<CFDictionaryRef> dns = CopyServiceEntry(store, *service_id, "DNS");
     const std::vector<std::string> servers = StringArrayField(dns.Get(), CFSTR("ServerAddresses"));
     for (const std::string& server : servers) {
-      if (out_state->dns_count >= TK_DNS_MAX) {
+      if (out_state->dns_count >= TN_DNS_MAX) {
         break;
       }
-      CopyText(out_state->dns[out_state->dns_count], TK_ADDRESS_CAPACITY, server);
+      CopyText(out_state->dns[out_state->dns_count], TN_ADDRESS_CAPACITY, server);
       ++out_state->dns_count;
     }
   }
 
   out_state->is_primary_default_route = PrimaryInterface(store) == interface_name;
-  return TK_OK;
+  return TN_OK;
 }

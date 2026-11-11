@@ -1,15 +1,15 @@
-#include "tetherkit/core/bridge.h"
+#include "tethernet/core/bridge.h"
+
+#include "tethernet/common/i18n.h"
+#include "tethernet/common/logging.h"
+#include "tethernet/common/scheduling.h"
 
 #include <algorithm>
 #include <chrono>
 #include <format>
 #include <thread>
 
-#include "tetherkit/common/i18n.h"
-#include "tetherkit/common/logging.h"
-#include "tetherkit/common/scheduling.h"
-
-namespace tetherkit::core {
+namespace tethernet::core {
 namespace {
 
 /// Upper bound on how long one TX-backpressure wait may block for a free
@@ -61,13 +61,13 @@ Status Bridge::Start() {
   // matter (the queue is bounded, and it drops and counts when full), but
   // opening receive first lets us collect frames the moment the link is ready,
   // dropping a few fewer.
-  TETHERKIT_RETURN_IF_ERROR(data_channel_->StartReceiving(*rx_ring_, counters_.rx));
+  TETHERNET_RETURN_IF_ERROR(data_channel_->StartReceiving(*rx_ring_, counters_.rx));
 
   running_.store(true, std::memory_order_release);
   receive_injector_ = std::thread([this] { RunReceiveInjector(); });
   transmit_extractor_ = std::thread([this] { RunTransmitExtractor(); });
 
-  TETHERKIT_INFO_TR(Msg::kCoreDataPathStarted, rx_ring_->Capacity(),
+  TETHERNET_INFO_TR(Msg::kCoreDataPathStarted, rx_ring_->Capacity(),
                     rx_ring_->StorageBytes() / 1024, config_.rx_write_batch,
                     config_.tx_submit_batch,
                     Text(link_->SupportsBatchWrite() ? Msg::kCoreBatchWriteAvailable
@@ -112,7 +112,7 @@ void Bridge::Stop() {
 
   data_channel_->Shutdown();
 
-  TETHERKIT_INFO_TR(Msg::kCoreDataPathStopped);
+  TETHERNET_INFO_TR(Msg::kCoreDataPathStopped);
 }
 
 // =============================================================================
@@ -142,7 +142,7 @@ void Bridge::SetPaused(bool paused) noexcept {
 
 void Bridge::RunReceiveInjector() noexcept {
   ConfigureCurrentThread("rx-inject", ThreadRole::kDataPath);
-  TETHERKIT_DEBUG_TR(Msg::kCoreRxInjectorStarted);
+  TETHERNET_DEBUG_TR(Msg::kCoreRxInjectorStarted);
 
   std::uint32_t idle_spins = 0;
 
@@ -197,8 +197,7 @@ void Bridge::RunReceiveInjector() noexcept {
       const auto result = link_->WriteFrames(rx_batch_);
       if (!result) {
         counters_.rx.AddIoError();
-        TETHERKIT_WARN_TR(Msg::kCoreLinkWriteFailed, rx_batch_.size(),
-                          result.error().ToString());
+        TETHERNET_WARN_TR(Msg::kCoreLinkWriteFailed, rx_batch_.size(), result.error().ToString());
         // A write failure does not exit the thread -- the interface may just
         // be temporarily down. The batch session still releases its slots
         // normally (the frames cannot be delivered anymore; keeping them would
@@ -222,7 +221,7 @@ void Bridge::RunReceiveInjector() noexcept {
     }  // batch session destructs -> a single PublishRead(n)
   }
 
-  TETHERKIT_DEBUG_TR(Msg::kCoreRxInjectorExited);
+  TETHERNET_DEBUG_TR(Msg::kCoreRxInjectorExited);
 }
 
 // =============================================================================
@@ -231,7 +230,7 @@ void Bridge::RunReceiveInjector() noexcept {
 
 void Bridge::RunTransmitExtractor() noexcept {
   ConfigureCurrentThread("tx-extract", ThreadRole::kDataPath);
-  TETHERKIT_DEBUG_TR(Msg::kCoreTxExtractorStarted);
+  TETHERNET_DEBUG_TR(Msg::kCoreTxExtractorStarted);
 
   while (!stop_requested_.load(std::memory_order_acquire)) {
     // Blocking read. With BIOCIMMEDIATE=1 the BPF hands over whatever
@@ -240,7 +239,7 @@ void Bridge::RunTransmitExtractor() noexcept {
     const auto batch = link_->ReadFrames();
     if (!batch) {
       counters_.tx.AddIoError();
-      TETHERKIT_WARN_TR(Msg::kCoreLinkReadFailed, batch.error().ToString());
+      TETHERNET_WARN_TR(Msg::kCoreLinkReadFailed, batch.error().ToString());
       // A read failure can mean the interface was torn down. Wait a bit and
       // retry to avoid a busy loop spamming the log.
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -286,7 +285,7 @@ void Bridge::RunTransmitExtractor() noexcept {
         // break with only +1 io_error, leaving the rest out of every counter,
         // vanishing from the statistics entirely.
         counters_.tx.AddDroppedFull(batch->frames.size() - offset);
-        TETHERKIT_WARN_TR(Msg::kCoreUsbSubmitFailed, chunk, sent.error().ToString());
+        TETHERNET_WARN_TR(Msg::kCoreUsbSubmitFailed, chunk, sent.error().ToString());
         break;
       }
 
@@ -333,7 +332,7 @@ void Bridge::RunTransmitExtractor() noexcept {
     }
   }
 
-  TETHERKIT_DEBUG_TR(Msg::kCoreTxExtractorExited);
+  TETHERNET_DEBUG_TR(Msg::kCoreTxExtractorExited);
 }
 
 // =============================================================================
@@ -341,7 +340,7 @@ void Bridge::RunTransmitExtractor() noexcept {
 // =============================================================================
 
 BridgeStats Bridge::Snapshot() const {
-  DirectionSnapshot tx = tetherkit::Snapshot(counters_.tx);
+  DirectionSnapshot tx = tethernet::Snapshot(counters_.tx);
   // Merge the errors the data channel accumulated in its async completion
   // callbacks -- those are incremented by the libusb event thread and are
   // deliberately kept apart from the bridge's counters to preserve the
@@ -349,7 +348,7 @@ BridgeStats Bridge::Snapshot() const {
   tx.io_errors += data_channel_->AsyncSendErrors();
 
   return BridgeStats{
-      .rx = tetherkit::Snapshot(counters_.rx),
+      .rx = tethernet::Snapshot(counters_.rx),
       .tx = tx,
       .rx_queue_depth = rx_ring_->SizeSnapshot(),
       .link_kernel_drops = link_kernel_drops_.load(std::memory_order_relaxed),
@@ -372,4 +371,4 @@ std::string FormatStatsLine(const BridgeStats& previous, const BridgeStats& curr
       current.tx_backpressure_events - previous.tx_backpressure_events);
 }
 
-}  // namespace tetherkit::core
+}  // namespace tethernet::core

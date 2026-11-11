@@ -3,6 +3,11 @@
 // FrameRing is the core of the RX path: the libusb callback thread writes extracted Ethernet
 // frames into it, and the BPF write thread takes them out and calls write(). Therefore this
 // tests both semantics and concurrency.
+#include "tethernet/common/cache.h"
+#include "tethernet/common/frame_ring.h"
+
+#include <doctest.h>
+
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -10,14 +15,9 @@
 #include <thread>
 #include <vector>
 
-#include <doctest.h>
-
-#include "tetherkit/common/cache.h"
-#include "tetherkit/common/frame_ring.h"
-
-using tetherkit::FrameRing;
-using tetherkit::FrameView;
-using tetherkit::kCacheLineSize;
+using tethernet::FrameRing;
+using tethernet::FrameView;
+using tethernet::kCacheLineSize;
 
 namespace {
 

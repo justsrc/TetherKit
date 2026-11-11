@@ -3,8 +3,11 @@
 //
 // The three recurring chores of the "C++ world <-> C world" bridge live here:
 // copying a std::string_view into a fixed-size buffer, translating a
-// tetherkit::Error into a tk_error_t, and reading the wall clock.
+// tethernet::Error into a tn_error_t, and reading the wall clock.
 #pragma once
+
+#include "tethernet/capi/tethernet_c.h"
+#include "tethernet/common/error.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -13,10 +16,7 @@
 #include <string_view>
 #include <vector>
 
-#include "tetherkit/capi/tetherkit_c.h"
-#include "tetherkit/common/error.h"
-
-namespace tetherkit::capi {
+namespace tethernet::capi {
 
 /// Copies text into a fixed-size buffer, guarantees NUL termination, and
 /// truncates when it is too long.
@@ -54,7 +54,7 @@ inline void CopyText(char (&destination)[N], std::string_view text) noexcept {
 
 /// Translates a C++-side error into the C struct. `out_error` may be nullptr
 /// (the caller does not care about the reason).
-inline void FillError(tk_error_t* out_error, const Error& error) noexcept {
+inline void FillError(tn_error_t* out_error, const Error& error) noexcept {
   if (out_error == nullptr) {
     return;
   }
@@ -67,22 +67,22 @@ inline void FillError(tk_error_t* out_error, const Error& error) noexcept {
 }
 
 /// Fills in a purely logical error that carries no underlying error code.
-inline void FillGenericError(tk_error_t* out_error, std::string_view message) noexcept {
+inline void FillGenericError(tn_error_t* out_error, std::string_view message) noexcept {
   if (out_error == nullptr) {
     return;
   }
-  out_error->domain = TK_ERROR_DOMAIN_GENERIC;
+  out_error->domain = TN_ERROR_DOMAIN_GENERIC;
   out_error->code = 0;
   CopyText(out_error->message, message);
 }
 
 /// Clears the error struct to "no error". Called on the success path so the
 /// caller never reads a leftover from the previous call.
-inline void ClearError(tk_error_t* out_error) noexcept {
+inline void ClearError(tn_error_t* out_error) noexcept {
   if (out_error == nullptr) {
     return;
   }
-  out_error->domain = TK_ERROR_DOMAIN_GENERIC;
+  out_error->domain = TN_ERROR_DOMAIN_GENERIC;
   out_error->code = 0;
   out_error->message[0] = '\0';
 }
@@ -102,7 +102,7 @@ struct DeviceIdentity {
 };
 
 /// Extracts the device identity from an enumeration result.
-[[nodiscard]] inline DeviceIdentity IdentityOf(const tk_device_info_t& info) noexcept {
+[[nodiscard]] inline DeviceIdentity IdentityOf(const tn_device_info_t& info) noexcept {
   return DeviceIdentity{.bus_number = info.bus_number,
                         .device_address = info.device_address,
                         .vendor_id = info.vendor_id,
@@ -112,9 +112,9 @@ struct DeviceIdentity {
 /// The string descriptors **successfully read** from a device most recently.
 struct RememberedDeviceStrings {
   DeviceIdentity identity;
-  char manufacturer[TK_USB_STRING_CAPACITY]{};
-  char product[TK_USB_STRING_CAPACITY]{};
-  char serial[TK_USB_STRING_CAPACITY]{};
+  char manufacturer[TN_USB_STRING_CAPACITY]{};
+  char product[TN_USB_STRING_CAPACITY]{};
+  char serial[TN_USB_STRING_CAPACITY]{};
 };
 
 /// Maintains the memory of string descriptors: remember what was read, and
@@ -148,14 +148,14 @@ struct RememberedDeviceStrings {
 /// responsibility -- that is what makes it testable offline.
 void ReconcileDeviceStrings(std::vector<RememberedDeviceStrings>& memory,
                             std::span<const DeviceIdentity> present,
-                            std::span<tk_device_info_t> infos);
+                            std::span<tn_device_info_t> infos);
 
 /// Wall clock time since the Unix epoch (nanoseconds).
 ///
 /// Events and logs use the wall clock rather than the monotonic clock: they
 /// are shown to people and have to line up with the system log in Console.app.
 /// Rate calculation uses the monotonic clock instead; see
-/// tk_session_status.monotonic_nanos.
+/// tn_session_status.monotonic_nanos.
 [[nodiscard]] std::int64_t WallNanos() noexcept;
 
 /// Validates the interface name: only `feth<digits>` is accepted.
@@ -171,9 +171,9 @@ void ReconcileDeviceStrings(std::vector<RememberedDeviceStrings>& memory,
 /// Installs the on-disk registry of feth interfaces (see orphan_cleanup.cc).
 /// Idempotent.
 ///
-/// Called by tk_session_create -- only a session that really creates an
+/// Called by tn_session_create -- only a session that really creates an
 /// interface needs to register, which keeps the root-free group of entry
 /// points (version, enumeration, preflight) free of side effects.
 void InstallInterfaceRegistry();
 
-}  // namespace tetherkit::capi
+}  // namespace tethernet::capi

@@ -105,11 +105,11 @@ jobs:
         run: |
           # A missing formula must stop everything before any rewrite starts,
           # with a clear message, instead of failing perl mid-loop.
-          for f in Formula/tetherkit.rb Formula/tetherkit-cli.rb; do
+          for f in Formula/tethernet.rb Formula/tethernet-cli.rb; do
             test -f "$f" || { echo "::error::$f is missing in justsrc/homebrew-tap"; exit 1; }
           done
 
-      - name: Rewrite the formulas (tetherkit and tetherkit-cli)
+      - name: Rewrite the formulas (tethernet and tethernet-cli)
         working-directory: tap
         env:
           FORMULA_URL: ${{ steps.src.outputs.url }}
@@ -119,7 +119,7 @@ jobs:
           # rewritten together.
           # perl instead of sed -i: BSD and GNU sed disagree about -i
           # semantics, perl behaves the same on both.
-          for f in Formula/tetherkit.rb Formula/tetherkit-cli.rb; do
+          for f in Formula/tethernet.rb Formula/tethernet-cli.rb; do
             perl -pi -e 's|^  url ".*"|  url "$ENV{FORMULA_URL}"|' "$f"
             perl -pi -e 's|^  sha256 ".*"|  sha256 "$ENV{FORMULA_SHA256}"|' "$f"
 
@@ -144,20 +144,20 @@ jobs:
           mkdir -p "$(dirname "$tap_dir")"
           ln -s "${GITHUB_WORKSPACE}/tap" "$tap_dir"
 
-          brew audit --strict --online justsrc/tap/tetherkit-cli
-          brew audit --strict --online justsrc/tap/tetherkit
+          brew audit --strict --online justsrc/tap/tethernet-cli
+          brew audit --strict --online justsrc/tap/tethernet
 
-          brew install --build-from-source justsrc/tap/tetherkit-cli
-          test "$(tetherkit-cli --version | head -1)" \
-            = "TetherKit ${TAP_VERSION} (C++23, macOS 13.3+)"
+          brew install --build-from-source justsrc/tap/tethernet-cli
+          test "$(tethernet-cli --version | head -1)" \
+            = "Tethernet ${TAP_VERSION} (C++23, macOS 13.3+)"
 
-          brew install --build-from-source justsrc/tap/tetherkit
-          app="$(brew --prefix)/opt/tetherkit/TetherKit.app"
+          brew install --build-from-source justsrc/tap/tethernet
+          app="$(brew --prefix)/opt/tethernet/Tethernet.app"
           test -d "$app"
           codesign --verify --deep --strict "$app"
-          "$app/Contents/MacOS/TetherKit" --install-finder-alias
+          "$app/Contents/MacOS/Tethernet" --install-finder-alias
 
-          brew uninstall tetherkit tetherkit-cli
+          brew uninstall tethernet tethernet-cli
 
       # A branch and a pull request, never a push to main. The tap is what
       # users install from, so its contents get a human read before they
@@ -168,7 +168,7 @@ jobs:
         env:
           TAP_TAG: ${{ inputs.tag }}
           TAP_VERSION: ${{ steps.src.outputs.version }}
-          TAP_BRANCH: bump-tetherkit-${{ inputs.tag }}
+          TAP_BRANCH: bump-tethernet-${{ inputs.tag }}
           # The credential helper reads the token from the environment when
           # git asks for it, so it is passed as GH_TOKEN and never as part of
           # a command line. This workflow's own GITHUB_TOKEN cannot write to
@@ -195,7 +195,7 @@ jobs:
           # The branch name carries the tag, so a re-run for the same version
           # lands on the same branch instead of stacking a second one.
           git switch -c "${TAP_BRANCH}"
-          git commit -am "tetherkit + tetherkit-cli ${TAP_VERSION}"
+          git commit -am "tethernet + tethernet-cli ${TAP_VERSION}"
           # Authenticate the push with a credential helper rather than by
           # putting the token in the remote URL. A credential in the URL is
           # readable from .git/config, shows up in the process argument list,
@@ -227,7 +227,7 @@ jobs:
         env:
           TAP_TAG: ${{ inputs.tag }}
           TAP_VERSION: ${{ steps.src.outputs.version }}
-          TAP_BRANCH: bump-tetherkit-${{ inputs.tag }}
+          TAP_BRANCH: bump-tethernet-${{ inputs.tag }}
           GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
           # env passage, not direct expansion: a secret expression must never
@@ -262,8 +262,8 @@ jobs:
           gh pr create --repo justsrc/homebrew-tap \
             --base main \
             --head "${TAP_BRANCH}" \
-            --title "tetherkit + tetherkit-cli ${TAP_VERSION}" \
-            --body "Automated tap bump for TetherKit ${TAP_TAG}.
+            --title "tethernet + tethernet-cli ${TAP_VERSION}" \
+            --body "Automated tap bump for Tethernet ${TAP_TAG}.
 
           The formulas point at the ${TAP_TAG} source tarball; the sha256 was
           recomputed from that tarball and both formulas were installed from
@@ -272,7 +272,7 @@ jobs:
           on the app).
 
           Checklist after merging: dispatch the tap's bottle.yml
-          (workflow_dispatch, formula: tetherkit, then tetherkit-cli) so the
+          (workflow_dispatch, formula: tethernet, then tethernet-cli) so the
           new version's bottles are built, pushed to GHCR, and the formulas'
           bottle blocks are updated. Until that runs, brew install for the new
           version fails with a 404 on the GHCR manifest -- use

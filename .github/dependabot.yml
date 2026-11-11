@@ -54,7 +54,7 @@
 #      That is expected: Dependabot cannot approve its own PR. You bypass it
 #      the same way you bypass your own PRs, because the "Require review"
 #      ruleset lists the admin role as a bypass actor:
-#        gh api repos/justsrc/TetherKit/pulls/<PR>/merge -X PUT -f merge_method=merge
+#        gh api repos/justsrc/Tethernet/pulls/<PR>/merge -X PUT -f merge_method=merge
 #      The REST endpoint makes the mechanism explicit. `gh pr merge` refuses
 #      at its own pre-flight when the PR is BLOCKED (cli/cli#13388, still
 #      open) and suggests --auto or --admin; --admin only suppresses that

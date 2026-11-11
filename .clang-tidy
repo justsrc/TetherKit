@@ -1,4 +1,4 @@
-# TetherKit static analysis configuration.
+# Tethernet static analysis configuration.
 #
 # Trade-offs:
 #  * This project is a low-level driver dealing with kernel ABIs and USB wire
@@ -53,7 +53,7 @@ Checks: >
   -readability-uppercase-literal-suffix
 
 WarningsAsErrors: ''
-HeaderFilterRegex: 'tetherkit/.*'
+HeaderFilterRegex: 'tethernet/.*'
 FormatStyle: file
 
 CheckOptions:

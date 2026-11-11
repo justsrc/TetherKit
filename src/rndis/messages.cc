@@ -1,20 +1,20 @@
-#include "tetherkit/rndis/messages.h"
+#include "tethernet/rndis/messages.h"
+
+#include "tethernet/common/byte_order.h"
+#include "tethernet/common/i18n.h"
+#include "tethernet/common/logging.h"
 
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <format>
 
-#include "tetherkit/common/byte_order.h"
-#include "tetherkit/common/i18n.h"
-#include "tetherkit/common/logging.h"
-
-namespace tetherkit::rndis {
+namespace tethernet::rndis {
 namespace {
 
 /// Build an error carrying the RNDIS status code's name.
 ///
-/// The status-code-to-name map lives only in protocol.cc (tk_common knows
+/// The status-code-to-name map lives only in protocol.cc (tn_common knows
 /// nothing about RNDIS), so the name is concatenated straight into the context
 /// string here and the Error itself keeps only the raw value.
 Error MakeStatusError(std::uint32_t status, std::string_view what) {
@@ -47,7 +47,7 @@ Status RequireCapacity(std::span<std::byte> buffer, std::size_t needed, std::str
 /// successful status.
 Status ValidateCompletion(std::span<const std::byte> buffer, MessageType expected_type,
                           std::uint32_t minimum_bytes, std::string_view what) {
-  TETHERKIT_RETURN_IF_ERROR(RequireBytes(buffer, minimum_bytes, what));
+  TETHERNET_RETURN_IF_ERROR(RequireBytes(buffer, minimum_bytes, what));
 
   const std::uint32_t message_type = LoadLe32(buffer.data() + kMessageTypeOffset);
   if (message_type != ToRaw(expected_type)) {
@@ -111,7 +111,7 @@ std::array<char, 18> FormatMac(const MacAddress& mac) noexcept {
 // =============================================================================
 
 Result<MessageHeader> DecodeMessageHeader(std::span<const std::byte> buffer) {
-  TETHERKIT_RETURN_IF_ERROR(
+  TETHERNET_RETURN_IF_ERROR(
       RequireBytes(buffer, kMessageHeaderBytes, Text(Msg::kRndisWhatMessageHeader)));
   return MessageHeader{
       .message_type = LoadLe32(buffer.data() + kMessageTypeOffset),
@@ -124,7 +124,7 @@ Result<MessageHeader> DecodeMessageHeader(std::span<const std::byte> buffer) {
 // =============================================================================
 
 Result<std::uint32_t> Encode(const InitializeRequest& request, std::span<std::byte> buffer) {
-  TETHERKIT_RETURN_IF_ERROR(
+  TETHERNET_RETURN_IF_ERROR(
       RequireCapacity(buffer, kInitializeMsgBytes, "REMOTE_NDIS_INITIALIZE_MSG"));
 
   WriteHeader(buffer, MessageType::kInitialize, kInitializeMsgBytes);
@@ -136,7 +136,7 @@ Result<std::uint32_t> Encode(const InitializeRequest& request, std::span<std::by
 }
 
 Result<InitializeComplete> DecodeInitializeComplete(std::span<const std::byte> buffer) {
-  TETHERKIT_RETURN_IF_ERROR(ValidateCompletion(buffer, MessageType::kInitializeComplete,
+  TETHERNET_RETURN_IF_ERROR(ValidateCompletion(buffer, MessageType::kInitializeComplete,
                                                kInitializeCmpltBytes,
                                                "REMOTE_NDIS_INITIALIZE_CMPLT"));
 
@@ -180,7 +180,7 @@ Result<NegotiatedParameters> Negotiate(const InitializeComplete& complete,
   if (!connectionless) {
     // Some devices set neither bit. Be lenient: continue as connectionless
     // and only warn.
-    TETHERKIT_WARN_TR(Msg::kRndisNoConnectionlessFlag, complete.device_flags);
+    TETHERNET_WARN_TR(Msg::kRndisNoConnectionlessFlag, complete.device_flags);
   }
 
   // ---- Version ----
@@ -202,7 +202,7 @@ Result<NegotiatedParameters> Negotiate(const InitializeComplete& complete,
   // overflows or produces an absurd padding length.
   std::uint32_t alignment_factor = complete.packet_alignment_factor;
   if (alignment_factor > kMaxPacketAlignmentFactor) {
-    TETHERKIT_WARN_TR(Msg::kRndisAlignmentFactorClamped, alignment_factor,
+    TETHERNET_WARN_TR(Msg::kRndisAlignmentFactorClamped, alignment_factor,
                       kMaxPacketAlignmentFactor);
     alignment_factor = kMaxPacketAlignmentFactor;
   }
@@ -219,8 +219,7 @@ Result<NegotiatedParameters> Negotiate(const InitializeComplete& complete,
   // 16KB frame caps that are meaningless at this link rate and would only make
   // us allocate huge transfer buffers. Do not follow the device blindly.
   if (device_limit > host_transfer_size_limit) {
-    TETHERKIT_INFO_TR(Msg::kRndisMaxTransferClampedToHost, device_limit,
-                      host_transfer_size_limit);
+    TETHERNET_INFO_TR(Msg::kRndisMaxTransferClampedToHost, device_limit, host_transfer_size_limit);
     device_limit = host_transfer_size_limit;
   }
   params.device_max_transfer_size = device_limit;
@@ -233,7 +232,7 @@ Result<NegotiatedParameters> Negotiate(const InitializeComplete& complete,
   const std::uint32_t hard_mtu = HardMtuFor(requested_mtu);
   if (device_limit < hard_mtu) {
     params.mtu = device_limit - kHardHeaderBytes;
-    TETHERKIT_WARN_TR(Msg::kRndisMtuLoweredForTransferSize, device_limit, hard_mtu, requested_mtu,
+    TETHERNET_WARN_TR(Msg::kRndisMtuLoweredForTransferSize, device_limit, hard_mtu, requested_mtu,
                       params.mtu);
   }
 
@@ -245,7 +244,7 @@ Result<NegotiatedParameters> Negotiate(const InitializeComplete& complete,
 // =============================================================================
 
 Result<std::uint32_t> EncodeHalt(std::uint32_t request_id, std::span<std::byte> buffer) {
-  TETHERKIT_RETURN_IF_ERROR(RequireCapacity(buffer, kHaltMsgBytes, "REMOTE_NDIS_HALT_MSG"));
+  TETHERNET_RETURN_IF_ERROR(RequireCapacity(buffer, kHaltMsgBytes, "REMOTE_NDIS_HALT_MSG"));
   WriteHeader(buffer, MessageType::kHalt, kHaltMsgBytes);
   StoreLe32(buffer.data() + kHaltRequestIdOffset, request_id);
   return kHaltMsgBytes;
@@ -265,7 +264,7 @@ Result<std::uint32_t> Encode(const QueryRequest& request, std::span<std::byte> b
   const std::uint32_t info_length = variable_length ? 0 : request.expected_response_bytes;
 
   const std::uint32_t message_length = kQuerySetHeaderBytes + info_length;
-  TETHERKIT_RETURN_IF_ERROR(RequireCapacity(buffer, message_length, "REMOTE_NDIS_QUERY_MSG"));
+  TETHERNET_RETURN_IF_ERROR(RequireCapacity(buffer, message_length, "REMOTE_NDIS_QUERY_MSG"));
 
   WriteHeader(buffer, MessageType::kQuery, message_length);
   StoreLe32(buffer.data() + kQuerySetRequestIdOffset, request.request_id);
@@ -286,9 +285,8 @@ Result<std::uint32_t> Encode(const QueryRequest& request, std::span<std::byte> b
 }
 
 Result<QueryComplete> DecodeQueryComplete(std::span<const std::byte> buffer) {
-  TETHERKIT_RETURN_IF_ERROR(ValidateCompletion(buffer, MessageType::kQueryComplete,
-                                               kQueryCmpltHeaderBytes,
-                                               "REMOTE_NDIS_QUERY_CMPLT"));
+  TETHERNET_RETURN_IF_ERROR(ValidateCompletion(buffer, MessageType::kQueryComplete,
+                                               kQueryCmpltHeaderBytes, "REMOTE_NDIS_QUERY_CMPLT"));
 
   const std::byte* base = buffer.data();
   const std::uint32_t message_length = LoadLe32(base + kMessageLengthOffset);
@@ -310,17 +308,16 @@ Result<QueryComplete> DecodeQueryComplete(std::span<const std::byte> buffer) {
     return complete;
   }
 
-  TETHERKIT_ASSIGN_OR_RETURN(
-      complete.information,
-      ResolveInlineBuffer(buffer, message_length, info_offset, info_length,
-                          Text(Msg::kRndisWhatQueryCmpltInfoBuffer)));
+  TETHERNET_ASSIGN_OR_RETURN(complete.information,
+                             ResolveInlineBuffer(buffer, message_length, info_offset, info_length,
+                                                 Text(Msg::kRndisWhatQueryCmpltInfoBuffer)));
   return complete;
 }
 
 Result<std::uint32_t> Encode(const SetRequest& request, std::span<std::byte> buffer) {
   const auto info_length = static_cast<std::uint32_t>(request.information.size());
   const std::uint32_t message_length = kQuerySetHeaderBytes + info_length;
-  TETHERKIT_RETURN_IF_ERROR(RequireCapacity(buffer, message_length, "REMOTE_NDIS_SET_MSG"));
+  TETHERNET_RETURN_IF_ERROR(RequireCapacity(buffer, message_length, "REMOTE_NDIS_SET_MSG"));
 
   WriteHeader(buffer, MessageType::kSet, message_length);
   StoreLe32(buffer.data() + kQuerySetRequestIdOffset, request.request_id);
@@ -344,9 +341,8 @@ Result<std::uint32_t> EncodeSetUint32(std::uint32_t request_id, Oid oid, std::ui
 }
 
 Result<SetComplete> DecodeSetComplete(std::span<const std::byte> buffer) {
-  TETHERKIT_RETURN_IF_ERROR(
-      ValidateCompletion(buffer, MessageType::kSetComplete, kSetCmpltBytes,
-                         "REMOTE_NDIS_SET_CMPLT"));
+  TETHERNET_RETURN_IF_ERROR(ValidateCompletion(buffer, MessageType::kSetComplete, kSetCmpltBytes,
+                                               "REMOTE_NDIS_SET_CMPLT"));
   return SetComplete{
       .request_id = LoadLe32(buffer.data() + kSetCmpltRequestIdOffset),
       .status = LoadLe32(buffer.data() + kSetCmpltStatusOffset),
@@ -358,7 +354,7 @@ Result<SetComplete> DecodeSetComplete(std::span<const std::byte> buffer) {
 // =============================================================================
 
 Result<std::uint32_t> EncodeReset(std::span<std::byte> buffer) {
-  TETHERKIT_RETURN_IF_ERROR(RequireCapacity(buffer, kResetMsgBytes, "REMOTE_NDIS_RESET_MSG"));
+  TETHERNET_RETURN_IF_ERROR(RequireCapacity(buffer, kResetMsgBytes, "REMOTE_NDIS_RESET_MSG"));
   WriteHeader(buffer, MessageType::kReset, kResetMsgBytes);
   // Offset 8 is Reserved, not RequestId -- it must be written as 0.
   StoreLe32(buffer.data() + kResetReservedOffset, 0);
@@ -366,7 +362,7 @@ Result<std::uint32_t> EncodeReset(std::span<std::byte> buffer) {
 }
 
 Result<ResetComplete> DecodeResetComplete(std::span<const std::byte> buffer) {
-  TETHERKIT_RETURN_IF_ERROR(ValidateCompletion(buffer, MessageType::kResetComplete,
+  TETHERNET_RETURN_IF_ERROR(ValidateCompletion(buffer, MessageType::kResetComplete,
                                                kResetCmpltBytes, "REMOTE_NDIS_RESET_CMPLT"));
   // Note the offsets: RESET_CMPLT has no RequestId, so Status sits at
   // offset 8 rather than 12.
@@ -381,7 +377,7 @@ Result<ResetComplete> DecodeResetComplete(std::span<const std::byte> buffer) {
 // =============================================================================
 
 Result<std::uint32_t> EncodeKeepAlive(std::uint32_t request_id, std::span<std::byte> buffer) {
-  TETHERKIT_RETURN_IF_ERROR(
+  TETHERNET_RETURN_IF_ERROR(
       RequireCapacity(buffer, kKeepAliveMsgBytes, "REMOTE_NDIS_KEEPALIVE_MSG"));
   WriteHeader(buffer, MessageType::kKeepAlive, kKeepAliveMsgBytes);
   StoreLe32(buffer.data() + kKeepAliveRequestIdOffset, request_id);
@@ -389,7 +385,7 @@ Result<std::uint32_t> EncodeKeepAlive(std::uint32_t request_id, std::span<std::b
 }
 
 Result<KeepAliveComplete> DecodeKeepAliveComplete(std::span<const std::byte> buffer) {
-  TETHERKIT_RETURN_IF_ERROR(ValidateCompletion(buffer, MessageType::kKeepAliveComplete,
+  TETHERNET_RETURN_IF_ERROR(ValidateCompletion(buffer, MessageType::kKeepAliveComplete,
                                                kKeepAliveCmpltBytes,
                                                "REMOTE_NDIS_KEEPALIVE_CMPLT"));
   return KeepAliveComplete{
@@ -400,7 +396,7 @@ Result<KeepAliveComplete> DecodeKeepAliveComplete(std::span<const std::byte> buf
 
 Result<std::uint32_t> EncodeKeepAliveComplete(std::uint32_t request_id, std::uint32_t status,
                                               std::span<std::byte> buffer) {
-  TETHERKIT_RETURN_IF_ERROR(
+  TETHERNET_RETURN_IF_ERROR(
       RequireCapacity(buffer, kKeepAliveCmpltBytes, "REMOTE_NDIS_KEEPALIVE_CMPLT"));
   WriteHeader(buffer, MessageType::kKeepAliveComplete, kKeepAliveCmpltBytes);
   StoreLe32(buffer.data() + kKeepAliveCmpltRequestIdOffset, request_id);
@@ -413,8 +409,8 @@ Result<std::uint32_t> EncodeKeepAliveComplete(std::uint32_t request_id, std::uin
 // =============================================================================
 
 Result<IndicateStatus> DecodeIndicateStatus(std::span<const std::byte> buffer) {
-  TETHERKIT_RETURN_IF_ERROR(RequireBytes(buffer, kIndicateStatusHeaderBytes,
-                                         "REMOTE_NDIS_INDICATE_STATUS_MSG"));
+  TETHERNET_RETURN_IF_ERROR(
+      RequireBytes(buffer, kIndicateStatusHeaderBytes, "REMOTE_NDIS_INDICATE_STATUS_MSG"));
 
   const std::byte* base = buffer.data();
   const std::uint32_t message_type = LoadLe32(base + kMessageTypeOffset);
@@ -459,7 +455,7 @@ Result<IndicateStatus> DecodeIndicateStatus(std::span<const std::byte> buffer) {
     // **still return success** -- the status itself is useful (it may be
     // MEDIA_DISCONNECT), and an unparseable optional field must not condemn
     // the link.
-    TETHERKIT_WARN_TR(Msg::kRndisIndicateStatusBufferOutOfBounds, relative_offset, buffer_length,
+    TETHERNET_WARN_TR(Msg::kRndisIndicateStatusBufferOutOfBounds, relative_offset, buffer_length,
                       message_length);
     return indication;
   }
@@ -482,7 +478,7 @@ Result<IndicateStatus> DecodeIndicateStatus(std::span<const std::byte> buffer) {
 // =============================================================================
 
 Result<std::uint32_t> ParseUint32(std::span<const std::byte> information) {
-  TETHERKIT_RETURN_IF_ERROR(RequireBytes(information, 4, Text(Msg::kRndisWhatOidUint32)));
+  TETHERNET_RETURN_IF_ERROR(RequireBytes(information, 4, Text(Msg::kRndisWhatOidUint32)));
   return LoadLe32(information.data());
 }
 
@@ -498,11 +494,11 @@ Result<std::uint64_t> ParseCounter(std::span<const std::byte> information) {
 }
 
 Result<MacAddress> ParseMac(std::span<const std::byte> information) {
-  TETHERKIT_RETURN_IF_ERROR(
+  TETHERNET_RETURN_IF_ERROR(
       RequireBytes(information, sizeof(MacAddress), Text(Msg::kRndisWhatOidMac)));
   MacAddress mac{};
   std::memcpy(mac.data(), information.data(), mac.size());
   return mac;
 }
 
-}  // namespace tetherkit::rndis
+}  // namespace tethernet::rndis

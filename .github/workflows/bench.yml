@@ -12,7 +12,7 @@
 name: Bench
 
 on:
-  # No inputs: tetherkit_bench never reads argv (benchmarks/ has no argv or
+  # No inputs: tethernet_bench never reads argv (benchmarks/ has no argv or
   # argc use), so the old args input was dead plumbing.
   workflow_dispatch:
 
@@ -32,22 +32,22 @@ jobs:
         run: brew install libusb
 
       # Sanitizers crush throughput; benchmarks must build Release with none of
-      # the TETHERKIT_ENABLE_*SAN options (the cmake/Sanitizers.cmake contract;
+      # the TETHERNET_ENABLE_*SAN options (the cmake/Sanitizers.cmake contract;
       # all default off, so not passing them is already correct).
       - name: Configure & Build
         run: |
           cmake -S . -B build-rel -DCMAKE_BUILD_TYPE=Release
-          cmake --build build-rel --target tetherkit_bench -j"$(sysctl -n hw.ncpu)"
+          cmake --build build-rel --target tethernet_bench -j"$(sysctl -n hw.ncpu)"
 
       - name: Run
         # pipefail: keep tee from swallowing the benchmark's exit code.
         run: |
           set -o pipefail
-          ./build-rel/bin/tetherkit_bench | tee bench-report.md
+          ./build-rel/bin/tethernet_bench | tee bench-report.md
 
       - name: Upload the bench report
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: tetherkit-bench-${{ github.run_number }}
+          name: tethernet-bench-${{ github.run_number }}
           path: bench-report.md
           retention-days: 14

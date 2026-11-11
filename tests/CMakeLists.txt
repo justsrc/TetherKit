@@ -1,6 +1,6 @@
 # tests -- unit tests
 #
-# Every test is linked into a single executable, tetherkit_tests, because:
+# Every test is linked into a single executable, tethernet_tests, because:
 #  * doctest registration is global, and one binary has the lowest startup
 #    overhead;
 #  * the module can be run via doctest's --test-suite filter alone;
@@ -8,7 +8,7 @@
 #    pinpoint exactly which module broke.
 
 add_executable(
-  tetherkit_tests
+  tethernet_tests
   test_main.cc
   test_version.cc
   test_common_byte_order.cc
@@ -24,15 +24,15 @@ add_executable(
   test_core_bridge.cc
   test_capi.cc)
 
-# tk_rndis / tk_net both PUBLIC-link tk_common, so it does not need repeating
+# tn_rndis / tn_net both PUBLIC-link tn_common, so it does not need repeating
 # (otherwise the linker prints "ignoring duplicate libraries").
-# tk_core PUBLIC-links tk_common/tk_rndis/tk_net/tk_usb, so listing it alone is
+# tn_core PUBLIC-links tn_common/tn_rndis/tn_net/tn_usb, so listing it alone is
 # enough.
-# tk_capi PUBLIC-links tk_version and tk_core, so neither needs repeating.
-target_link_libraries(tetherkit_tests PRIVATE tetherkit_base doctest tk_capi)
+# tn_capi PUBLIC-links tn_version and tn_core, so neither needs repeating.
+target_link_libraries(tethernet_tests PRIVATE tethernet_base doctest tn_capi)
 # The src/capi directory: capi_support.h is an implementation-internal header,
 # not installed publicly, but it must be includable directly by the tests.
-target_include_directories(tetherkit_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}"
+target_include_directories(tethernet_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}"
                                                    "${PROJECT_SOURCE_DIR}/src/capi")
 
 # ------------------------------------------------------------------------------
@@ -60,9 +60,9 @@ target_include_directories(tetherkit_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}"
 # **authoritative result** -- even if a suite gets forgotten in the list below,
 # it will expose the failure.
 # ------------------------------------------------------------------------------
-add_test(NAME all COMMAND tetherkit_tests)
+add_test(NAME all COMMAND tethernet_tests)
 
-set(TETHERKIT_TEST_SUITES
+set(TETHERNET_TEST_SUITES
     version
     common.byte_order
     common.error
@@ -86,8 +86,8 @@ set(TETHERKIT_TEST_SUITES
     capi.process
     capi.net_config)
 
-foreach(_suite IN LISTS TETHERKIT_TEST_SUITES)
+foreach(_suite IN LISTS TETHERNET_TEST_SUITES)
   # Note: do **not** put quotes after --test-suite=, see the explanation above.
-  add_test(NAME "${_suite}" COMMAND tetherkit_tests --test-suite=${_suite})
+  add_test(NAME "${_suite}" COMMAND tethernet_tests --test-suite=${_suite})
   set_tests_properties("${_suite}" PROPERTIES FAIL_REGULAR_EXPRESSION "assertions: +0 \\|")
 endforeach()

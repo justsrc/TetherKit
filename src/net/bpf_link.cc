@@ -1,4 +1,10 @@
-#include "tetherkit/net/bpf_link.h"
+#include "tethernet/net/bpf_link.h"
+
+#include "tethernet/common/byte_order.h"
+#include "tethernet/common/i18n.h"
+#include "tethernet/common/logging.h"
+#include "tethernet/net/darwin_abi.h"
+#include "tethernet/net/feth_device.h"
 
 #include <fcntl.h>
 #include <net/bpf.h>
@@ -11,13 +17,7 @@
 #include <cstring>
 #include <format>
 
-#include "tetherkit/common/byte_order.h"
-#include "tetherkit/common/i18n.h"
-#include "tetherkit/common/logging.h"
-#include "tetherkit/net/darwin_abi.h"
-#include "tetherkit/net/feth_device.h"
-
-namespace tetherkit::net {
+namespace tethernet::net {
 namespace {
 
 /// The upper limit for scanning /dev/bpf%d.
@@ -52,7 +52,7 @@ constexpr std::size_t kMaxBatchWriteBytes = std::size_t{256} * 1024;
   if (::ioctl(fd, request, argument) < 0) {
     // ENOTTY / EINVAL means this macOS version does not know the private ioctl,
     // an expected case.
-    TETHERKIT_DEBUG_TR(Msg::kNetOptionalIoctlUnavailable, what, errno);
+    TETHERNET_DEBUG_TR(Msg::kNetOptionalIoctlUnavailable, what, errno);
     return false;
   }
   return true;
@@ -130,11 +130,10 @@ Result<std::unique_ptr<BpfLink>> BpfLink::Open(std::string_view interface_name,
   // so every read() below must use this written-back value as the length.
   // ---------------------------------------------------------------------------
   auto buffer_bytes = static_cast<unsigned int>(config.kernel_buffer_bytes);
-  TETHERKIT_RETURN_IF_ERROR(
-      CallIoctl(link->fd_, BIOCSBLEN, &buffer_bytes, "ioctl(BIOCSBLEN)"));
+  TETHERNET_RETURN_IF_ERROR(CallIoctl(link->fd_, BIOCSBLEN, &buffer_bytes, "ioctl(BIOCSBLEN)"));
   link->kernel_buffer_bytes_ = buffer_bytes;
   if (buffer_bytes != config.kernel_buffer_bytes) {
-    TETHERKIT_INFO_TR(Msg::kNetBpfBufferClamped, config.kernel_buffer_bytes, buffer_bytes);
+    TETHERNET_INFO_TR(Msg::kNetBpfBufferClamped, config.kernel_buffer_bytes, buffer_bytes);
   }
 
   // ---------------------------------------------------------------------------
@@ -152,7 +151,7 @@ Result<std::unique_ptr<BpfLink>> BpfLink::Open(std::string_view interface_name,
   // ENXIO, do not suspect the interface name.
   // ---------------------------------------------------------------------------
   int header_complete = 1;
-  TETHERKIT_RETURN_IF_ERROR(
+  TETHERNET_RETURN_IF_ERROR(
       CallIoctl(link->fd_, BIOCSHDRCMPLT, &header_complete, "ioctl(BIOCSHDRCMPLT)"));
 
   // ---------------------------------------------------------------------------
@@ -180,8 +179,7 @@ Result<std::unique_ptr<BpfLink>> BpfLink::Open(std::string_view interface_name,
   // where every frame-format assumption would be wrong.
   // ---------------------------------------------------------------------------
   unsigned int data_link_type = 0;
-  TETHERKIT_RETURN_IF_ERROR(
-      CallIoctl(link->fd_, BIOCGDLT, &data_link_type, "ioctl(BIOCGDLT)"));
+  TETHERNET_RETURN_IF_ERROR(CallIoctl(link->fd_, BIOCGDLT, &data_link_type, "ioctl(BIOCGDLT)"));
   if (data_link_type != DLT_EN10MB) {
     return std::unexpected(Error::Generic(
         Tr(Msg::kNetBpfWrongDataLinkType, interface_name, data_link_type, DLT_EN10MB)));
@@ -197,7 +195,7 @@ Result<std::unique_ptr<BpfLink>> BpfLink::Open(std::string_view interface_name,
   // batches automatically, NAPI-like behavior.
   // ---------------------------------------------------------------------------
   unsigned int immediate = 1;
-  TETHERKIT_RETURN_IF_ERROR(
+  TETHERNET_RETURN_IF_ERROR(
       CallIoctl(link->fd_, BIOCIMMEDIATE, &immediate, "ioctl(BIOCIMMEDIATE)"));
 
   // ---------------------------------------------------------------------------
@@ -208,8 +206,7 @@ Result<std::unique_ptr<BpfLink>> BpfLink::Open(std::string_view interface_name,
   // only the input frames the host sends from the peer side.
   // ---------------------------------------------------------------------------
   unsigned int see_sent = 0;
-  TETHERKIT_RETURN_IF_ERROR(
-      CallIoctl(link->fd_, BIOCSSEESENT, &see_sent, "ioctl(BIOCSSEESENT)"));
+  TETHERNET_RETURN_IF_ERROR(CallIoctl(link->fd_, BIOCSSEESENT, &see_sent, "ioctl(BIOCSSEESENT)"));
 
   // ---------------------------------------------------------------------------
   // 8. BIOCSRTIMEOUT -- read timeout, used to answer shutdown
@@ -222,7 +219,7 @@ Result<std::unique_ptr<BpfLink>> BpfLink::Open(std::string_view interface_name,
   read_timeout.tv_sec = config.read_timeout_millis / 1000;
   read_timeout.tv_usec = static_cast<__darwin_suseconds_t>(
       (config.read_timeout_millis % 1000) * 1000);
-  TETHERKIT_RETURN_IF_ERROR(
+  TETHERNET_RETURN_IF_ERROR(
       CallIoctl(link->fd_, BIOCSRTIMEOUT, &read_timeout, "ioctl(BIOCSRTIMEOUT)"));
 
   // BIOCPROMISC is deliberately **not** set: feth's feth_output_common hands
@@ -255,7 +252,7 @@ Result<std::unique_ptr<BpfLink>> BpfLink::Open(std::string_view interface_name,
     link->write_buffer_.resize(kMaxBatchWriteBytes);
   }
 
-  TETHERKIT_INFO_TR(Msg::kNetBpfReady, link->device_path_, link->interface_name_,
+  TETHERNET_INFO_TR(Msg::kNetBpfReady, link->device_path_, link->interface_name_,
                     link->kernel_buffer_bytes_ / 1024, link->max_frame_bytes_,
                     Text(link->batch_write_enabled_ ? Msg::kNetBpfBatchWriteEnabled
                                                     : Msg::kNetBpfBatchWriteUnavailable),
@@ -328,7 +325,7 @@ Result<ReadBatch> BpfLink::ReadFrames() {
     const std::uint32_t header_length = LoadLe16(record + offsetof(::bpf_hdr, bh_hdrlen));
 
     if (header_length < kBpfHeaderMinBytes) [[unlikely]] {
-      TETHERKIT_WARN_TR(Msg::kNetBpfHeaderTooShort, header_length, kBpfHeaderMinBytes);
+      TETHERNET_WARN_TR(Msg::kNetBpfHeaderTooShort, header_length, kBpfHeaderMinBytes);
       break;
     }
 
@@ -336,7 +333,7 @@ Result<ReadBatch> BpfLink::ReadFrames() {
     if (offset + record_bytes > total) [[unlikely]] {
       // Record truncated: should never happen in normal operation (the kernel
       // does not write records that straddle the buffer end).
-      TETHERKIT_WARN_TR(Msg::kNetBpfRecordOutOfBounds, offset, record_bytes, total);
+      TETHERNET_WARN_TR(Msg::kNetBpfRecordOutOfBounds, offset, record_bytes, total);
       break;
     }
 
@@ -348,7 +345,7 @@ Result<ReadBatch> BpfLink::ReadFrames() {
         capture_length <= max_frame_bytes_) [[likely]] {
       read_frames_.push_back(FrameView{.data = record + header_length, .length = capture_length});
     } else [[unlikely]] {
-      TETHERKIT_TRACE_TR(Msg::kNetBpfSkipOversizedRecord, capture_length, original_length,
+      TETHERNET_TRACE_TR(Msg::kNetBpfSkipOversizedRecord, capture_length, original_length,
                          max_frame_bytes_);
     }
 
@@ -359,7 +356,7 @@ Result<ReadBatch> BpfLink::ReadFrames() {
       // -- is the data still in the kernel buffer? No: it has already been
       // copyout-ed and would be lost. max_frames_per_batch must therefore be
       // sized generously enough. Warn here rather than fail silently.
-      TETHERKIT_WARN_TR(Msg::kNetBpfBatchFrameLimit, read_frames_.capacity(), total - offset);
+      TETHERNET_WARN_TR(Msg::kNetBpfBatchFrameLimit, read_frames_.capacity(), total - offset);
       break;
     }
   }
@@ -463,7 +460,7 @@ Result<WriteResult> BpfLink::WriteFramesBatched(FrameBatch frames) {
     const std::size_t record_bytes = kBpfHeaderMinBytes + frame.length;
     const std::size_t aligned_bytes = BPF_WORDALIGN(record_bytes);
     if (cursor + aligned_bytes > write_buffer_.size()) {
-      TETHERKIT_RETURN_IF_ERROR(flush());
+      TETHERNET_RETURN_IF_ERROR(flush());
       if (aligned_bytes > write_buffer_.size()) [[unlikely]] {
         // A single frame exceeds the whole assembly buffer: a configuration
         // error; skip and count.
@@ -492,8 +489,8 @@ Result<WriteResult> BpfLink::WriteFramesBatched(FrameBatch frames) {
     pending_bytes += frame.length;
   }
 
-  TETHERKIT_RETURN_IF_ERROR(flush());
+  TETHERNET_RETURN_IF_ERROR(flush());
   return result;
 }
 
-}  // namespace tetherkit::net
+}  // namespace tethernet::net

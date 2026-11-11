@@ -1,4 +1,4 @@
-# TetherKit Design Document
+# Tethernet Design Document
 
 This document explains **why it is designed this way**. For field offsets and
 constants, see [RNDIS-PROTOCOL.md](RNDIS-PROTOCOL.md); for measured numbers,
@@ -66,7 +66,7 @@ copy per direction, and TX has a "whole frame <= MTU + 18" length limit.
         +---------------------------------------+---------------------+
                                                 |
         +---------------------------------------+---------------------+
-        |  TetherKit (userspace)                v                     |
+        |  Tethernet (userspace)                v                     |
         |  +---------- core::Bridge (3 data-path threads) ---------+  |
         |  |  RX: bulk IN callback -> FrameRing -> batched BPF write|  |
         |  |  TX: batched BPF read -> RNDIS aggregation -> bulk OUT |  |
@@ -91,23 +91,23 @@ copy per direction, and TX has a "whole frame <= MTU + 18" length limit.
 Dependencies are **strictly one-way**; reverse edges and cycles are forbidden:
 
 ```
-tk_common  <- (no dependencies)  errors, logging, byte order, lock-free queue, statistics, thread QoS
+tn_common  <- (no dependencies)  errors, logging, byte order, lock-free queue, statistics, thread QoS
    ^
-tk_rndis   <- common            RNDIS wire format + state machine (**pure logic, no I/O**)
-tk_net     <- common            feth lifetime + BPF link
-tk_usb     <- common, rndis     libusb wrapper (rndis is used only for protocol constants)
+tn_rndis   <- common            RNDIS wire format + state machine (**pure logic, no I/O**)
+tn_net     <- common            feth lifetime + BPF link
+tn_usb     <- common, rndis     libusb wrapper (rndis is used only for protocol constants)
    ^
-tk_core    <- all of the above  data-path bridge + runtime orchestration
+tn_core    <- all of the above  data-path bridge + runtime orchestration
    ^
-tetherkit  <- core              command line
+tethernet  <- core              command line
 ```
 
-**`tk_rndis` not touching I/O is a deliberate constraint.** It lets the entire
+**`tn_rndis` not touching I/O is a deliberate constraint.** It lets the entire
 RNDIS implementation (including the state machine) be fully unit-tested on a
 machine with neither a USB device nor root -- and this project's development
 machine is exactly such a machine. For that reason the `ControlChannel`
 interface lives in the `rndis` layer (it describes RNDIS protocol semantics, not
-USB semantics) and is implemented by `tk_usb`.
+USB semantics) and is implemented by `tn_usb`.
 
 ---
 
@@ -254,7 +254,7 @@ The error messages themselves all come from the message table (see section 6b),
 not from string literals.
 
 **The RNDIS status-code-to-name mapping lives in exactly one place,
-`rndis/protocol.cc`** (a single source of truth); `tk_common` does not know
+`rndis/protocol.cc`** (a single source of truth); `tn_common` does not know
 RNDIS and only outputs the hexadecimal value, while the symbolic name is
 spliced into the context string by the rndis layer. (There used to be a second
 copy in `error.cc` with 5 wrong values; it has been removed.)
@@ -265,20 +265,20 @@ copy in `error.cc` with 5 wrong values; it has been removed.)
 
 User-facing text (errors, logs, help, status names) **is never written as a
 string literal**; it all lives in
-`include/tetherkit/common/messages.def`. That file is an X-macro list expanded
+`include/tethernet/common/messages.def`. That file is an X-macro list expanded
 to generate the `Msg` enum and the English string table -- all from the same
 source, so **a message cannot be structurally missing from the table**. The
 project is currently English-only, but the multi-language plumbing (the
-`Language` enum, `TextIn`, `ParseLanguage`, the C ABI `tk_set_language`, the
+`Language` enum, `TextIn`, `ParseLanguage`, the C ABI `tn_set_language`, the
 helper's `setLanguage` XPC method, and `L10n.apply`) is deliberately kept so
 that adding a language later stays a bounded change; the checklist for that
-change is at the top of `include/tetherkit/common/messages.def`.
+change is at the top of `include/tethernet/common/messages.def`.
 
 | Access form | Use | Allocates? |
 |---|---|---|
 | `Tr(Msg::kFoo, args...)` | with arguments, same semantics as `std::format` | yes (returns `std::string`) |
 | `Text(Msg::kFoo)` | no arguments, returns `string_view` | no, `noexcept` |
-| `TETHERKIT_INFO_TR(Msg::kFoo, ...)` etc. | logging | not evaluated when the level is off |
+| `TETHERNET_INFO_TR(Msg::kFoo, ...)` etc. | logging | not evaluated when the level is off |
 
 **Why not gettext**: it would mean pulling in libintl, running msgfmt at build
 time, and looking up directories at runtime, in exchange for runtime failures of
@@ -300,7 +300,7 @@ instead of rendering as a half-formed log line on a user's machine.
 
 The language is decided by the host: the command line takes `--lang en` (and
 reads environment variables for defaults where applicable), and the GUI passes
-its choice through the C ABI `tk_set_language`. The GUI language menu offers
+its choice through the C ABI `tn_set_language`. The GUI language menu offers
 "Follow system" and "English". This is a **single process-wide state**, not one
 per session -- logs and errors are produced from multiple threads, and making it
 thread-local would let a single session emit output in two different languages.
@@ -380,7 +380,7 @@ keep-alive failures, and reset replay) and every bridge path (including
 bidirectional concurrency, backpressure, pause, and shutdown under traffic) be
 tested offline and verified under ThreadSanitizer. feth/BPF cases that need
 root are **skipped rather than failed** by default and can be enabled explicitly
-with `TETHERKIT_ROOT_TESTS=1`.
+with `TETHERNET_ROOT_TESTS=1`.
 
 ---
 
@@ -404,7 +404,7 @@ take the wrong path.**
 
 | Category | Convention | Example |
 |---|---|---|
-| namespace | `lower_case` | `tetherkit::rndis` |
+| namespace | `lower_case` | `tethernet::rndis` |
 | type | `CamelCase` | `PacketMessageWriter` |
 | function and method (including accessors) | `CamelCase` | `MaxFrameBytes()` |
 | local variable and parameter | `lower_case` | `frame_length` |

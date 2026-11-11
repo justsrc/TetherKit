@@ -1,15 +1,15 @@
-#include "tetherkit/usb/data_channel.h"
+#include "tethernet/usb/data_channel.h"
+
+#include "tethernet/common/i18n.h"
+#include "tethernet/common/logging.h"
+#include "tethernet/rndis/packet_codec.h"
 
 #include <sys/sysctl.h>
 
 #include <cstdlib>
 #include <format>
 
-#include "tetherkit/common/i18n.h"
-#include "tetherkit/common/logging.h"
-#include "tetherkit/rndis/packet_codec.h"
-
-namespace tetherkit::usb {
+namespace tethernet::usb {
 namespace {
 
 /// Alignment in bytes for the transfer buffers.
@@ -53,9 +53,9 @@ Result<std::unique_ptr<UsbDataChannel>> UsbDataChannel::Create(
         rndis::kPacketMsgHeaderBytes + parameters.mtu + rndis::kEthernetHeaderBytes)));
   }
 
-  TETHERKIT_RETURN_IF_ERROR(channel->AllocatePool(channel->rx_pool_, config.rx_transfer_count,
-                                                  config.rx_transfer_bytes));
-  TETHERKIT_RETURN_IF_ERROR(channel->AllocatePool(channel->tx_pool_, config.tx_transfer_count,
+  TETHERNET_RETURN_IF_ERROR(
+      channel->AllocatePool(channel->rx_pool_, config.rx_transfer_count, config.rx_transfer_bytes));
+  TETHERNET_RETURN_IF_ERROR(channel->AllocatePool(channel->tx_pool_, config.tx_transfer_count,
                                                   channel->tx_transfer_bytes_));
 
   // TX free-slot queue: everything starts out free.
@@ -66,9 +66,8 @@ Result<std::unique_ptr<UsbDataChannel>> UsbDataChannel::Create(
     }
   }
 
-  TETHERKIT_INFO_TR(
-      Msg::kUsbDataChannelReady,
-      config.rx_transfer_count, config.rx_transfer_bytes / 1024,
+  TETHERNET_INFO_TR(
+      Msg::kUsbDataChannelReady, config.rx_transfer_count, config.rx_transfer_bytes / 1024,
       config.rx_transfer_count * config.rx_transfer_bytes / 1024, config.tx_transfer_count,
       channel->tx_transfer_bytes_ / 1024, parameters.device_max_transfer_size,
       parameters.max_packets_per_message, parameters.tx_alignment_bytes);
@@ -137,9 +136,9 @@ Status UsbDataChannel::StartReceiving(FrameRing& rx_ring, DirectionCounters& rx_
   rx_counters_ = &rx_counters;
 
   for (Slot& slot : rx_pool_) {
-    TETHERKIT_RETURN_IF_ERROR(SubmitReceive(slot));
+    TETHERNET_RETURN_IF_ERROR(SubmitReceive(slot));
   }
-  TETHERKIT_DEBUG_TR(Msg::kUsbBulkInSubmitted, rx_pool_.size());
+  TETHERNET_DEBUG_TR(Msg::kUsbBulkInSubmitted, rx_pool_.size());
   return Ok();
 }
 
@@ -213,9 +212,8 @@ void UsbDataChannel::OnReceiveComplete(Slot& slot) noexcept {
           if (outcome == rndis::ReadOutcome::kMalformed) {
             malformed_transfers_.fetch_add(1, std::memory_order_relaxed);
             rx_counters_->AddDroppedMalformed();
-            TETHERKIT_TRACE_TR(Msg::kUsbMalformedRndisMessage,
-                               rndis::MalformedReasonName(reader.Reason()),
-                               reader.FramesDecoded());
+            TETHERNET_TRACE_TR(Msg::kUsbMalformedRndisMessage,
+                               rndis::MalformedReasonName(reader.Reason()), reader.FramesDecoded());
           }
           break;
         }
@@ -236,9 +234,9 @@ void UsbDataChannel::OnReceiveComplete(Slot& slot) noexcept {
       // thread for tens of microseconds to milliseconds, hence only on a real
       // STALL).
       rx_counters_->AddIoError();
-      TETHERKIT_WARN_TR(Msg::kUsbBulkInStall);
+      TETHERNET_WARN_TR(Msg::kUsbBulkInStall);
       if (const auto status = device_->ClearHalt(device_->BulkInEndpoint()); !status) {
-        TETHERKIT_ERROR_TR(Msg::kUsbBulkInClearHaltFailed, status.error().ToString());
+        TETHERNET_ERROR_TR(Msg::kUsbBulkInClearHaltFailed, status.error().ToString());
         should_resubmit = false;
       }
       break;
@@ -252,7 +250,7 @@ void UsbDataChannel::OnReceiveComplete(Slot& slot) noexcept {
       // Device unplugged. Stop resubmitting so the in-flight count
       // converges; upper-layer reconnection logic takes it from here.
       should_resubmit = false;
-      TETHERKIT_INFO_TR(Msg::kUsbBulkInDeviceGone);
+      TETHERNET_INFO_TR(Msg::kUsbBulkInDeviceGone);
       break;
 
     case LIBUSB_TRANSFER_TIMED_OUT:
@@ -265,7 +263,7 @@ void UsbDataChannel::OnReceiveComplete(Slot& slot) noexcept {
     case LIBUSB_TRANSFER_OVERFLOW:
     default:
       rx_counters_->AddIoError();
-      TETHERKIT_WARN_TR(Msg::kUsbBulkInFailed, static_cast<int>(transfer->status));
+      TETHERNET_WARN_TR(Msg::kUsbBulkInFailed, static_cast<int>(transfer->status));
       break;
   }
 
@@ -282,7 +280,7 @@ void UsbDataChannel::OnReceiveComplete(Slot& slot) noexcept {
     if (rc == LIBUSB_SUCCESS) {
       return;  // in-flight count unchanged: one out, one in
     }
-    TETHERKIT_WARN_TR(Msg::kUsbBulkInResubmitFailed, ::libusb_error_name(rc));
+    TETHERNET_WARN_TR(Msg::kUsbBulkInResubmitFailed, ::libusb_error_name(rc));
   }
 
   // The transfer has left flight. Wake any Shutdown() waiting for zero.
@@ -360,7 +358,7 @@ Result<SendOutcome> UsbDataChannel::SendFrames(std::span<const FrameView> frames
         ++outcome.skipped;
       }
       if (!tx_free_slots_->TryPush(slot_index)) {
-        TETHERKIT_ERROR_TR(Msg::kUsbReturnTxSlotFailed, slot_index);
+        TETHERNET_ERROR_TR(Msg::kUsbReturnTxSlotFailed, slot_index);
       }
       continue;
     }
@@ -381,7 +379,7 @@ Result<SendOutcome> UsbDataChannel::SendFrames(std::span<const FrameView> frames
     if (rc != LIBUSB_SUCCESS) {
       outstanding_.fetch_sub(1, std::memory_order_acq_rel);
       if (!tx_free_slots_->TryPush(slot_index)) {
-        TETHERKIT_ERROR_TR(Msg::kUsbReturnTxSlotFailed, slot_index);
+        TETHERNET_ERROR_TR(Msg::kUsbReturnTxSlotFailed, slot_index);
       }
       async_send_errors_.fetch_add(1, std::memory_order_relaxed);
       return std::unexpected(Error::FromLibUsb(rc, Tr(Msg::kUsbSubmitBulkOutFailed)));
@@ -390,7 +388,7 @@ Result<SendOutcome> UsbDataChannel::SendFrames(std::span<const FrameView> frames
     // Frames and bytes are counted by the **bridge** (it is the only writer
     // of the TX counters). Here we only log the aggregation effect for
     // diagnostics.
-    TETHERKIT_TRACE_TR(Msg::kUsbBulkOutSubmitted, message_count, payload_bytes, transfer_bytes);
+    TETHERNET_TRACE_TR(Msg::kUsbBulkOutSubmitted, message_count, payload_bytes, transfer_bytes);
     outcome.consumed += scanned;
     outcome.sent_frames += appended;
     outcome.sent_bytes += payload_bytes;
@@ -420,9 +418,9 @@ void UsbDataChannel::OnSendComplete(Slot& slot) noexcept {
 
     case LIBUSB_TRANSFER_STALL:
       async_send_errors_.fetch_add(1, std::memory_order_relaxed);
-      TETHERKIT_WARN_TR(Msg::kUsbBulkOutStall);
+      TETHERNET_WARN_TR(Msg::kUsbBulkOutStall);
       if (const auto status = device_->ClearHalt(device_->BulkOutEndpoint()); !status) {
-        TETHERKIT_ERROR_TR(Msg::kUsbBulkOutClearHaltFailed, status.error().ToString());
+        TETHERNET_ERROR_TR(Msg::kUsbBulkOutClearHaltFailed, status.error().ToString());
       }
       break;
 
@@ -432,7 +430,7 @@ void UsbDataChannel::OnSendComplete(Slot& slot) noexcept {
 
     default:
       async_send_errors_.fetch_add(1, std::memory_order_relaxed);
-      TETHERKIT_WARN_TR(Msg::kUsbBulkOutFailed, static_cast<int>(slot.transfer->status));
+      TETHERNET_WARN_TR(Msg::kUsbBulkOutFailed, static_cast<int>(slot.transfer->status));
       break;
   }
 
@@ -440,7 +438,7 @@ void UsbDataChannel::OnSendComplete(Slot& slot) noexcept {
   // nobody will take one anyway.
   if (!shutting_down_.load(std::memory_order_acquire)) {
     if (!tx_free_slots_->TryPush(slot.index)) {
-      TETHERKIT_ERROR_TR(Msg::kUsbReturnTxSlotFailed, slot.index);
+      TETHERNET_ERROR_TR(Msg::kUsbReturnTxSlotFailed, slot.index);
     }
     // Wake a TX thread that may be waiting for a slot in
     // WaitForSendCapacity(). Empty-critical-section idiom: take the lock
@@ -490,7 +488,7 @@ void UsbDataChannel::Shutdown() {
     if (slot.transfer != nullptr) {
       const int rc = ::libusb_cancel_transfer(slot.transfer);
       if (rc != LIBUSB_SUCCESS && rc != LIBUSB_ERROR_NOT_FOUND) {
-        TETHERKIT_DEBUG_TR(Msg::kUsbCancelBulkInReturned, ::libusb_error_name(rc));
+        TETHERNET_DEBUG_TR(Msg::kUsbCancelBulkInReturned, ::libusb_error_name(rc));
       }
     }
   }
@@ -498,7 +496,7 @@ void UsbDataChannel::Shutdown() {
     if (slot.transfer != nullptr) {
       const int rc = ::libusb_cancel_transfer(slot.transfer);
       if (rc != LIBUSB_SUCCESS && rc != LIBUSB_ERROR_NOT_FOUND) {
-        TETHERKIT_DEBUG_TR(Msg::kUsbCancelBulkOutReturned, ::libusb_error_name(rc));
+        TETHERNET_DEBUG_TR(Msg::kUsbCancelBulkOutReturned, ::libusb_error_name(rc));
       }
     }
   }
@@ -517,7 +515,7 @@ void UsbDataChannel::Shutdown() {
       // still touch them), so **deliberately leak** -- leaking a few hundred
       // KB beats a use-after-free crash.
       const std::uint32_t stuck = outstanding_.load(std::memory_order_acquire);
-      TETHERKIT_ERROR_TR(Msg::kUsbTransferReclaimTimeout, stuck,
+      TETHERNET_ERROR_TR(Msg::kUsbTransferReclaimTimeout, stuck,
                          (stuck * config_.rx_transfer_bytes) / 1024);
       // Null the transfer pointers so FreePool skips them.
       for (Slot& slot : rx_pool_) {
@@ -532,7 +530,7 @@ void UsbDataChannel::Shutdown() {
   }
 
   shutdown_complete_ = true;
-  TETHERKIT_DEBUG_TR(Msg::kUsbDataChannelStopped);
+  TETHERNET_DEBUG_TR(Msg::kUsbDataChannelStopped);
 }
 
-}  // namespace tetherkit::usb
+}  // namespace tethernet::usb

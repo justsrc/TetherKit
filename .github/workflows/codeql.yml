@@ -21,7 +21,7 @@
 #   The review requirement on the bot PR is bypassed BY YOU, the same way it
 #   is for your own PRs: the "Require review" ruleset lists the admin role as
 #   a bypass actor with bypass_mode pull_request, so
-#     gh api repos/justsrc/TetherKit/pulls/<PR>/merge -X PUT -f merge_method=merge
+#     gh api repos/justsrc/Tethernet/pulls/<PR>/merge -X PUT -f merge_method=merge
 #   engages the bypass. (`gh pr merge` refuses at its own pre-flight when
 #   mergeStateStatus is BLOCKED; that is cli/cli#13388, still open. The REST
 #   endpoint does the right thing.) Do NOT add Dependabot to the bypass list:
@@ -109,8 +109,8 @@ jobs:
           #
           # So the build decides the analysis set, and this project already
           # has the switch: doctest is an INTERFACE library linked only into
-          # tetherkit_tests (tests/CMakeLists.txt), so with
-          # TETHERKIT_BUILD_TESTS=OFF no test TU is compiled, doctest.h is
+          # tethernet_tests (tests/CMakeLists.txt), so with
+          # TETHERNET_BUILD_TESTS=OFF no test TU is compiled, doctest.h is
           # never parsed, and third_party/doctest never reaches the database.
           #
           # That retires cpp/use-after-free at third_party/doctest/doctest.h:3710
@@ -140,7 +140,7 @@ jobs:
           cmake -S . -B build \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
-            -DTETHERKIT_BUILD_TESTS=OFF
+            -DTETHERNET_BUILD_TESTS=OFF
           cmake --build build -j"$(sysctl -n hw.ncpu)"
 
       # The upload is skipped for a commit authored by Dependabot.

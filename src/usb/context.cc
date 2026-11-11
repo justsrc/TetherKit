@@ -1,12 +1,12 @@
-#include "tetherkit/usb/context.h"
+#include "tethernet/usb/context.h"
+
+#include "tethernet/common/i18n.h"
+#include "tethernet/common/logging.h"
+#include "tethernet/common/scheduling.h"
 
 #include <format>
 
-#include "tetherkit/common/i18n.h"
-#include "tetherkit/common/logging.h"
-#include "tetherkit/common/scheduling.h"
-
-namespace tetherkit::usb {
+namespace tethernet::usb {
 namespace {
 
 /// Upper bound on how long a single handle_events call may block in the event
@@ -32,9 +32,9 @@ Result<std::unique_ptr<Context>> Context::Create() {
     return std::unexpected(Error::FromLibUsb(rc, Tr(Msg::kUsbInitFailed)));
   }
 
-  TETHERKIT_INFO_TR(Msg::kUsbInitialized, VersionString(),
-                    Text(SupportsHotplug() ? Msg::kUsbHotplugSupported
-                                           : Msg::kUsbHotplugUnsupported));
+  TETHERNET_INFO_TR(
+      Msg::kUsbInitialized, VersionString(),
+      Text(SupportsHotplug() ? Msg::kUsbHotplugSupported : Msg::kUsbHotplugUnsupported));
 
   context->running_.store(true, std::memory_order_release);
   context->event_thread_ = std::thread([raw = context.get()] { raw->RunEventLoop(); });
@@ -58,7 +58,7 @@ Context::~Context() {
     ::libusb_exit(context_);
     context_ = nullptr;
   }
-  TETHERKIT_DEBUG_TR(Msg::kUsbContextReleased);
+  TETHERNET_DEBUG_TR(Msg::kUsbContextReleased);
 }
 
 std::string Context::VersionString() {
@@ -83,7 +83,7 @@ void Context::RequestStop() noexcept {
 
 void Context::RunEventLoop() noexcept {
   ConfigureCurrentThread("usb-event", ThreadRole::kDataPath);
-  TETHERKIT_DEBUG_TR(Msg::kUsbEventThreadStarted);
+  TETHERNET_DEBUG_TR(Msg::kUsbEventThreadStarted);
 
   ::timeval timeout{};
   timeout.tv_sec = kEventLoopTimeoutSeconds;
@@ -102,15 +102,15 @@ void Context::RunEventLoop() noexcept {
     if (rc == LIBUSB_ERROR_NO_DEVICE) {
       // The device was unplugged. Not the event loop's fault; upper-level
       // reconnect logic handles it, so keep running here.
-      TETHERKIT_DEBUG_TR(Msg::kUsbEventLoopNoDevice);
+      TETHERNET_DEBUG_TR(Msg::kUsbEventLoopNoDevice);
       continue;
     }
-    TETHERKIT_ERROR_TR(Msg::kUsbHandleEventsFailed, ::libusb_error_name(rc), rc);
+    TETHERNET_ERROR_TR(Msg::kUsbHandleEventsFailed, ::libusb_error_name(rc), rc);
     break;
   }
 
   running_.store(false, std::memory_order_release);
-  TETHERKIT_DEBUG_TR(Msg::kUsbEventThreadExited);
+  TETHERNET_DEBUG_TR(Msg::kUsbEventThreadExited);
 }
 
-}  // namespace tetherkit::usb
+}  // namespace tethernet::usb

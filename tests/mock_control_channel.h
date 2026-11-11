@@ -6,9 +6,15 @@
 // real device yet the most error-prone ones.
 #pragma once
 
+#include "tethernet/common/byte_order.h"
+#include "tethernet/rndis/control_channel.h"
+#include "tethernet/rndis/messages.h"
+#include "tethernet/rndis/protocol.h"
+#include "tethernet/rndis/state_machine.h"
+
+#include <array>
 #include <cstddef>
 #include <cstdint>
-#include <array>
 #include <cstring>
 #include <deque>
 #include <functional>
@@ -16,13 +22,7 @@
 #include <string>
 #include <vector>
 
-#include "tetherkit/common/byte_order.h"
-#include "tetherkit/rndis/control_channel.h"
-#include "tetherkit/rndis/messages.h"
-#include "tetherkit/rndis/protocol.h"
-#include "tetherkit/rndis/state_machine.h"
-
-namespace tetherkit::testing {
+namespace tethernet::testing {
 
 /// Control channel that emulates device behavior.
 class MockControlChannel final : public rndis::ControlChannel {
@@ -432,4 +432,4 @@ class RecordingObserver final : public rndis::StateMachineObserver {
   rndis::DeviceInfo info_snapshot{};
 };
 
-}  // namespace tetherkit::testing
+}  // namespace tethernet::testing

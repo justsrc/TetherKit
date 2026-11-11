@@ -112,7 +112,7 @@ cmake -S . -B build-rel -DCMAKE_BUILD_TYPE=Release
 - **Do not enable `-O3`**: the hot path is dominated by memcpy and system calls;
   `-O3`'s aggressive loop unrolling and vectorization gain almost nothing, and
   instead increase code size and hurt I-cache hits.
-- **`-DTETHERKIT_NATIVE_ARCH=ON` gains very little**: the arm64 baseline already
+- **`-DTETHERNET_NATIVE_ARCH=ON` gains very little**: the arm64 baseline already
   emits LSE atomic instructions (`ldadd`); `-mcpu=` only brings scheduling-model
   differences, not an instruction-set unlock. Also note that
   `-mcpu=apple-m5` **is rejected by Apple clang 21** (`native` resolves to

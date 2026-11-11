@@ -1,0 +1,22 @@
+# Check exemptions for the C ABI layer
+#
+# This layer is **for C and Swift callers**, so the names must follow the C
+# convention (`tn_snake_case`) rather than the CamelCase of the project's
+# internal C++ code. Forcing the upper-level rules on it would only produce a
+# pile of warnings nobody could fix, so the whole naming group is off here.
+#
+# Likewise, a C ABI can only use PODs and raw pointers, so the advice to
+# "use std::array / span / references instead" is turned off -- it simply does
+# not apply at an extern "C" boundary.
+InheritParentConfig: true
+
+Checks: >
+  -readability-identifier-naming,
+  -modernize-deprecated-headers,
+  -modernize-use-trailing-return-type,
+  -modernize-use-using,
+  -cppcoreguidelines-avoid-non-const-global-variables,
+  -readability-avoid-const-params-in-decls,
+  -bugprone-reserved-identifier,
+  -cert-dcl37-c,
+  -cert-dcl51-cpp

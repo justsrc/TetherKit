@@ -13,7 +13,7 @@
 #include <string_view>
 #include <utility>
 
-namespace tetherkit::capi {
+namespace tethernet::capi {
 
 /// Owns a CF object and CFReleases it on destruction.
 ///
@@ -79,4 +79,4 @@ class ScopedCFRef {
 ///   the helper are cleaned up automatically when it exits, leaving no litter.
 [[nodiscard]] SCDynamicStoreRef SharedDynamicStore();
 
-}  // namespace tetherkit::capi
+}  // namespace tethernet::capi

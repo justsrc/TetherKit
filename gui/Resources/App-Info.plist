@@ -1,26 +1,26 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  The Info.plist template for TetherKit.app.
+  The Info.plist template for Tethernet.app.
 
-  Scripts/build-gui.sh replaces __TETHERKIT_VERSION__ with the real version
-  number and copies the file into TetherKit.app/Contents/.
+  Scripts/build-gui.sh replaces __TETHERNET_VERSION__ with the real version
+  number and copies the file into Tethernet.app/Contents/.
 
   The app itself needs **no entitlements at all**: it runs as an ordinary
   user, touches neither USB nor the interface, and hands every privileged
-  operation to tetherkit-helper over XPC.
+  operation to tethernet-helper over XPC.
 -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>
-    <string>TetherKit</string>
+    <string>Tethernet</string>
     <key>CFBundleDisplayName</key>
-    <string>TetherKit</string>
+    <string>Tethernet</string>
     <key>CFBundleIdentifier</key>
-    <string>com.tetherkit.app</string>
+    <string>com.tethernet.app</string>
     <key>CFBundleExecutable</key>
-    <string>TetherKit</string>
+    <string>Tethernet</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <!-- The icon for the Dock and Finder. Resources/AppIcon.icns is
@@ -28,16 +28,16 @@
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
     <key>CFBundleShortVersionString</key>
-    <string>__TETHERKIT_VERSION__</string>
+    <string>__TETHERNET_VERSION__</string>
     <key>CFBundleVersion</key>
-    <string>__TETHERKIT_VERSION__</string>
+    <string>__TETHERNET_VERSION__</string>
 
     <!-- The interface languages declared here.
          The strings themselves are compiled into the binary (see
-         TetherKitIPC/Localization.swift for why they do not go through
+         TethernetIPC/Localization.swift for why they do not go through
          .lproj), so this **does not** affect what is actually displayed:
          its purpose is to let "System Settings, General, Language and
-         Region, Applications" list TetherKit and offer the languages
+         Region, Applications" list Tethernet and offer the languages
          below. The in-app language menu is independent of this entry;
          both work. The first entry also serves as the
          CFBundleDevelopmentRegion. -->

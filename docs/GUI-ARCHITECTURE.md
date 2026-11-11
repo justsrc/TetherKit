@@ -1,6 +1,6 @@
 # GUI implementation notes
 
-This document records what the TetherKit graphical interface **has
+This document records what the Tethernet graphical interface **has
 implemented, why it is implemented that way, and which parts must not be
 touched**.
 
@@ -16,7 +16,7 @@ pitfalls the hard way.
 
 ```
 +---------------------------------------------------+         +-------------------------------------------+
-|  TetherKit.app  (uid 501)                         |         |  tetherkit-helper  (uid 0)                |
+|  Tethernet.app  (uid 501)                         |         |  tethernet-helper  (uid 0)                |
 |                                                   |   XPC   |                                           |
 |  - SwiftUI interface                              | ------> |  - holds the RNDIS session                |
 |  - pops the system auth dialog for a credential   |         |  - creates/destroys feth, opens BPF       |
@@ -56,7 +56,7 @@ is equally safe.
 ## 2. Directory layout
 
 ```
-include/tetherkit/capi/tetherkit_c.h   the only extern "C" boundary in the project
+include/tethernet/capi/tethernet_c.h   the only extern "C" boundary in the project
 src/capi/                              C ABI implementation
 |-- capi_support.{h,cc}                fixed-size buffer copies, error translation, interface name checks
 |-- core_foundation_support.{h,cc}     minimal RAII wrappers for CF / SCDynamicStore
@@ -70,17 +70,17 @@ src/capi/                              C ABI implementation
 gui/
 |-- Package.swift                      SwiftPM project
 |-- Sources/
-|   |-- CTetherKit/                    module map for the C ABI (the headers are symlinks)
-|   |-- TetherKitIPC/                  shared by the App and the helper: protocol, models, authorization, string table
-|   |-- TetherKitCore/                 Swift wrapper of the C ABI
-|   |-- TetherKitHelper/               privileged helper
-|   |-- TetherKitUIModel/              main window page model (SidebarPage: fixed colors and
+|   |-- CTethernet/                    module map for the C ABI (the headers are symlinks)
+|   |-- TethernetIPC/                  shared by the App and the helper: protocol, models, authorization, string table
+|   |-- TethernetCore/                 Swift wrapper of the C ABI
+|   |-- TethernetHelper/               privileged helper
+|   |-- TethernetUIModel/              main window page model (SidebarPage: fixed colors and
 |   |                                  session state colors, persisted selection parsing) -- a
 |   |                                  separate library so that it can be unit tested (an executable
 |   |                                  target cannot be @testable imported)
-|   `-- TetherKitApp/                  SwiftUI interface (main window management and the page views)
-|-- Tests/TetherKitIPCTests/           authorization credential lifecycle + string table placeholder consistency
-|-- Tests/TetherKitUIModelTests/       page tint semantics + persisted selection parsing
+|   `-- TethernetApp/                  SwiftUI interface (main window management and the page views)
+|-- Tests/TethernetIPCTests/           authorization credential lifecycle + string table placeholder consistency
+|-- Tests/TethernetUIModelTests/       page tint semantics + persisted selection parsing
 |-- Resources/                         Info.plist, LaunchDaemon plist
 `-- Scripts/                           build / install / uninstall scripts
 ```
@@ -91,9 +91,9 @@ gui/
 
 | Direction | Mechanism | Period |
 |---|---|---|
-| library -> helper: status | `tk_session_status_get` copies a snapshot | on demand |
-| library -> helper: events | `tk_session_poll_events` takes from the ring queue | rides along with the status query |
-| library -> helper: logs | `tk_drain_logs` takes from the ring queue | every `drainFeed` |
+| library -> helper: status | `tn_session_status_get` copies a snapshot | on demand |
+| library -> helper: events | `tn_session_poll_events` takes from the ring queue | rides along with the status query |
+| library -> helper: logs | `tn_drain_logs` takes from the ring queue | every `drainFeed` |
 | helper -> App | XPC, JSON-encoded Codable | 500 ms |
 
 **Not a single callback crosses the language boundary anywhere in the chain.**
@@ -110,7 +110,7 @@ inside the library, the host polls".
 ### 4.1 C ABI
 
 - **No ownership crosses the boundary.** Output always goes into the
-  fixed-length struct the caller provides. The only exception is `tk_session_t*`,
+  fixed-length struct the caller provides. The only exception is `tn_session_t*`,
   whose create / destroy pairing is explicit.
 - **Truncation of a fixed-length buffer must land on a UTF-8 character
   boundary.** The error messages can contain non-ASCII characters, and cutting
@@ -121,7 +121,7 @@ inside the library, the host polls".
   matching order**, and a set of `static_assert`s in `session.cc` welds that
   down. Inserting an enum value in the middle shifts them silently, with no
   error at all.
-- **The member declaration order of `tk_session` is constrained**: `events` must
+- **The member declaration order of `tn_session` is constrained**: `events` must
   come before `runtime`, so that on destruction `runtime` joins the control
   thread first. The other way round is a use-after-free.
 
@@ -166,7 +166,7 @@ interface responds immediately.
   hard-to-diagnose phenomenon "the write returns success, the read comes back
   empty".
 
-### 4.4 Authorization re-check (`TetherKitIPC/Authorization.swift`)
+### 4.4 Authorization re-check (`TethernetIPC/Authorization.swift`)
 
 Three details that turn into a vulnerability the moment they are written wrong;
 all of them are documented in the comments of that file:
@@ -203,7 +203,7 @@ A fourth one, **actually hit in practice**:
    value of `requestAuthorization()` and use it afterwards** -- ARC is free to
    release the token right after the last read of `externalForm`.
 
-   `gui/Tests/TetherKitIPCTests/AuthorizationTests.swift` nails this behaviour
+   `gui/Tests/TethernetIPCTests/AuthorizationTests.swift` nails this behaviour
    down; neither of the two cases pops an authorization dialog, so it can go
    into CI.
 
@@ -262,7 +262,7 @@ password box, it just asks less often.
 ### 4.6 XPC interface revision number
 
 `HelperConstants.protocolRevision` must be incremented every time
-`TetherKitHelperProtocol` changes. It is currently **3** (1: the first
+`TethernetHelperProtocol` changes. It is currently **3** (1: the first
 version; 2: the reply of a privileged method carries "did the authorization
 fail"; 3: adds `setLanguage`). The helper encodes it in the `helperVersion`
 reply, and the App compares it as soon as it connects.
@@ -321,7 +321,7 @@ needs updating".
   the delegate in `applicationDidFinishLaunching` and `makeKeyAndOrderFront`-ed,
   no longer depending on the instantiation timing of SwiftUI and no longer
   needing a manual rescue from the menu bar. The `.prohibited -> .regular`
-  self-check in `TetherKitApplication.init()` is kept: it governs the normal
+  self-check in `TethernetApplication.init()` is kept: it governs the normal
   activation semantics of a process that is not active yet.
 - **The polling is adaptive**: a running session / starting or stopping / the
   window open -> 500 ms; purely idle in the background -> 2 seconds. When the
@@ -331,7 +331,7 @@ needs updating".
 ### 4.7b Interface language
 
 The string table is compiled into the binary, it does not go through `.lproj`.
-The reason is written at the top of `TetherKitIPC/Localization.swift`, and its
+The reason is written at the top of `TethernetIPC/Localization.swift`, and its
 core is that **the helper is a bare executable installed in
 `/Library/PrivilegedHelperTools`**, with no resource bundle next to it, and
 there should not be one, yet it still has to produce user-facing text of its
@@ -341,7 +341,7 @@ The table currently holds a single column (English) and the GUI language menu
 offers "Follow system" and "English"; the multi-language plumbing is
 deliberately kept so that adding a language later stays a bounded five-touch
 change (the checklist lives at the top of
-`include/tetherkit/common/messages.def`).
+`include/tethernet/common/messages.def`).
 
 When the language changes, **all three** places must be updated together, and
 missing one of them produces "the interface in one language, the log in
@@ -350,7 +350,7 @@ another":
 | Place | How to change it | Consequence of not changing it |
 |---|---|---|
 | Swift string table | `L10n.apply(_:)` | the interface does not change |
-| libtetherkit | `TetherKitLibrary.setLanguage(_:)` -> `tk_set_language` | the library logs in the log card stay in the old language |
+| libtethernet | `TethernetLibrary.setLanguage(_:)` -> `tn_set_language` | the library logs in the log card stay in the old language |
 | helper | the XPC `setLanguage(_:)` | the helper's messages and the library logs on its side stay in the old language |
 
 All three are done together in `AppModel.applyLanguage`; do not call one of
@@ -375,8 +375,8 @@ Two SwiftUI specific pitfalls (both hit in practice):
 
 ### 4.8 Packaging
 
-- **Copying the dylib must use `cp -a`, never `install`.** `libtetherkit.dylib`
-  and `libtetherkit.0.dylib` are symlinks; `install` copies a separate real
+- **Copying the dylib must use `cp -a`, never `install`.** `libtethernet.dylib`
+  and `libtethernet.0.dylib` are symlinks; `install` copies a separate real
   file for each, and afterwards `install_name_tool` only changes one of them
   -- while the one that is loaded via `@rpath` is exactly the one that was not
   changed.
@@ -384,7 +384,7 @@ Two SwiftUI specific pitfalls (both hit in practice):
   redone.** arm64 requires a valid signature; changing the bytes invalidates
   the original signature and the load is then rejected by the kernel outright
   (`Killed: 9`), with no reason visible in the log.
-- **libusb is a dependency of `libtetherkit.dylib`, not of the executable.**
+- **libusb is a dependency of `libtethernet.dylib`, not of the executable.**
   Running `otool -L` against the executable yields an empty result, the whole
   step is silently skipped -- after the install everything looks normal, yet
   it still depends on Homebrew.
@@ -470,7 +470,7 @@ source.
   launches (defaults) and goes out by itself after the upgrade because of the
   version comparison.
 - Privacy: only the public GitHub API is accessed, and the failures are
-  silent; `defaults write com.tetherkit.app updateCheckDisabled -bool YES`
+  silent; `defaults write com.tethernet.app updateCheckDisabled -bool YES`
   turns it off completely.
 - The bare executable of `swift run` has no Info.plist version number, so the
   check skips itself automatically.
@@ -597,7 +597,7 @@ orthodox keyboard-operable alternative; the popup runs in
 opening and committing it (a hardware checklist item), so the existence of the
 menu is proven by a CGWindowList diff (pitfall 24 round 8 (4)); the filter
 binding now goes through `ButtonTurn.routed` (`ButtonTurn` was moved into
-TetherKitUIModel as well, its commit semantics have unit tests).
+TethernetUIModel as well, its commit semantics have unit tests).
 
 **Tab re-entering the sidebar and the row level fallback for the Return (round
 9, real machine re-check)**: the user's real machine re-check overturned the
@@ -714,27 +714,27 @@ affect them (verified in practice).
 
 | Capability | Where |
 |---|---|
-| Environment preflight (root, feth sysctls, MTU ceiling) | `tk_check_environment` |
-| Device enumeration + vendor name / product name / serial number | `tk_list_devices` |
-| Session lifecycle (non-blocking start, status snapshot, events) | `tk_session_*` |
-| Log capture and polling | `tk_drain_logs` |
-| DHCP / static IP / clearing | `tk_net_apply`, `tk_net_clear` |
-| Read-back of the really effective state (address, gateway, DNS, main default route) | `tk_net_query` |
-| Orphan feth cleanup | `tk_cleanup_orphan_interfaces` |
-| Privileged helper + credential re-check | `gui/Sources/TetherKitHelper` |
-| One-click install / update / uninstall of the privileged helper inside the App | `gui/Sources/TetherKitApp/HelperInstaller.swift` |
-| Update check (check only, never replace; daily automatic + manual menu) | `gui/Sources/TetherKitApp/UpdateChecker.swift` |
-| Automatic Finder alias maintenance (created on the first launch, searchable and launchable in Spotlight; the brew postinstall cannot create it because of the sandbox) | `gui/Sources/TetherKitApp/FinderAlias.swift` |
-| SwiftUI interface (five sidebar pages: Connect / Network / Throughput / Log / Manage, paged by `SidebarShell`; the list of the log page fills the page height) | `gui/Sources/TetherKitApp/Views/SidebarShell.swift` |
-| Live rate in the menu bar + background running (menu bar only mode) | `gui/Sources/TetherKitApp/Views/MenuBarPanel.swift` |
-| Dev self capture tool (the App captures its own window into a PNG, so the iteration loop needs no screen recording permission) | `gui/Sources/TetherKitApp/Views/UiSelfCapture.swift` |
-| English user-facing strings (the runtime language switch is kept, and the interface / the library log / the helper messages are switched together) | `gui/Sources/TetherKitIPC/Localization.swift`, `tk_set_language` |
+| Environment preflight (root, feth sysctls, MTU ceiling) | `tn_check_environment` |
+| Device enumeration + vendor name / product name / serial number | `tn_list_devices` |
+| Session lifecycle (non-blocking start, status snapshot, events) | `tn_session_*` |
+| Log capture and polling | `tn_drain_logs` |
+| DHCP / static IP / clearing | `tn_net_apply`, `tn_net_clear` |
+| Read-back of the really effective state (address, gateway, DNS, main default route) | `tn_net_query` |
+| Orphan feth cleanup | `tn_cleanup_orphan_interfaces` |
+| Privileged helper + credential re-check | `gui/Sources/TethernetHelper` |
+| One-click install / update / uninstall of the privileged helper inside the App | `gui/Sources/TethernetApp/HelperInstaller.swift` |
+| Update check (check only, never replace; daily automatic + manual menu) | `gui/Sources/TethernetApp/UpdateChecker.swift` |
+| Automatic Finder alias maintenance (created on the first launch, searchable and launchable in Spotlight; the brew postinstall cannot create it because of the sandbox) | `gui/Sources/TethernetApp/FinderAlias.swift` |
+| SwiftUI interface (five sidebar pages: Connect / Network / Throughput / Log / Manage, paged by `SidebarShell`; the list of the log page fills the page height) | `gui/Sources/TethernetApp/Views/SidebarShell.swift` |
+| Live rate in the menu bar + background running (menu bar only mode) | `gui/Sources/TethernetApp/Views/MenuBarPanel.swift` |
+| Dev self capture tool (the App captures its own window into a PNG, so the iteration loop needs no screen recording permission) | `gui/Sources/TethernetApp/Views/UiSelfCapture.swift` |
+| English user-facing strings (the runtime language switch is kept, and the interface / the library log / the helper messages are switched together) | `gui/Sources/TethernetIPC/Localization.swift`, `tn_set_language` |
 
 ### Not implemented / known limitations
 
 | Item | Explanation |
 |---|---|
-| **The DNS of the static IP is not verified on a real device** | IPConfiguration publishes DNS only in DHCP mode. In static mode we add a DNS key to the service it created, and whether IPMonitor adopts it has not been verified. Therefore `tk_net_query` always **reads back** the resolver that is really in effect, and the interface shows the read-back result -- if we guessed wrong, at worst the DNS does not take effect, nothing is broken. |
+| **The DNS of the static IP is not verified on a real device** | IPConfiguration publishes DNS only in DHCP mode. In static mode we add a DNS key to the service it created, and whether IPMonitor adopts it has not been verified. Therefore `tn_net_query` always **reads back** the resolver that is really in effect, and the interface shows the read-back result -- if we guessed wrong, at worst the DNS does not take effect, nothing is broken. |
 | **End to end already works on a real device (the DHCP path)** | Verified on 2026-07-28 with an Android phone: plug it in -> the App connects -> feth0 gets an address in the phone's subnet via DHCP -> the host and the phone can ping each other in both directions -> iperf3 measures RX 325 / TX 235 Mbps. **The step "can it reach the public internet" could not be verified** -- a VPN on this machine holds the default route and hijacks the tethered traffic, which is a problem of the test environment and not of the GUI. After the App quits the session is still held by the helper (background running mode, as designed). |
 | **The authorization can only take a password, no fingerprint** | A limitation of the system API, not a defect. Verified and recorded in section 4.5. The mitigation is the token cache: it asks only once every 5 minutes. |
 | **Hot plug** | `Context::SupportsHotplug()` exists but is not wired up; for now the interface re-enumerates every 2 seconds. |
@@ -748,7 +748,7 @@ affect them (verified in practice).
 ## 6. Build and install
 
 ```bash
-# 1. The C++ part (produces libtetherkit.dylib)
+# 1. The C++ part (produces libtethernet.dylib)
 cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
 cmake --build build -j
 
@@ -759,16 +759,16 @@ cmake --build build --target gui
 #    helper: click the button, type the administrator password once (see
 #    section 4.9).
 #    Terminal alternative: sudo ./gui/Scripts/install-helper.sh
-open dist/TetherKit.app
+open dist/Tethernet.app
 ```
 
 During development you can also use SwiftPM directly, without going through
 the packaging script:
 
 ```bash
-export TETHERKIT_LIB_DIR="$PWD/build/lib"
+export TETHERNET_LIB_DIR="$PWD/build/lib"
 swift build --package-path gui
-swift test  --package-path gui     # the unit tests of TetherKitIPC + TetherKitUIModel
+swift test  --package-path gui     # the unit tests of TethernetIPC + TethernetUIModel
 ```
 
 Uninstall: the "Uninstall the privileged helper?" button on the "Manage" page
@@ -782,13 +782,13 @@ Troubleshooting entry points:
 
 | Symptom | Where to look first |
 |---|---|
-| The interface keeps showing "The privileged helper must be installed" | `launchctl print system/com.tetherkit.helper` |
-| The helper does not come up | `/var/log/tetherkit-helper.log` |
+| The interface keeps showing "The privileged helper must be installed" | `launchctl print system/com.tethernet.helper` |
+| The helper does not come up | `/var/log/tethernet-helper.log` |
 | The connection fails | the "Log" panel in the interface (one click to copy) |
-| After the install it still depends on Homebrew | `otool -L dist/TetherKit.app/Contents/Frameworks/libtetherkit.0.*.dylib` |
+| After the install it still depends on Homebrew | `otool -L dist/Tethernet.app/Contents/Frameworks/libtethernet.0.*.dylib` |
 | Clicking "Connect" reports "Cannot restore the authorization credential (-60005)" | The App side released the AuthorizationRef too early, see item 4 in section 4.4 |
 | The interface shows "The privileged helper needs updating" | The XPC protocol was changed but the helper was not reinstalled; click "Update the helper" (or run the install script) |
-| Clicking "Install the helper" reports "This copy of TetherKit carries no installer payload" | The bare executable of `swift run` is running; the payload exists only in the .app assembled by build-gui.sh; install it with the terminal script |
+| Clicking "Install the helper" reports "This copy of Tethernet carries no installer payload" | The bare executable of `swift run` is running; the payload exists only in the .app assembled by build-gui.sh; install it with the terminal script |
 | The authorization box only takes a password, no fingerprint | This is a limitation of the system API, not a defect, see section 4.5 |
 | After unplugging and replugging the device, clicking "Connect" reports "A session is already running" | The helper is an old version (a failed state old session was not cleaned up); reinstall the helper |
 | Double-clicking the Finder icon does nothing | Already fixed: the main window is presented again in `applicationShouldHandleReopen` (this callback only became available once AppKit managed the window itself) |

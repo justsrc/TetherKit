@@ -1,9 +1,9 @@
-#include "tetherkit/common/i18n.h"
+#include "tethernet/common/i18n.h"
 
 // ContextSeparator() is declared in error.h (which avoids pulling in
 // <format>); including it here lets the compiler check that declaration and
 // definition agree.
-#include "tetherkit/common/error.h"
+#include "tethernet/common/error.h"
 
 #include <array>
 #include <atomic>
@@ -13,7 +13,7 @@
 #include <string>
 #include <string_view>
 
-namespace tetherkit {
+namespace tethernet {
 namespace {
 
 /// Message count. The table is fixed-length, so "added an enum value but no
@@ -26,9 +26,9 @@ constexpr std::size_t kMessageCount = static_cast<std::size_t>(Msg::kMessageCoun
 /// this one, extracted from the new column, and a dispatch in TextIn() that
 /// picks by Language (see the checklist in messages.def).
 constexpr std::array<std::string_view, kMessageCount> kMessageTable{
-#define TETHERKIT_MESSAGE(id, en) en,
-#include "tetherkit/common/messages.def"  // NOLINT(bugprone-suspicious-include)
-#undef TETHERKIT_MESSAGE
+#define TETHERNET_MESSAGE(id, en) en,
+#include "tethernet/common/messages.def"  // NOLINT(bugprone-suspicious-include)
+#undef TETHERNET_MESSAGE
 };
 
 /// Current language. Process-wide single state, atomic rather than mutexed:
@@ -91,10 +91,10 @@ Language LanguageFromLocaleString(std::string_view /*locale*/) noexcept {
 }
 
 Language DetectLanguageFromEnvironment() noexcept {
-  // POSIX order: LC_ALL beats LC_MESSAGES beats LANG. TETHERKIT_LANG comes
+  // POSIX order: LC_ALL beats LC_MESSAGES beats LANG. TETHERNET_LANG comes
   // first so a user can change just this program's language without touching
   // the system locale.
-  for (const char* name : {"TETHERKIT_LANG", "LC_ALL", "LC_MESSAGES", "LANG"}) {
+  for (const char* name : {"TETHERNET_LANG", "LC_ALL", "LC_MESSAGES", "LANG"}) {
     const std::string_view value = ReadEnvironment(name);
     if (value.empty()) {
       continue;
@@ -164,4 +164,4 @@ std::string_view ContextSeparator() noexcept {
 }
 
 }  // namespace detail
-}  // namespace tetherkit
+}  // namespace tethernet

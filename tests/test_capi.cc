@@ -6,19 +6,20 @@
 //
 // Session and network configuration require root and a real device, so they are not tested
 // here -- only their argument-validation branches.
+#include "tethernet/capi/tethernet_c.h"
+#include "tethernet/common/logging.h"
+
+#include <doctest.h>
+
 #include <array>
 #include <cstring>
 #include <string>
 
-#include <doctest.h>
-
 #include "capi_support.h"
 #include "process_runner.h"
-#include "tetherkit/capi/tetherkit_c.h"
-#include "tetherkit/common/logging.h"
 
-using tetherkit::capi::CopyText;
-using tetherkit::capi::IsValidFethName;
+using tethernet::capi::CopyText;
+using tethernet::capi::IsValidFethName;
 
 TEST_SUITE("capi.support") {
   TEST_CASE("CopyText copies normally and adds a terminator") {
@@ -82,15 +83,15 @@ TEST_SUITE("capi.support") {
 
 namespace {
 
-using tetherkit::capi::DeviceIdentity;
-using tetherkit::capi::ReconcileDeviceStrings;
-using tetherkit::capi::RememberedDeviceStrings;
+using tethernet::capi::DeviceIdentity;
+using tethernet::capi::ReconcileDeviceStrings;
+using tethernet::capi::RememberedDeviceStrings;
 
 /// Build an enumeration result with identity and strings filled in. Pass an empty string
 /// to mean "not read this time".
-tk_device_info_t DeviceInfo(const DeviceIdentity& identity, const char* manufacturer,
+tn_device_info_t DeviceInfo(const DeviceIdentity& identity, const char* manufacturer,
                             const char* product, const char* serial) {
-  tk_device_info_t info{};
+  tn_device_info_t info{};
   info.vendor_id = identity.vendor_id;
   info.product_id = identity.product_id;
   info.bus_number = identity.bus_number;
@@ -112,7 +113,7 @@ TEST_CASE("ReconcileDeviceStrings backfills the last successfully read name when
   const std::vector<DeviceIdentity> present{phone};
 
   // First time: read while idle -> remember it.
-  std::vector<tk_device_info_t> infos{DeviceInfo(phone, "vivo", "iQOO Z10x", "10AFAC2X72005KT")};
+  std::vector<tn_device_info_t> infos{DeviceInfo(phone, "vivo", "iQOO Z10x", "10AFAC2X72005KT")};
   ReconcileDeviceStrings(memory, present, infos);
   REQUIRE(memory.size() == 1);
 
@@ -137,7 +138,7 @@ TEST_CASE(
   const DeviceIdentity old_phone{.bus_number = 0, .device_address = 1,
                                  .vendor_id = 0x2d95, .product_id = 0x600b};
   std::vector<RememberedDeviceStrings> memory;
-  std::vector<tk_device_info_t> infos{DeviceInfo(old_phone, "vivo", "iQOO Z10x", "SN1")};
+  std::vector<tn_device_info_t> infos{DeviceInfo(old_phone, "vivo", "iQOO Z10x", "SN1")};
   ReconcileDeviceStrings(memory, {std::vector<DeviceIdentity>{old_phone}}, infos);
   REQUIRE(memory.size() == 1);
 
@@ -168,7 +169,7 @@ TEST_CASE("ReconcileDeviceStrings keeps an honest empty string for a device with
   const DeviceIdentity mute{.bus_number = 2, .device_address = 7,
                             .vendor_id = 0x1234, .product_id = 0x5678};
   std::vector<RememberedDeviceStrings> memory;
-  std::vector<tk_device_info_t> infos{DeviceInfo(mute, "", "", "")};
+  std::vector<tn_device_info_t> infos{DeviceInfo(mute, "", "", "")};
   ReconcileDeviceStrings(memory, {std::vector<DeviceIdentity>{mute}}, infos);
   // Do not remember (nothing was read) and do not backfill (nothing from nowhere).
   CHECK(memory.empty());
@@ -186,7 +187,7 @@ TEST_CASE(
   std::vector<RememberedDeviceStrings> memory;
   const std::vector<DeviceIdentity> both{first, second};
 
-  std::vector<tk_device_info_t> infos{DeviceInfo(first, "vivo", "iQOO Z10x", "SN1"),
+  std::vector<tn_device_info_t> infos{DeviceInfo(first, "vivo", "iQOO Z10x", "SN1"),
                                       DeviceInfo(second, "Google", "Pixel", "SN2")};
   ReconcileDeviceStrings(memory, both, infos);
   REQUIRE(memory.size() == 2);
@@ -206,22 +207,22 @@ TEST_CASE(
 }  // TEST_SUITE("capi.support")
 
 TEST_SUITE("capi.basics") {
-  TEST_CASE("tk_version fills non-empty version strings") {
-    tk_version_info_t version{};
-    tk_version(&version);
+  TEST_CASE("tn_version fills non-empty version strings") {
+    tn_version_info_t version{};
+    tn_version(&version);
     CHECK(std::strlen(version.text) > 0);
     CHECK(std::strlen(version.build) > 0);
     CHECK(std::strlen(version.libusb) > 0);
     CHECK(version.major + version.minor + version.patch > 0);
 
     SUBCASE("passing nullptr is a no-op and does not crash") {
-      tk_version(nullptr);
+      tn_version(nullptr);
     }
   }
 
-  TEST_CASE("tk_check_environment always succeeds and expresses conclusions in fields only") {
-    tk_environment_t environment{};
-    CHECK(tk_check_environment(&environment) == TK_OK);
+  TEST_CASE("tn_check_environment always succeeds and expresses conclusions in fields only") {
+    tn_environment_t environment{};
+    CHECK(tn_check_environment(&environment) == TN_OK);
     // The test process is not root; this is certain.
     CHECK_FALSE(environment.is_root);
     // When sysctls are OK, there should be no explanatory text.
@@ -230,21 +231,21 @@ TEST_SUITE("capi.basics") {
     }
 
     SUBCASE("passing nullptr returns invalid argument") {
-      CHECK(tk_check_environment(nullptr) == TK_ERR_INVALID_ARGUMENT);
+      CHECK(tn_check_environment(nullptr) == TN_ERR_INVALID_ARGUMENT);
     }
   }
 
-  TEST_CASE("tk_list_devices can count only") {
+  TEST_CASE("tn_list_devices can count only") {
     std::size_t count = 0;
-    tk_error_t error{};
+    tn_error_t error{};
     // The development machine usually has no RNDIS device inserted; only verify that the call
     // succeeds and does not write out of bounds, not the specific count.
-    const tk_result_t result = tk_list_devices(nullptr, 0, &count, false, &error);
-    CHECK(result == TK_OK);
+    const tn_result_t result = tn_list_devices(nullptr, 0, &count, false, &error);
+    CHECK(result == TN_OK);
     CHECK(std::strlen(error.message) == 0);
 
     SUBCASE("missing out_count is rejected") {
-      CHECK(tk_list_devices(nullptr, 0, nullptr, false, nullptr) == TK_ERR_INVALID_ARGUMENT);
+      CHECK(tn_list_devices(nullptr, 0, nullptr, false, nullptr) == TN_ERR_INVALID_ARGUMENT);
     }
   }
 
@@ -253,28 +254,28 @@ TEST_SUITE("capi.basics") {
     // context, it would start and stop an event thread and an IOKit runloop thread each time,
     // and logs would be flooded with "libusb initialized". This happened in reality; this test
     // pins down the fix.
-    tk_enable_log_capture(true);
-    const tetherkit::LogLevel saved_level = tetherkit::GetLogLevel();
-    tetherkit::SetLogLevel(tetherkit::LogLevel::kInfo);
+    tn_enable_log_capture(true);
+    const tethernet::LogLevel saved_level = tethernet::GetLogLevel();
+    tethernet::SetLogLevel(tethernet::LogLevel::kInfo);
 
     std::size_t count = 0;
-    std::array<tk_log_record_t, 64> records{};
+    std::array<tn_log_record_t, 64> records{};
     std::uint64_t dropped = 0;
 
     // Enumerate once and drain logs to ensure the shared context is already established (the
     // first initialization is expected).
-    tk_list_devices(nullptr, 0, &count, false, nullptr);
-    while (tk_drain_logs(records.data(), records.size(), &dropped) > 0) {
+    tn_list_devices(nullptr, 0, &count, false, nullptr);
+    while (tn_drain_logs(records.data(), records.size(), &dropped) > 0) {
     }
 
     constexpr int kRepeats = 3;
     for (int i = 0; i < kRepeats; ++i) {
-      CHECK(tk_list_devices(nullptr, 0, &count, false, nullptr) == TK_OK);
+      CHECK(tn_list_devices(nullptr, 0, &count, false, nullptr) == TN_OK);
     }
 
     std::size_t initialization_lines = 0;
     std::size_t taken = 0;
-    while ((taken = tk_drain_logs(records.data(), records.size(), &dropped)) > 0) {
+    while ((taken = tn_drain_logs(records.data(), records.size(), &dropped)) > 0) {
       for (std::size_t i = 0; i < taken; ++i) {
         if (std::string{records[i].message}.find("libusb initialized") != std::string::npos) {
           ++initialization_lines;
@@ -283,65 +284,65 @@ TEST_SUITE("capi.basics") {
     }
     CHECK(initialization_lines == 0);
 
-    tetherkit::SetLogLevel(saved_level);
-    tk_enable_log_capture(false);
+    tethernet::SetLogLevel(saved_level);
+    tn_enable_log_capture(false);
   }
 
 }  // TEST_SUITE("capi.basics")
 
 TEST_SUITE("capi.log_ring") {
   TEST_CASE("no records are produced when log capture is off") {
-    tk_enable_log_capture(false);
-    TETHERKIT_ERROR("this must not be captured");
+    tn_enable_log_capture(false);
+    TETHERNET_ERROR("this must not be captured");
 
-    std::array<tk_log_record_t, 4> records{};
+    std::array<tn_log_record_t, 4> records{};
     std::uint64_t dropped = 0;
-    CHECK(tk_drain_logs(records.data(), records.size(), &dropped) == 0);
+    CHECK(tn_drain_logs(records.data(), records.size(), &dropped) == 0);
   }
 
   TEST_CASE("logs can be retrieved in order after capture is enabled") {
-    tk_enable_log_capture(true);
-    const tetherkit::LogLevel saved_level = tetherkit::GetLogLevel();
-    tetherkit::SetLogLevel(tetherkit::LogLevel::kInfo);
+    tn_enable_log_capture(true);
+    const tethernet::LogLevel saved_level = tethernet::GetLogLevel();
+    tethernet::SetLogLevel(tethernet::LogLevel::kInfo);
 
-    TETHERKIT_INFO("first");
-    TETHERKIT_WARN("second");
+    TETHERNET_INFO("first");
+    TETHERNET_WARN("second");
 
-    std::array<tk_log_record_t, 8> records{};
+    std::array<tn_log_record_t, 8> records{};
     std::uint64_t dropped = 0;
-    const std::size_t taken = tk_drain_logs(records.data(), records.size(), &dropped);
+    const std::size_t taken = tn_drain_logs(records.data(), records.size(), &dropped);
 
     CHECK(taken == 2);
     CHECK(dropped == 0);
     CHECK(std::string{records[0].message} == "first");
-    CHECK(records[0].level == TK_LOG_INFO);
+    CHECK(records[0].level == TN_LOG_INFO);
     CHECK(std::string{records[1].message} == "second");
-    CHECK(records[1].level == TK_LOG_WARN);
+    CHECK(records[1].level == TN_LOG_WARN);
     CHECK(records[0].wall_nanos > 0);
 
     SUBCASE("draining again after empty returns 0") {
-      CHECK(tk_drain_logs(records.data(), records.size(), &dropped) == 0);
+      CHECK(tn_drain_logs(records.data(), records.size(), &dropped) == 0);
     }
 
-    tetherkit::SetLogLevel(saved_level);
-    tk_enable_log_capture(false);
+    tethernet::SetLogLevel(saved_level);
+    tn_enable_log_capture(false);
   }
 
   TEST_CASE("drops the oldest entries and reports the drop count when the buffer is full") {
-    tk_enable_log_capture(true);
-    const tetherkit::LogLevel saved_level = tetherkit::GetLogLevel();
-    tetherkit::SetLogLevel(tetherkit::LogLevel::kInfo);
+    tn_enable_log_capture(true);
+    const tethernet::LogLevel saved_level = tethernet::GetLogLevel();
+    tethernet::SetLogLevel(tethernet::LogLevel::kInfo);
 
     // Capacity is 256 (see log_ring.cc); log 10 extra entries to push the oldest out.
     constexpr int kOverflow = 10;
     constexpr int kTotal = 256 + kOverflow;
     for (int i = 0; i < kTotal; ++i) {
-      TETHERKIT_INFO("entry {}", i);
+      TETHERNET_INFO("entry {}", i);
     }
 
-    std::array<tk_log_record_t, 512> records{};
+    std::array<tn_log_record_t, 512> records{};
     std::uint64_t dropped = 0;
-    const std::size_t taken = tk_drain_logs(records.data(), records.size(), &dropped);
+    const std::size_t taken = tn_drain_logs(records.data(), records.size(), &dropped);
 
     CHECK(taken == 256);
     CHECK(dropped == kOverflow);
@@ -351,20 +352,20 @@ TEST_SUITE("capi.log_ring") {
 
     SUBCASE("the drop count resets to zero after being drained") {
       std::uint64_t again = 1;
-      tk_drain_logs(records.data(), records.size(), &again);
+      tn_drain_logs(records.data(), records.size(), &again);
       CHECK(again == 0);
     }
 
-    tetherkit::SetLogLevel(saved_level);
-    tk_enable_log_capture(false);
+    tethernet::SetLogLevel(saved_level);
+    tn_enable_log_capture(false);
   }
 
 }  // TEST_SUITE("capi.log_ring")
 
 TEST_SUITE("capi.session") {
-  TEST_CASE("tk_session_config_init fills usable defaults") {
-    tk_session_config_t config{};
-    tk_session_config_init(&config);
+  TEST_CASE("tn_session_config_init fills usable defaults") {
+    tn_session_config_t config{};
+    tn_session_config_init(&config);
 
     CHECK(config.mtu == 1500);
     CHECK(config.adopt_device_mac);
@@ -380,19 +381,19 @@ TEST_SUITE("capi.session") {
   }
 
   TEST_CASE("session can be created, queried, and destroyed (no root required)") {
-    tk_session_config_t config{};
-    tk_session_config_init(&config);
+    tn_session_config_t config{};
+    tn_session_config_init(&config);
 
-    tk_error_t error{};
-    tk_session_t* session = tk_session_create(&config, &error);
+    tn_error_t error{};
+    tn_session_t* session = tn_session_create(&config, &error);
     REQUIRE(session != nullptr);
     CHECK(std::strlen(error.message) == 0);
 
     SUBCASE("IDLE before start, with all fields cleanly zeroed") {
-      tk_session_status_t status{};
-      REQUIRE(tk_session_status_get(session, &status) == TK_OK);
-      CHECK(status.run_state == TK_RUN_IDLE);
-      CHECK(status.rndis_state == TK_RNDIS_UNINITIALIZED);
+      tn_session_status_t status{};
+      REQUIRE(tn_session_status_get(session, &status) == TN_OK);
+      CHECK(status.run_state == TN_RUN_IDLE);
+      CHECK(status.rndis_state == TN_RNDIS_UNINITIALIZED);
       CHECK_FALSE(status.link_up);
       CHECK(std::strlen(status.system_interface) == 0);
       CHECK(std::strlen(status.fatal) == 0);
@@ -401,43 +402,43 @@ TEST_SUITE("capi.session") {
     }
 
     SUBCASE("event queue is empty before start") {
-      std::array<tk_event_t, 8> events{};
-      CHECK(tk_session_poll_events(session, events.data(), events.size()) == 0);
+      std::array<tn_event_t, 8> events{};
+      CHECK(tn_session_poll_events(session, events.data(), events.size()) == 0);
     }
 
-    SUBCASE("starting as non-root returns TK_ERR_PERMISSION rather than a generic failure") {
+    SUBCASE("starting as non-root returns TN_ERR_PERMISSION rather than a generic failure") {
       // The GUI relies on this code to distinguish "prompt for authorization" from "a real
       // error occurred".
-      CHECK(tk_session_start(session, &error) == TK_ERR_PERMISSION);
+      CHECK(tn_session_start(session, &error) == TN_ERR_PERMISSION);
       CHECK(std::strlen(error.message) > 0);
     }
 
     SUBCASE("repeated stop is idempotent") {
-      CHECK(tk_session_stop(session) == TK_OK);
-      CHECK(tk_session_stop(session) == TK_OK);
+      CHECK(tn_session_stop(session) == TN_OK);
+      CHECK(tn_session_stop(session) == TN_OK);
     }
 
-    tk_session_destroy(session);
+    tn_session_destroy(session);
   }
 
   TEST_CASE("session API is safe for null pointers") {
-    tk_error_t error{};
-    CHECK(tk_session_create(nullptr, &error) == nullptr);
+    tn_error_t error{};
+    CHECK(tn_session_create(nullptr, &error) == nullptr);
     CHECK(std::strlen(error.message) > 0);
 
-    CHECK(tk_session_start(nullptr, nullptr) == TK_ERR_INVALID_ARGUMENT);
-    CHECK(tk_session_stop(nullptr) == TK_ERR_INVALID_ARGUMENT);
-    CHECK(tk_session_status_get(nullptr, nullptr) == TK_ERR_INVALID_ARGUMENT);
-    CHECK(tk_session_poll_events(nullptr, nullptr, 4) == 0);
-    tk_session_destroy(nullptr);  // No crash means it passed.
-    tk_session_config_init(nullptr);
+    CHECK(tn_session_start(nullptr, nullptr) == TN_ERR_INVALID_ARGUMENT);
+    CHECK(tn_session_stop(nullptr) == TN_ERR_INVALID_ARGUMENT);
+    CHECK(tn_session_status_get(nullptr, nullptr) == TN_ERR_INVALID_ARGUMENT);
+    CHECK(tn_session_poll_events(nullptr, nullptr, 4) == 0);
+    tn_session_destroy(nullptr);  // No crash means it passed.
+    tn_session_config_init(nullptr);
   }
 
 }  // TEST_SUITE("capi.session")
 
 TEST_SUITE("capi.process") {
   TEST_CASE("RunTool collects child output and carries the exit code") {
-    const auto result = tetherkit::capi::RunTool("/bin/echo", {"hello", "world"});
+    const auto result = tethernet::capi::RunTool("/bin/echo", {"hello", "world"});
     REQUIRE(result.has_value());
     CHECK(result->exit_code == 0);
     CHECK(result->Succeeded());
@@ -447,7 +448,7 @@ TEST_SUITE("capi.process") {
   TEST_CASE("RunTool merges stderr, and a non-zero exit is not treated as a call failure") {
     // sh -c 'echo boom >&2; exit 3': verify stderr is also collected and the exit code is
     // returned as-is.
-    const auto result = tetherkit::capi::RunTool("/bin/sh", {"-c", "echo boom >&2; exit 3"});
+    const auto result = tethernet::capi::RunTool("/bin/sh", {"-c", "echo boom >&2; exit 3"});
     REQUIRE(result.has_value());
     CHECK_FALSE(result->Succeeded());
     CHECK(result->exit_code == 3);
@@ -458,7 +459,7 @@ TEST_SUITE("capi.process") {
     // The pipe buffer is 64 KiB. We must drain it before waitpid, otherwise the child blocks
     // once the pipe is full while we wait in waitpid and both sides deadlock. This test pins
     // down that order.
-    const auto result = tetherkit::capi::RunTool(
+    const auto result = tethernet::capi::RunTool(
         "/bin/sh", {"-c", "for i in $(seq 1 20000); do echo 0123456789; done"});
     REQUIRE(result.has_value());
     CHECK(result->exit_code == 0);
@@ -466,52 +467,52 @@ TEST_SUITE("capi.process") {
   }
 
   TEST_CASE("RunTool returns an error rather than crashing for a nonexistent executable") {
-    const auto result = tetherkit::capi::RunTool("/nonexistent/tetherkit-test", {});
+    const auto result = tethernet::capi::RunTool("/nonexistent/tethernet-test", {});
     CHECK_FALSE(result.has_value());
   }
 
 }  // TEST_SUITE("capi.process")
 
 TEST_SUITE("capi.net_config") {
-  TEST_CASE("tk_ip_config_init defaults to DHCP and does not take over the global default route") {
-    tk_ip_config_t config{};
-    tk_ip_config_init(&config);
-    CHECK(config.mode == TK_IP_MODE_DHCP);
+  TEST_CASE("tn_ip_config_init defaults to DHCP and does not take over the global default route") {
+    tn_ip_config_t config{};
+    tn_ip_config_init(&config);
+    CHECK(config.mode == TN_IP_MODE_DHCP);
     CHECK_FALSE(config.set_default_route);
     CHECK(config.dns_count == 0);
     CHECK(std::strlen(config.address) == 0);
   }
 
   TEST_CASE("rejects operating on non-feth interfaces") {
-    tk_ip_config_t config{};
-    tk_ip_config_init(&config);
-    tk_error_t error{};
+    tn_ip_config_t config{};
+    tn_ip_config_init(&config);
+    tn_error_t error{};
 
     // This is the most important guardrail in this module: passing en0 by mistake would
     // overwrite the user's Wi-Fi configuration.
-    CHECK(tk_net_apply("en0", &config, &error) == TK_ERR_INVALID_ARGUMENT);
+    CHECK(tn_net_apply("en0", &config, &error) == TN_ERR_INVALID_ARGUMENT);
     CHECK(std::string{error.message}.find("en0") != std::string::npos);
 
-    CHECK(tk_net_clear("en0", &error) == TK_ERR_INVALID_ARGUMENT);
-    CHECK(tk_net_query("en0", nullptr, &error) == TK_ERR_INVALID_ARGUMENT);
+    CHECK(tn_net_clear("en0", &error) == TN_ERR_INVALID_ARGUMENT);
+    CHECK(tn_net_query("en0", nullptr, &error) == TN_ERR_INVALID_ARGUMENT);
 
-    tk_net_state_t state{};
-    CHECK(tk_net_query("bridge0", &state, &error) == TK_ERR_INVALID_ARGUMENT);
-    CHECK(tk_net_apply(nullptr, &config, &error) == TK_ERR_INVALID_ARGUMENT);
-    CHECK(tk_net_apply("feth0", nullptr, &error) == TK_ERR_INVALID_ARGUMENT);
+    tn_net_state_t state{};
+    CHECK(tn_net_query("bridge0", &state, &error) == TN_ERR_INVALID_ARGUMENT);
+    CHECK(tn_net_apply(nullptr, &config, &error) == TN_ERR_INVALID_ARGUMENT);
+    CHECK(tn_net_apply("feth0", nullptr, &error) == TN_ERR_INVALID_ARGUMENT);
   }
 
-  TEST_CASE("write operations return TK_ERR_PERMISSION when not root") {
-    tk_ip_config_t config{};
-    tk_ip_config_init(&config);
-    tk_error_t error{};
+  TEST_CASE("write operations return TN_ERR_PERMISSION when not root") {
+    tn_ip_config_t config{};
+    tn_ip_config_init(&config);
+    tn_error_t error{};
 
-    CHECK(tk_net_apply("feth9", &config, &error) == TK_ERR_PERMISSION);
+    CHECK(tn_net_apply("feth9", &config, &error) == TN_ERR_PERMISSION);
     CHECK(std::strlen(error.message) > 0);
-    CHECK(tk_net_clear("feth9", &error) == TK_ERR_PERMISSION);
+    CHECK(tn_net_clear("feth9", &error) == TN_ERR_PERMISSION);
 
     std::size_t removed = 1;
-    CHECK(tk_cleanup_orphan_interfaces(&removed, &error) == TK_ERR_PERMISSION);
+    CHECK(tn_cleanup_orphan_interfaces(&removed, &error) == TN_ERR_PERMISSION);
     CHECK(removed == 0);
   }
 
@@ -519,9 +520,9 @@ TEST_SUITE("capi.net_config") {
     // The GUI also refreshes network status before the session is up, when the interface does
     // not exist yet. That case must be "no address" rather than "query failed", otherwise the
     // UI would show a spurious error.
-    tk_net_state_t state{};
-    tk_error_t error{};
-    CHECK(tk_net_query("feth99", &state, &error) == TK_OK);
+    tn_net_state_t state{};
+    tn_error_t error{};
+    CHECK(tn_net_query("feth99", &state, &error) == TN_OK);
     CHECK_FALSE(state.has_address);
     CHECK(state.dns_count == 0);
     CHECK_FALSE(state.is_primary_default_route);

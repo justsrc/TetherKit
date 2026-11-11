@@ -114,7 +114,7 @@ jobs:
         run: |
           cmake -S . -B build \
             -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
-            -DTETHERKIT_WARNINGS_AS_ERRORS=ON
+            -DTETHERNET_WARNINGS_AS_ERRORS=ON
 
       - name: Build
         run: cmake --build build -j"$(sysctl -n hw.ncpu)"
@@ -124,8 +124,8 @@ jobs:
 
       - name: Smoke test (--list needs no root)
         run: |
-          ./build/bin/tetherkit-cli --version
-          ./build/bin/tetherkit-cli --list
+          ./build/bin/tethernet-cli --version
+          ./build/bin/tethernet-cli --list
 
   # ----------------------------------------------------------------------------
   # Verify the macOS 13.3 floor the README claims.
@@ -219,30 +219,30 @@ jobs:
       - name: Install libusb
         run: brew install libusb
 
-      - name: Build C++ (the GUI links libtetherkit)
+      - name: Build C++ (the GUI links libtethernet)
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-            -DTETHERKIT_BUILD_TESTS=OFF -DTETHERKIT_BUILD_BENCHMARKS=OFF
+            -DTETHERNET_BUILD_TESTS=OFF -DTETHERNET_BUILD_BENCHMARKS=OFF
           cmake --build build -j"$(sysctl -n hw.ncpu)"
 
       - name: Swift unit tests
-        run: TETHERKIT_LIB_DIR="$PWD/build/lib" swift test --package-path gui
+        run: TETHERNET_LIB_DIR="$PWD/build/lib" swift test --package-path gui
 
-      - name: Assemble TetherKit.app
+      - name: Assemble Tethernet.app
         run: cmake --build build --target gui
 
       - name: Self-checks
         run: |
-          codesign --verify --deep --strict dist/TetherKit.app
+          codesign --verify --deep --strict dist/Tethernet.app
           # The non-root path of --install must fail loudly instead of
           # half-installing.
-          payload="dist/TetherKit.app/Contents/Library/HelperTools"
-          if "${payload}/com.tetherkit.helper" --install; then
+          payload="dist/Tethernet.app/Contents/Library/HelperTools"
+          if "${payload}/com.tethernet.helper" --install; then
             echo "::error::helper --install unexpectedly succeeded without root"
             exit 1
           fi
           # The Finder-alias install mode always exits 0 (result on stdout).
-          ./dist/TetherKit.app/Contents/MacOS/TetherKit --install-finder-alias
+          ./dist/Tethernet.app/Contents/MacOS/Tethernet --install-finder-alias
 
   # ----------------------------------------------------------------------------
   # ThreadSanitizer: the correctness backstop for the lock-free queue and the
@@ -260,7 +260,7 @@ jobs:
 
       - name: Configure & Build
         run: |
-          cmake -S . -B build-tsan -DTETHERKIT_ENABLE_TSAN=ON
+          cmake -S . -B build-tsan -DTETHERNET_ENABLE_TSAN=ON
           cmake --build build-tsan -j"$(sysctl -n hw.ncpu)"
 
       - name: Test
@@ -293,8 +293,8 @@ jobs:
       - name: Configure & Build
         run: |
           cmake -S . -B build-asan \
-            -DTETHERKIT_ENABLE_ASAN=ON \
-            -DTETHERKIT_ENABLE_UBSAN=ON
+            -DTETHERNET_ENABLE_ASAN=ON \
+            -DTETHERNET_ENABLE_UBSAN=ON
           cmake --build build-asan -j"$(sysctl -n hw.ncpu)"
 
       - name: Disable feth hardware checksum offload
@@ -305,7 +305,7 @@ jobs:
 
       - name: Test (suite as the runner user)
         # The suite runs unprivileged on purpose: its capi permission cases
-        # assert the non-root contract (TK_ERR_PERMISSION without root). As
+        # assert the non-root contract (TN_ERR_PERMISSION without root). As
         # root those gates legitimately pass, so the same CHECKs that used to
         # verify -4 now see 0 or -3 and fail. Feth/BPF root cases skip
         # quietly here and get their own root step below.
@@ -324,14 +324,14 @@ jobs:
           # The grep strings match text printed by tests/test_net_link.cc
           # (ReportSkip and the pair-creation MESSAGE); keep them in sync.
           set -o pipefail
-          sudo env TETHERKIT_ROOT_TESTS=1 \
+          sudo env TETHERNET_ROOT_TESTS=1 \
             UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
             ctest --test-dir build-asan -V -R 'net\.' 2>&1 | tee abi-asan.log
 
           # Root cases SKIP (not fail) when preconditions are unmet, and
           # skipped still shows green. The name filter would hide an
           # unexpected skip from the exit code; these guards make it loud.
-          if grep -q "requires root and TETHERKIT_ROOT_TESTS" abi-asan.log; then
+          if grep -q "requires root and TETHERNET_ROOT_TESTS" abi-asan.log; then
             echo "::error::feth/BPF cases were skipped under the sanitizer build"
             exit 1
           fi
@@ -394,13 +394,13 @@ jobs:
           # so this pipeline's status was tee's (always 0); a test failing
           # after the pair-creation MESSAGE would still look green.
           set -o pipefail
-          sudo env TETHERKIT_ROOT_TESTS=1 \
+          sudo env TETHERNET_ROOT_TESTS=1 \
             ctest --test-dir build -V -R 'net\.' 2>&1 | tee abi.log
 
           # Critical: root cases SKIP (not fail) when preconditions are unmet,
           # and skipped still shows green. Without this guard the job could sit
           # permanently green while having checked nothing.
-          if grep -q "requires root and TETHERKIT_ROOT_TESTS" abi.log; then
+          if grep -q "requires root and TETHERNET_ROOT_TESTS" abi.log; then
             echo "::error::feth/BPF cases were skipped; this ABI check did not actually run"
             exit 1
           fi

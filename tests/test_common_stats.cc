@@ -1,20 +1,20 @@
 // Unit tests for stats.h and time.h.
-#include <chrono>
-#include <thread>
+#include "tethernet/common/stats.h"
+#include "tethernet/common/time.h"
 
 #include <doctest.h>
 
-#include "tetherkit/common/stats.h"
-#include "tetherkit/common/time.h"
+#include <chrono>
+#include <thread>
 
-using tetherkit::DirectionCounters;
-using tetherkit::kNanosPerMilli;
-using tetherkit::MonotonicNanos;
-using tetherkit::PathCounters;
-using tetherkit::PeriodicTimer;
-using tetherkit::RateSampler;
-using tetherkit::Snapshot;
-using tetherkit::Stopwatch;
+using tethernet::DirectionCounters;
+using tethernet::kNanosPerMilli;
+using tethernet::MonotonicNanos;
+using tethernet::PathCounters;
+using tethernet::PeriodicTimer;
+using tethernet::RateSampler;
+using tethernet::Snapshot;
+using tethernet::Stopwatch;
 
 TEST_SUITE("common.stats") {
   TEST_CASE("counter accumulation and snapshot") {
@@ -98,7 +98,7 @@ TEST_SUITE("common.stats") {
 
   TEST_CASE(
       "PeriodicTimer advances by accumulated deadlines without drifting on scheduling delay") {
-    const tetherkit::Nanos now = MonotonicNanos();
+    const tethernet::Nanos now = MonotonicNanos();
     // `now` must be passed explicitly as the timing origin. If the constructor reads the clock
     // itself, the time it reads will be slightly later than `now` here, so "now + period" would
     // not yet be due and the assertion would fail randomly.
@@ -116,12 +116,12 @@ TEST_SUITE("common.stats") {
   }
 
   TEST_CASE("PeriodicTimer does not emit a burst of triggers when more than one period behind") {
-    const tetherkit::Nanos now = MonotonicNanos();
+    const tethernet::Nanos now = MonotonicNanos();
     PeriodicTimer timer(10 * kNanosPerMilli, now);
 
     // The thread wakes up 1 second later after being suspended: it should fire only once, then
     // align to after the current time.
-    const tetherkit::Nanos late = now + 1000 * kNanosPerMilli;
+    const tethernet::Nanos late = now + 1000 * kNanosPerMilli;
     CHECK(timer.Expired(late));
     CHECK_FALSE(timer.Expired(late));
     CHECK_FALSE(timer.Expired(late + 9 * kNanosPerMilli));

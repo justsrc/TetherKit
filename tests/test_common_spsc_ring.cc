@@ -1,18 +1,18 @@
 // Unit tests for SpscRing / SpscCursor.
 //
 // Multi-threaded cases only have full meaning under a ThreadSanitizer build:
-//   cmake -B build-tsan -DTETHERKIT_ENABLE_TSAN=ON && ctest --test-dir build-tsan -R spsc
+//   cmake -B build-tsan -DTETHERNET_ENABLE_TSAN=ON && ctest --test-dir build-tsan -R spsc
+#include "tethernet/common/cache.h"
+#include "tethernet/common/spsc_ring.h"
+
+#include <doctest.h>
+
 #include <atomic>
 #include <cstdint>
 #include <thread>
 
-#include <doctest.h>
-
-#include "tetherkit/common/cache.h"
-#include "tetherkit/common/spsc_ring.h"
-
-using tetherkit::kCacheLineSize;
-using tetherkit::SpscRing;
+using tethernet::kCacheLineSize;
+using tethernet::SpscRing;
 
 namespace {
 
@@ -88,7 +88,7 @@ TEST_SUITE("common.spsc_ring") {
     const auto base = reinterpret_cast<std::uintptr_t>(&cursor);
     // The four indices in SpscCursor are each alignas(kCacheLineSize), so the whole object
     // must occupy at least 4 cache lines (plus the one for read-only fields).
-    CHECK(sizeof(tetherkit::SpscCursor) >= 4 * kCacheLineSize);
+    CHECK(sizeof(tethernet::SpscCursor) >= 4 * kCacheLineSize);
     CHECK(base % kCacheLineSize == 0);
   }
 

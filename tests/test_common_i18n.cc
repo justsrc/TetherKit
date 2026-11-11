@@ -17,6 +17,9 @@
 // When a language is added, the cross-language parity checks return: each
 // table must expose the same placeholder index set and presentation types as
 // the English one (see the checklist in messages.def).
+#include "tethernet/common/error.h"
+#include "tethernet/common/i18n.h"
+
 #include <cctype>
 #include <cstddef>
 #include <format>
@@ -26,13 +29,11 @@
 #include <vector>
 
 #include "doctest.h"
-#include "tetherkit/common/error.h"
-#include "tetherkit/common/i18n.h"
 
 namespace {
 
-using tetherkit::Language;
-using tetherkit::Msg;
+using tethernet::Language;
+using tethernet::Msg;
 
 constexpr std::size_t kMessageCount = static_cast<std::size_t>(Msg::kMessageCount);
 
@@ -132,7 +133,7 @@ struct ParsedFormat {
 /// names (the X-macro expands to text only), so an index plus the start of the
 /// English text is enough to locate the offending messages.def row.
 [[nodiscard]] std::string Label(std::size_t index) {
-  const std::string_view english = tetherkit::TextIn(Language::kEnglish, static_cast<Msg>(index));
+  const std::string_view english = tethernet::TextIn(Language::kEnglish, static_cast<Msg>(index));
   return std::format("message #{} (\"{}\")", index, english.substr(0, 48));
 }
 
@@ -140,42 +141,42 @@ struct ParsedFormat {
 
 TEST_SUITE("common.i18n") {
   TEST_CASE("language switch and table lookup") {
-    const Language original = tetherkit::GetLanguage();
+    const Language original = tethernet::GetLanguage();
 
     // The selection machinery is process-wide and round-trips; today every
     // value resolves to the English table, but these calls exercise the same
     // path a second language will ride.
-    tetherkit::SetLanguage(Language::kEnglish);
-    CHECK(tetherkit::GetLanguage() == Language::kEnglish);
-    CHECK(tetherkit::Text(Msg::kCoreRunStateRunning) == "running");
+    tethernet::SetLanguage(Language::kEnglish);
+    CHECK(tethernet::GetLanguage() == Language::kEnglish);
+    CHECK(tethernet::Text(Msg::kCoreRunStateRunning) == "running");
 
-    tetherkit::SetLanguage(original);
+    tethernet::SetLanguage(original);
   }
 
   TEST_CASE("Tr renders the current language and substitutes arguments") {
-    const Language original = tetherkit::GetLanguage();
-    tetherkit::SetLanguage(Language::kEnglish);
+    const Language original = tethernet::GetLanguage();
+    tethernet::SetLanguage(Language::kEnglish);
 
-    const std::string text = tetherkit::Tr(Msg::kNetBpfBindFailed, "feth1");
+    const std::string text = tethernet::Tr(Msg::kNetBpfBindFailed, "feth1");
     // The argument really was substituted, not left as an unreplaced field.
     CHECK(text.find("feth1") != std::string::npos);
     CHECK(text.find("{}") == std::string::npos);
 
-    tetherkit::SetLanguage(original);
+    tethernet::SetLanguage(original);
   }
 
   TEST_CASE("every message is non-empty") {
     for (std::size_t i = 0; i < kMessageCount; ++i) {
       const auto id = static_cast<Msg>(i);
       CAPTURE(i);
-      CHECK_FALSE(tetherkit::TextIn(Language::kEnglish, id).empty());
+      CHECK_FALSE(tethernet::TextIn(Language::kEnglish, id).empty());
     }
   }
 
   TEST_CASE("out-of-range Msg returns an empty string instead of crashing") {
     const auto out_of_range = static_cast<Msg>(kMessageCount);
-    CHECK(tetherkit::Text(out_of_range).empty());
-    CHECK(tetherkit::TextIn(Language::kEnglish, out_of_range).empty());
+    CHECK(tethernet::Text(out_of_range).empty());
+    CHECK(tethernet::TextIn(Language::kEnglish, out_of_range).empty());
   }
 
   // This suite's core: the one check the compiler stopped doing, done entry by
@@ -183,7 +184,7 @@ TEST_SUITE("common.i18n") {
   TEST_CASE("every message's placeholders are well-formed and contiguous") {
     for (std::size_t i = 0; i < kMessageCount; ++i) {
       const ParsedFormat parsed =
-          ParseFormat(tetherkit::TextIn(Language::kEnglish, static_cast<Msg>(i)));
+          ParseFormat(tethernet::TextIn(Language::kEnglish, static_cast<Msg>(i)));
 
       CAPTURE(Label(i));
       CHECK_FALSE(parsed.malformed);
@@ -204,24 +205,24 @@ TEST_SUITE("common.i18n") {
   TEST_CASE("ParseLanguage understands the established spellings") {
     Language language = Language::kEnglish;
 
-    CHECK(tetherkit::ParseLanguage("en", &language));
+    CHECK(tethernet::ParseLanguage("en", &language));
     CHECK(language == Language::kEnglish);
-    CHECK(tetherkit::ParseLanguage("EN_US", &language));
+    CHECK(tethernet::ParseLanguage("EN_US", &language));
     CHECK(language == Language::kEnglish);
-    CHECK(tetherkit::ParseLanguage("english", &language));
+    CHECK(tethernet::ParseLanguage("english", &language));
     CHECK(language == Language::kEnglish);
 
     // auto defers to the environment; only require it to succeed and yield a
     // valid language.
-    CHECK(tetherkit::ParseLanguage("auto", &language));
+    CHECK(tethernet::ParseLanguage("auto", &language));
 
-    CHECK_FALSE(tetherkit::ParseLanguage("klingon", &language));
-    CHECK_FALSE(tetherkit::ParseLanguage("", &language));
-    CHECK_FALSE(tetherkit::ParseLanguage("zh", nullptr));
+    CHECK_FALSE(tethernet::ParseLanguage("klingon", &language));
+    CHECK_FALSE(tethernet::ParseLanguage("", &language));
+    CHECK_FALSE(tethernet::ParseLanguage("zh", nullptr));
 
     // Chinese is fully out: no table, no spelling, not even as a parse.
-    CHECK_FALSE(tetherkit::ParseLanguage("zh", &language));
-    CHECK_FALSE(tetherkit::ParseLanguage("Chinese", &language));
+    CHECK_FALSE(tethernet::ParseLanguage("zh", &language));
+    CHECK_FALSE(tethernet::ParseLanguage("Chinese", &language));
   }
 
   TEST_CASE("locale strings resolve through the current language set") {
@@ -229,29 +230,29 @@ TEST_SUITE("common.i18n") {
     // locale string resolves to English. When a language is added, the prefix
     // table goes into LanguageFromLocaleString() and these checks become
     // per-prefix.
-    CHECK(tetherkit::LanguageFromLocaleString("zh_CN.UTF-8") == Language::kEnglish);
-    CHECK(tetherkit::LanguageFromLocaleString("ZH-hant") == Language::kEnglish);
-    CHECK(tetherkit::LanguageFromLocaleString("en_US.UTF-8") == Language::kEnglish);
-    CHECK(tetherkit::LanguageFromLocaleString("C") == Language::kEnglish);
-    CHECK(tetherkit::LanguageFromLocaleString("") == Language::kEnglish);
-    CHECK(tetherkit::LanguageFromLocaleString("en_zh") == Language::kEnglish);
+    CHECK(tethernet::LanguageFromLocaleString("zh_CN.UTF-8") == Language::kEnglish);
+    CHECK(tethernet::LanguageFromLocaleString("ZH-hant") == Language::kEnglish);
+    CHECK(tethernet::LanguageFromLocaleString("en_US.UTF-8") == Language::kEnglish);
+    CHECK(tethernet::LanguageFromLocaleString("C") == Language::kEnglish);
+    CHECK(tethernet::LanguageFromLocaleString("") == Language::kEnglish);
+    CHECK(tethernet::LanguageFromLocaleString("en_zh") == Language::kEnglish);
   }
 
   TEST_CASE("language tag") {
-    CHECK(tetherkit::LanguageTag(Language::kEnglish) == "en");
+    CHECK(tethernet::LanguageTag(Language::kEnglish) == "en");
   }
 
   TEST_CASE("error context separator is deterministic") {
-    const Language original = tetherkit::GetLanguage();
-    tetherkit::SetLanguage(Language::kEnglish);
+    const Language original = tethernet::GetLanguage();
+    tethernet::SetLanguage(Language::kEnglish);
 
     // Context() returns a view, so the Error must land in a named variable
     // before it is read; a temporary dies at the end of the statement and the
     // view dangles on the spot.
-    const tetherkit::Error error = tetherkit::Error::Generic("inner").WithContext("outer");
+    const tethernet::Error error = tethernet::Error::Generic("inner").WithContext("outer");
     CHECK(error.Context().starts_with("outer: "));
 
-    tetherkit::SetLanguage(original);
+    tethernet::SetLanguage(original);
   }
 
 }  // TEST_SUITE

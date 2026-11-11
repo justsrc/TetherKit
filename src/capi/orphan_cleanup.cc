@@ -15,6 +15,11 @@
 //   feth is a shared facility; other programs (or the user's own ifconfig
 //   invocations) may be using it too. Only destroying the ones we registered
 //   ourselves avoids collateral damage.
+#include "tethernet/capi/tethernet_c.h"
+#include "tethernet/common/i18n.h"
+#include "tethernet/common/logging.h"
+#include "tethernet/net/feth_device.h"
+
 #include <unistd.h>
 
 #include <cstddef>
@@ -26,18 +31,14 @@
 #include <vector>
 
 #include "capi_support.h"
-#include "tetherkit/capi/tetherkit_c.h"
-#include "tetherkit/common/i18n.h"
-#include "tetherkit/common/logging.h"
-#include "tetherkit/net/feth_device.h"
 
 namespace {
 
-using tetherkit::Msg;
-using tetherkit::Tr;
-using tetherkit::capi::ClearError;
-using tetherkit::capi::FillGenericError;
-using tetherkit::capi::IsValidFethName;
+using tethernet::Msg;
+using tethernet::Tr;
+using tethernet::capi::ClearError;
+using tethernet::capi::FillGenericError;
+using tethernet::capi::IsValidFethName;
 
 /// Path of the registry file.
 ///
@@ -49,7 +50,7 @@ using tetherkit::capi::IsValidFethName;
 ///
 /// A reboot empties /var/run, and a reboot also takes every feth with it --
 /// the two lifetimes coincide, so stale entries need no extra handling.
-constexpr const char* kRegistryPath = "/var/run/tetherkit-interfaces";
+constexpr const char* kRegistryPath = "/var/run/tethernet-interfaces";
 
 std::mutex& RegistryMutex() {
   static std::mutex mutex;
@@ -120,22 +121,22 @@ void OnInterfaceChanged(std::string_view name, bool created) noexcept {
 
 }  // namespace
 
-namespace tetherkit::capi {
+namespace tethernet::capi {
 
 void InstallInterfaceRegistry() {
   net::SetInterfaceRegistry(&OnInterfaceChanged);
 }
 
-}  // namespace tetherkit::capi
+}  // namespace tethernet::capi
 
-tk_result_t tk_cleanup_orphan_interfaces(size_t* out_removed, tk_error_t* out_error) {
+tn_result_t tn_cleanup_orphan_interfaces(size_t* out_removed, tn_error_t* out_error) {
   ClearError(out_error);
   if (out_removed != nullptr) {
     *out_removed = 0;
   }
   if (::geteuid() != 0) {
     FillGenericError(out_error, Tr(Msg::kCapiCleanupNeedsRoot));
-    return TK_ERR_PERMISSION;
+    return TN_ERR_PERMISSION;
   }
 
   //  The destroy loop must **never** hold RegistryMutex: a successful
@@ -150,7 +151,7 @@ tk_result_t tk_cleanup_orphan_interfaces(size_t* out_removed, tk_error_t* out_er
     names = ReadRegistry();
   }
   if (names.empty()) {
-    return TK_OK;
+    return TN_OK;
   }
 
   std::size_t removed = 0;
@@ -159,11 +160,11 @@ tk_result_t tk_cleanup_orphan_interfaces(size_t* out_removed, tk_error_t* out_er
     // longer exists (the system rebooted, say), which is exactly what we
     // wanted. A genuine failure is only logged and does not stop the
     // remaining entries.
-    if (const auto status = tetherkit::net::DestroyInterfaceByName(name); status) {
+    if (const auto status = tethernet::net::DestroyInterfaceByName(name); status) {
       ++removed;
       continue;
     }
-    TETHERKIT_DEBUG_TR(Msg::kCapiOrphanAlreadyGone, name);
+    TETHERNET_DEBUG_TR(Msg::kCapiOrphanAlreadyGone, name);
   }
 
   // Finalize: the ones that could be destroyed were already removed line by
@@ -178,5 +179,5 @@ tk_result_t tk_cleanup_orphan_interfaces(size_t* out_removed, tk_error_t* out_er
   if (out_removed != nullptr) {
     *out_removed = removed;
   }
-  return TK_OK;
+  return TN_OK;
 }

@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 #
-# Uninstall tetherkit-helper. **Must run with sudo.**
+# Uninstall tethernet-helper. **Must run with sudo.**
 #
 #   sudo ./gui/Scripts/uninstall-helper.sh
 set -euo pipefail
 
-LABEL="com.tetherkit.helper"
+LABEL="com.tethernet.helper"
 TOOLS_DIR="/Library/PrivilegedHelperTools"
 INSTALL_PATH="${TOOLS_DIR}/${LABEL}"
 PLIST_PATH="/Library/LaunchDaemons/${LABEL}.plist"
-STATE_FILE="/var/run/tetherkit-interfaces"
+STATE_FILE="/var/run/tethernet-interfaces"
 
 log() { printf '\033[32m==>\033[0m %s\n' "$1"; }
 
@@ -27,7 +27,7 @@ fi
 
 log "Deleting files"
 rm -f "${PLIST_PATH}" "${INSTALL_PATH}"
-rm -f "${TOOLS_DIR}"/libtetherkit*.dylib "${TOOLS_DIR}"/libusb-*.dylib
+rm -f "${TOOLS_DIR}"/libtethernet*.dylib "${TOOLS_DIR}"/libusb-*.dylib
 
 # Backstop: if the helper was ever force-killed, the state file may still
 # list interfaces it never destroyed.

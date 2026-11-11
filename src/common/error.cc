@@ -1,4 +1,4 @@
-#include "tetherkit/common/error.h"
+#include "tethernet/common/error.h"
 
 #include <libusb.h>
 
@@ -6,7 +6,7 @@
 #include <cstring>
 #include <format>
 
-namespace tetherkit {
+namespace tethernet {
 namespace {
 
 /// Thread-safe strerror.
@@ -42,8 +42,8 @@ std::string Error::ToString() const {
     }
 
     case ErrorDomain::kRndis: {
-      // The RNDIS_STATUS_* to name mapping only lives in tk_rndis
-      // (rndis/protocol.cc); tk_common is not allowed to depend on upper
+      // The RNDIS_STATUS_* to name mapping only lives in tn_rndis
+      // (rndis/protocol.cc); tn_common is not allowed to depend on upper
       // modules, so this just prints the raw numeric value --
       // the rndis layer bakes the status code's symbolic name into the
       // context string when it constructs the Error.
@@ -54,4 +54,4 @@ std::string Error::ToString() const {
   return context_;
 }
 
-}  // namespace tetherkit
+}  // namespace tethernet

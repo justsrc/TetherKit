@@ -1,7 +1,7 @@
 # gui/ is a Swift package, not part of the CMake build; clang-tidy has no
 # business here.
 #
-# The only C file is CTetherKit/shim.c, which exists purely to satisfy a
+# The only C file is CTethernet/shim.c, which exists purely to satisfy a
 # SwiftPM formality (every C target needs at least one source file). Applying
 # the C++ project's naming and modernization rules to it is meaningless.
 InheritParentConfig: false
