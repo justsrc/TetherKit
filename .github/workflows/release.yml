@@ -1,6 +1,10 @@
-# Release: pushing a v* tag issues a release automatically.
+# Release: pushing a stable v* tag issues a release automatically.
 #
 #   git tag -a v0.2.0 -m "TetherKit 0.2.0" && git push origin v0.2.0
+#
+# Pre-release tags (a hyphen marks the semver pre-release part, e.g.
+# v0.2.0-rc.1) are excluded below and handled by pre-release.yml, which
+# publishes a marked pre-release and never touches the Homebrew tap.
 #
 # This workflow builds and unit-tests on its own (ctest plus the GUI
 # packaging), so a tag cut after a main-branch regression is still caught at
@@ -12,7 +16,12 @@ name: Release
 
 on:
   push:
-    tags: ["v*"]
+    # Stable tags only. The exclusion is what keeps a pre-release tag
+    # (v*-*: the hyphen is semver's pre-release marker) from starting this
+    # workflow -- otherwise it would publish a stable Release AND bump the
+    # tap. Hyphenated tags belong to pre-release.yml, so exactly one of the
+    # two workflows runs per tag push.
+    tags: ["v*", "!v*-*"]
 
 # Creating the Release and uploading assets need write access.
 permissions:
