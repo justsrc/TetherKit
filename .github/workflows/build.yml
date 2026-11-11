@@ -116,7 +116,7 @@ jobs:
           name="TetherKit-${GITHUB_RUN_NUMBER}-${DISPATCHED_OS}-${DISPATCHED_BUILD_TYPE}.zip"
           ditto -c -k --keepParent dist/TetherKit.app "$name"
 
-      # upload-artifact@v7 supports single-file direct upload (archive: false):
+      # upload-artifact v7 supports single-file direct upload (archive: false):
       # the downloaded artifact IS the ditto zip above, not a zip inside another
       # zip. With archive: false the name input is ignored (the file name wins).
       - name: Upload TetherKit.app artifact
