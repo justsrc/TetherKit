@@ -1,6 +1,10 @@
-# Release: pushing a v* tag issues a release automatically.
+# Release: pushing a stable v* tag issues a release automatically.
 #
 #   git tag -a v0.2.0 -m "TetherKit 0.2.0" && git push origin v0.2.0
+#
+# Pre-release tags (a hyphen marks the semver pre-release part, e.g.
+# v0.2.0-rc.1) are excluded below and handled by pre-release.yml, which
+# publishes a marked pre-release and never touches the Homebrew tap.
 #
 # This workflow builds and unit-tests on its own (ctest plus the GUI
 # packaging), so a tag cut after a main-branch regression is still caught at
@@ -12,7 +16,12 @@ name: Release
 
 on:
   push:
-    tags: ["v*"]
+    # Stable tags only. The exclusion is what keeps a pre-release tag
+    # (v*-*: the hyphen is semver's pre-release marker) from starting this
+    # workflow -- otherwise it would publish a stable Release AND bump the
+    # tap. Hyphenated tags belong to pre-release.yml, so exactly one of the
+    # two workflows runs per tag push.
+    tags: ["v*", "!v*-*"]
 
 # Creating the Release and uploading assets need write access.
 permissions:
@@ -93,10 +102,17 @@ jobs:
           test -s src.tar.gz || { echo "::error::could not fetch the source archive ${url}"; exit 1; }
           echo "sha256=$(shasum -a 256 src.tar.gz | awk '{print $1}')" >> "$GITHUB_OUTPUT"
 
-      # The quoted heredoc keeps the shell from expanding anything; ${{ }} is
-      # substituted by Actions before the shell runs, so the step outputs above
-      # still resolve.
+      # The quoted heredoc keeps the shell from expanding anything, and
+      # nothing is interpolated into the script itself: the checksum values
+      # and asset names travel as env and are appended with printf, so their
+      # content is data, never shell text.
       - name: Assemble the release notes
+        env:
+          SRC_SHA256: ${{ steps.src.outputs.sha256 }}
+          PKG_NAME: ${{ steps.pkg.outputs.name }}
+          PKG_SHA256: ${{ steps.pkg.outputs.sha256 }}
+          APP_NAME: ${{ steps.app.outputs.name }}
+          APP_SHA256: ${{ steps.app.outputs.sha256 }}
         run: |
           cat > notes.md <<'EOF'
           ## Install
@@ -149,22 +165,26 @@ jobs:
 
           | File | SHA-256 |
           |---|---|
-          | Source tarball (used by the Homebrew formula) | `${{ steps.src.outputs.sha256 }}` |
-          | `${{ steps.pkg.outputs.name }}` | `${{ steps.pkg.outputs.sha256 }}` |
-          | `${{ steps.app.outputs.name }}` | `${{ steps.app.outputs.sha256 }}` |
           EOF
+          {
+            printf "| %s | \`%s\` |\n" "Source tarball (used by the Homebrew formula)" "${SRC_SHA256}"
+            printf "| \`%s\` | \`%s\` |\n" "${PKG_NAME}" "${PKG_SHA256}"
+            printf "| \`%s\` | \`%s\` |\n" "${APP_NAME}" "${APP_SHA256}"
+          } >> notes.md
 
       - name: Create the Release
         env:
           GH_TOKEN: ${{ github.token }}
+          PKG_NAME: ${{ steps.pkg.outputs.name }}
+          APP_NAME: ${{ steps.app.outputs.name }}
         run: |
           gh release create "${GITHUB_REF_NAME}" \
             --title "TetherKit ${GITHUB_REF_NAME}" \
             --notes-file notes.md \
             --generate-notes \
             --verify-tag \
-            "${{ steps.pkg.outputs.name }}" \
-            "${{ steps.app.outputs.name }}"
+            "${PKG_NAME}" \
+            "${APP_NAME}"
 
   # After the Release is created, sync the Homebrew tap to the new version.
   #
