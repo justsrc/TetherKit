@@ -125,10 +125,7 @@ jobs:
           brew install justsrc/tap/tethernet-cli       # command-line tool
           ```
 
-          After installing the GUI, `open "$(brew --prefix)/opt/tethernet/Tethernet.app"`.
-          On first run, click "Install privileged components" and enter the
-          admin password once; the first launch also creates the Finder alias
-          automatically, after which Tethernet turns up in Spotlight.
+          After installing the GUI, `open "$(brew --prefix)/opt/tethernet/Tethernet.app"`. On first run, click "Install privileged components" and enter the admin password once; the first launch also creates the Finder alias automatically, after which Tethernet turns up in Spotlight.
 
           ## Command line
 
@@ -140,21 +137,18 @@ jobs:
           ## Requirements
 
           - CLI: macOS 13.3+; GUI: macOS 14+ (all assets are arm64-only)
-          - Runtime dependency libusb: `brew install libusb` (Homebrew pulls it
-            in automatically)
+          - Runtime dependency libusb: `brew install libusb` (Homebrew pulls it in automatically)
 
           ## Downloadable assets
 
-          All assets are **unsigned**, so Gatekeeper quarantines them after a
-          browser download. Remove the quarantine manually to run them:
+          All assets are **unsigned**, so Gatekeeper quarantines them after a browser download. Remove the quarantine manually to run them:
 
           ```bash
           xattr -d com.apple.quarantine tethernet-cli     # CLI
           xattr -dr com.apple.quarantine Tethernet.app    # GUI (recursive)
           ```
 
-          If that bothers you, use the Homebrew route above or build from
-          source; locally built artifacts do not carry the quarantine flag.
+          If that bothers you, use the Homebrew route above or build from source; locally built artifacts do not carry the quarantine flag.
 
           ## Checksums
 

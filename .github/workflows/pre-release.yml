@@ -143,22 +143,13 @@ jobs:
           cat > notes.md <<'EOF'
           ## Pre-release
 
-          This is a **pre-release**, cut from a development tag for testing
-          ahead of the stable release. Expect rough edges; when you report
-          one, include the tag name you are running.
+          This is a **pre-release**, cut from a development tag for testing ahead of the stable release. Expect rough edges; when you report one, include the tag name you are running.
 
-          The Homebrew tap is **not** updated for pre-releases. It only ever
-          points at stable versions, so `brew install` / `brew upgrade` will
-          not offer this build; the tap moves when the stable release is cut
-          from this same base version.
+          The Homebrew tap is **not** updated for pre-releases. It only ever points at stable versions, so `brew install` / `brew upgrade` will not offer this build; the tap moves when the stable release is cut from this same base version.
 
           ## Install
 
-          There is no Homebrew route (see above), so the choices are the
-          assets below or a source build of the same tag. The assets are
-          **unsigned**, so Gatekeeper quarantines them after a browser
-          download; remove the quarantine manually to run them (locally
-          built artifacts do not carry the flag):
+          There is no Homebrew route (see above), so the choices are the assets below or a source build of the same tag. The assets are **unsigned**, so Gatekeeper quarantines them after a browser download; remove the quarantine manually to run them (locally built artifacts do not carry the flag):
 
           ```bash
           xattr -d com.apple.quarantine tethernet-cli     # CLI
@@ -175,8 +166,7 @@ jobs:
           ## Requirements
 
           - CLI: macOS 13.3+; GUI: macOS 14+ (all assets are arm64-only)
-          - The CLI needs libusb at runtime: `brew install libusb`. The .app
-            embeds its own copy, so no extra install for the GUI.
+          - The CLI needs libusb at runtime: `brew install libusb`. The .app embeds its own copy, so no extra install for the GUI.
 
           ## Checksums
 
